@@ -12,6 +12,25 @@ export function freshWindow(now = new Date(), lookbackHours = 24) {
   return { start: new Date(end.valueOf() - lookbackHours * 3600000).toISOString(), end: end.toISOString() };
 }
 
+export const defaultWatchProfiles = Object.freeze([Object.freeze({ handle: 'karpathy', name: 'Karpathy', required: true, latest: 10 })]);
+// Handles become object keys (bundle.feeds, checks.watch); they must not shadow the fixed groups or the prototype.
+const reservedHandles = new Set(['xfollowing', 'xfollowingsearch', 'substack', '__proto__']);
+
+export function validateWatchProfiles(profiles) {
+  if (!Array.isArray(profiles)) throw new Error('sources.watchProfiles must be an array');
+  const seen = new Set();
+  return profiles.map(profile => {
+    const { handle, name, required, latest } = profile ?? {};
+    if (typeof handle !== 'string' || !/^[A-Za-z0-9_]{1,15}$/.test(handle)) throw new Error('Watch profile handle must match ^[A-Za-z0-9_]{1,15}$');
+    if (seen.has(handle.toLowerCase()) || reservedHandles.has(handle.toLowerCase())) throw new Error(`Duplicate or reserved watch profile handle: ${handle}`);
+    seen.add(handle.toLowerCase());
+    if (typeof name !== 'string' || !name.trim()) throw new Error(`Watch profile ${handle} needs a non-empty name`);
+    if (typeof required !== 'boolean') throw new Error(`Watch profile ${handle} required must be a boolean`);
+    if (!Number.isInteger(latest) || latest < 1 || latest > 20) throw new Error(`Watch profile ${handle} latest must be an integer 1..20`);
+    return { handle, name, required, latest };
+  });
+}
+
 export function makeRuntime(config, { runId = randomUUID() } = {}) {
   if (!/^[a-zA-Z0-9-]{1,100}$/.test(runId)) throw new Error('Invalid run ID');
   const cdpPort = config.cdpPort ?? 9449;
@@ -42,6 +61,7 @@ export function makeRuntime(config, { runId = randomUUID() } = {}) {
       throw new Error('Profile URLs must be canonical public Xiaohongshu URLs without query strings');
     }
   }
+  sources.watchProfiles = validateWatchProfiles(sources.watchProfiles ?? defaultWatchProfiles);
   const lookbackHours = config.lookbackHours ?? 24;
   freshWindow(new Date(), lookbackHours);
   return {

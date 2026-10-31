@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { auditDeepLinks, rankDeepLinks, scanWindow, itemKey, mergeItems, readFeedDom } from '../feed.mjs';
+import { auditDeepLinks, rankDeepLinks, scanWindow, itemKey, mergeItems, readFeedDom, clusterByLink } from '../feed.mjs';
 
 // Synthetic observations only. None of these fixtures fetch their URLs.
 const window = { start: '2026-10-16T01:00:00Z', end: '2026-10-17T01:00:00Z' };
@@ -76,6 +76,9 @@ test('dedup chooses strongest context and audits every duplicate without spendin
   assert.equal(ranked.filter(link => link.selected).length, 2);
   const root = ranked.find(link => link.href === 'https://synthetic.example/');
   assert.equal(root.sourceId, 'strong');
+  assert.equal(root.fanIn, 3); // weak, strong and duplicate share the canonical href.
+  assert.equal(root.score, 3 + 2);
+  assert.deepEqual(ranked.map(link => link.score), [5, 5, 3]);
   assert.equal(root.originalHref, 'https://synthetic.example/?utm_source=feed#part');
   const audit = auditDeepLinks(items, 2);
   assert.equal(audit.length, 5);
@@ -355,4 +358,52 @@ test('singular collector discovery labels also survive merged provenance', () =>
   const items = mergeItems([{ url: 'https://x.com/example/status/12345', text: 'A', discovery: 'following_timeline' }],
     [{ url: 'https://x.com/example/status/12345', text: 'B', discovery: 'gos_48h_follows_search' }]);
   assert.deepEqual(items[0].discoveries, ['following_timeline', 'gos_48h_follows_search']);
+});
+
+test('a link shared by three accounts outranks the same-score link shared by one', () => {
+  const shared = 'https://shared.example/post', single = 'https://single.example/post';
+  const account = (handle, id, href) => ({ url: `https://x.com/${handle}/status/${id}`, ...linked('RL training notes', href) });
+  const audit = auditDeepLinks([account('one', 1, single), account('two', 2, shared), account('three', 3, shared), account('four', 4, shared)], 1);
+  const top = audit.find(link => link.selected);
+  assert.equal(top.href, shared);
+  assert.equal(top.fanIn, 3);
+  assert.equal(top.score, 3 + 2);
+  assert.equal(audit.find(link => link.href === single).score, 3);
+  assert.ok(audit.filter(link => link.href === shared).every(link => link.fanIn === 3));
+  // A thread discovery item counts as one more distinct source; the bonus caps at 3.
+  const thread = { id: 'thread-1-1', url: 'https://x.com/five/status/5', ...linked('RL training notes', shared) };
+  assert.equal(auditDeepLinks([account('two', 2, shared), thread])[0].fanIn, 2);
+  const many = [1, 2, 3, 4, 5, 6].map(id => account(`a${id}`, id, 'https://arxiv.org/abs/x'));
+  assert.equal(auditDeepLinks(many)[0].score, 3 + 2 + 3);
+});
+
+test('fan-in never changes eligibility or reason strings', () => {
+  const texts = ['Our summer trip', 'AI training notes', 'Interesting document'];
+  const hrefs = ['https://synthetic-holiday.example/', 'https://github.com/', 'https://x.com/synthetic/status/1',
+    'https://synthetic.example/photos', 'https://arxiv.org/abs/synthetic', 'mailto:synthetic@example.org'];
+  const once = texts.flatMap(text => hrefs.map(href => ({ id: `${text}-${href}`, ...linked(text, href) })));
+  const strip = audit => audit.filter(link => link.reason !== 'duplicate_url').map(link => [link.href, link.eligible, link.eligibilityReason ?? link.reason]);
+  const single = new Map(strip(auditDeepLinks(once)).map(row => [row[0], row]));
+  const repeated = auditDeepLinks([...once, ...once.map(item => ({ ...item, id: `${item.id}-copy` }))]);
+  for (const row of strip(repeated)) assert.deepEqual(row, single.get(row[0]));
+  assert.ok(repeated.every(link => link.fanIn >= 1));
+});
+
+test('clusterByLink groups shared content links and ignores page chrome', () => {
+  const post = (id, ...hrefs) => ({ url: `https://x.com/u${id}/status/${id}`, text: 'post', links: hrefs.map(href => ({ href, text: '' })) });
+  const clusters = clusterByLink([
+    post(1, 'https://paper.example/a?utm_source=x', 'https://x.com/u1', 'https://b.example/'),
+    post(2, 'https://paper.example/a', 'https://x.com/u1', 'https://b.example/'),
+    post(3, 'https://paper.example/a#intro', 'https://github.com/'),
+    post(4, 'https://github.com/', 'https://only.example/x'),
+    post(4, 'https://only.example/x'),
+  ]);
+  assert.deepEqual(clusters, [
+    { url: 'https://paper.example/a', fanIn: 3, itemKeys: ['x:1', 'x:2', 'x:3'] },
+    { url: 'https://b.example/', fanIn: 2, itemKeys: ['x:1', 'x:2'] },
+  ]);
+  const pair = [post(1, 'https://c.example/'), post(2, 'https://c.example/')];
+  assert.deepEqual(clusterByLink(pair, { keyOf: () => 'same' }), []);
+  assert.deepEqual(clusterByLink(pair, { keyOf: item => `blog:${item.url}` }).map(cluster => cluster.itemKeys),
+    [['blog:https://x.com/u1/status/1', 'blog:https://x.com/u2/status/2']]);
 });

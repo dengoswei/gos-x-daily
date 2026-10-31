@@ -9,11 +9,19 @@ const urlPattern = /https?:\/\/[^\s)<>]+/g;
 const materialUrlPattern = /https?:\/\/[^\s"'`<>)\]\\]+/g;
 const trailing = /[.,;:!?。，、)\]》」）】]+$/;
 const textExtensions = new Set(['.txt', '.md', '.json', '.jsonl', '.html', '.xml']);
-const itemGroups = ['xFollowing', 'substack', 'karpathy', 'feeds'];
-export const skipReasons = ['off_topic', 'promotion', 'duplicate_topic', 'outside_window', 'low_signal', 'unreadable', 'other'];
 const list = value => Array.isArray(value) ? value : [];
 const meaningful = value => typeof value === 'string' && value.trim().length > 0;
 
+/** Watch-profile item lists; collections without sources.watchProfiles fall back to sources.karpathy. */
+export function watchGroups(sources) {
+  if (Array.isArray(sources?.watchProfiles)) return sources.watchProfiles.map(profile => ({ handle: profile?.handle, items: list(profile?.items) }));
+  return list(sources?.karpathy).length ? [{ handle: 'karpathy', items: list(sources.karpathy) }] : [];
+}
+
+// Item groups in candidate order: Following, Substack, each watch profile, then feeds.
+const itemGroups = sources => [['xFollowing', list(sources.xFollowing)], ['substack', list(sources.substack)],
+  ...watchGroups(sources).map(({ handle, items }) => [`watch:${handle}`, items]), ['feeds', list(sources.feeds)]];
+export const skipReasons = ['off_topic', 'promotion', 'duplicate_topic', 'outside_window', 'low_signal', 'unreadable', 'other'];
 export function readPublicationFile(rootDir, relative) {
   const root = fs.realpathSync(rootDir);
   if (typeof relative !== 'string' || !relative || path.isAbsolute(relative) || relative.split(/[\\/]/).some(p => !p || p === '..' || p === '.')) throw new Error('Publication paths must be safe relative paths');
@@ -47,8 +55,8 @@ export function digestUrls(markdown) {
 function candidates(collection) {
   const sources = collection?.sources ?? {};
   const entries = [];
-  for (const group of itemGroups) {
-    for (const item of list(sources[group])) {
+  for (const [group, items] of itemGroups(sources)) {
+    for (const item of items) {
       const key = itemKey(item);
       if (!meaningful(key)) throw new Error(`Candidate in ${group} has no stable key`);
       entries.push({ key, url: item?.url });
@@ -80,7 +88,7 @@ const addItem = (set, item) => {
 export function observedUrls({ collection, rootDir, materialsPaths = [], evidencePaths = [] }) {
   const sources = collection?.sources ?? {};
   const observed = { collection: new Set(), materials: new Set() };
-  for (const group of itemGroups) list(sources[group]).forEach(item => addItem(observed.collection, item));
+  for (const [, items] of itemGroups(sources)) items.forEach(item => addItem(observed.collection, item));
   for (const link of list(collection?.deepLinkAudit)) { addUrl(observed.collection, link?.href); addUrl(observed.collection, link?.originalHref); }
   for (const blog of list(sources.blogs)) addUrl(observed.collection, blog?.url);
   for (const article of list(sources.deepArticles)) { addUrl(observed.collection, article?.url); addUrl(observed.collection, article?.sourceHref); }

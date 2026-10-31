@@ -24,7 +24,7 @@ Source code and private state need separate authorized durable backups.
 
 A controller must use its current authorized browser tools. Confirm X Following
 is selected in the rendered UI; its URL can still display For you. Preserve usable
-posts and a genuine Karpathy attempt. Add configured official blogs/Xiaohongshu,
+posts and a genuine attempt at each configured watch account (default: Karpathy). Add configured official blogs/Xiaohongshu,
 optional Substack and relevant received Gmail. Record unavailable sources honestly.
 
 Choose a new private run directory. Save actual screenshots and truthful text,
@@ -95,6 +95,26 @@ ignores `utm_*`/click-tracking parameters, `www.`, host case and a trailing `/`.
 Write digest.md under EDITORIAL.md. No quota; explain actual method/conclusion,
 not merely settings/metrics. Preserve material limitations in the final render.
 
+Section rules: the digest needs the `# X AI 日报 YYYY-MM-DD` title, the collection
+marker, at least one `##` main section with a bullet carrying a direct URL, and a
+`## 差异补充` audit section. The validator does not pin main section names (the
+prompt's section list stays the editorial default); every main-body bullet
+(`-`, `*` or numbered) needs a URL. A `##` main section with no line containing a URL
+is left out of the rendered message, so do not write placeholder sections; its text
+is still a review unit because review units come from digest.md, not the render.
+
+Repeats: to show the writer what recent reports already carried, pass the same
+`ledgerDir` named in `publication.json` to `compose-input`:
+
+```sh
+node cli.mjs compose-input --sources "$RUN/sources.merged.json" --published-history "$LEDGER" --out "$RUN/prompt.md"
+```
+
+The prompt then lists `date  url` for reports dated in the seven days before this
+one. Cite such a URL again only as an item labelled `跟进` that states a new fact;
+otherwise skip the candidate as `duplicate_topic`. A repeat is a warning
+(`validation.repeatedUrls` in `prepare-delivery`), never a rejection.
+
 Next to it write `dispositions.json`: one row per candidate key listed at the end
 of the `compose-input` prompt (`schemaVersion: 1`, the collection's `collectionId`):
 
@@ -158,6 +178,16 @@ verified target, exact unchanged publication/review, and a forward ledger. See C
 send authority. No automatic retry: timeout/process failure/missing or malformed
 confirmation may mean uncertain delivery. Reconcile externally before any retry.
 Preserve API message IDs; acceptance is not proof the user read the report.
+
+After an accepted, receipted send, `send` appends one line to
+`<ledgerDir>/published-urls.jsonl`:
+`{"date":"YYYY-MM-DD","idempotencyKey":"xdaily-...","urls":["<canonical URL>",...],"recordedAt":"ISO"}`
+with the canonical main-body URLs of the plan (`plan.publishedUrls`). The file is
+append-only (mode 0600, fsynced) and never rewritten. If the append fails the send
+still reports `sent_api_accepted`, with `publishedUrlsRecorded: false` and a
+`publishedUrlsWarning`; nothing is retried. `prepare-delivery` reads the same file,
+so a corrupt line blocks preparation until it is repaired by hand, and a history line
+added between preparation and send invalidates the plan (prepare again).
 
 ## 6. Schedule only after integration verification
 

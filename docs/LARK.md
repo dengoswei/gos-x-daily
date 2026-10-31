@@ -21,6 +21,12 @@ https://github.com/larksuite/cli . The prior adapter contract was checked agains
 v1.0.98; this is not a claim that another installed version behaves identically.
 Verify installed help and response schema before enabling live delivery.
 
+The rendered `--markdown` text is the digest main body (title onward, collection
+marker and `## 差异补充` audit removed), minus any `##` main section without a line
+containing a URL, then the coverage line (`采集完整性：…`) and the candidate line
+(`候选处置：…`). `review-input` and `prepare-delivery` produce the identical render,
+and the review binds it.
+
 Successful subprocess output must provide a JSON object with **boolean** `ok: true`
 and a nonempty `data.message_id`. CLI exit zero alone is insufficient. The exact
 schema accepted is implemented and tested in digest.mjs. A failure after the durable

@@ -3,7 +3,7 @@ import path from 'node:path';
 import { createHash } from 'node:crypto';
 
 const sha256 = value => createHash('sha256').update(value).digest('hex');
-const validDate = value => typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value) && new Date(value).toISOString().slice(0, 10) === value;
+const validDate = value => typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value) && Number.isFinite(Date.parse(value)) && new Date(value).toISOString().slice(0, 10) === value;
 
 function regular(file) {
   if (!fs.lstatSync(file).isFile()) throw new Error('Ledger entries must be regular files, not symlinks');
@@ -68,4 +68,43 @@ export function recordDeliveryUncertain(handle, reason) {
   // Reason is a local classification, never CLI stdout or credential-bearing diagnostics.
   exclusive(handle.prefix + '.uncertain.json', { ...handle.attempt, status: 'uncertain_stop_reconcile', reason,
     recordedAt: new Date().toISOString() });
+}
+
+const PUBLISHED = 'published-urls.jsonl';
+const DAY = 24 * 60 * 60 * 1000;
+
+/** Appends one line per accepted delivery; the history file is never rewritten. */
+export function recordPublishedUrls(directory, { date, idempotencyKey, urls, now = new Date().toISOString() } = {}) {
+  const root = ledgerRoot(directory);
+  if (!validDate(date)) throw new Error('Invalid published URL date');
+  if (typeof idempotencyKey !== 'string' || !/^[A-Za-z0-9-]{1,150}$/.test(idempotencyKey)) throw new Error('Invalid idempotency key');
+  if (!Array.isArray(urls) || urls.some(url => typeof url !== 'string' || !url)) throw new Error('Published URLs must be non-empty strings');
+  const file = path.join(root, PUBLISHED), created = !fs.existsSync(file);
+  const { O_WRONLY, O_APPEND, O_CREAT, O_NOFOLLOW } = fs.constants;
+  const fd = fs.openSync(file, O_WRONLY | O_APPEND | O_CREAT | O_NOFOLLOW, 0o600);
+  try { fs.writeSync(fd, JSON.stringify({ date, idempotencyKey, urls, recordedAt: now }) + '\n'); fs.fsyncSync(fd); }
+  finally { fs.closeSync(fd); }
+  if (created) {
+    const handle = fs.openSync(root, 'r');
+    try { fs.fsyncSync(handle); } finally { fs.closeSync(handle); }
+  }
+}
+
+/** Published URLs dated in [before - days, before), merged per date; a corrupt history line fails closed. */
+export function recentPublishedUrls(directory, { before, days = 7 } = {}) {
+  const root = ledgerRoot(directory);
+  if (!validDate(before) || !Number.isSafeInteger(days) || days < 1) throw new Error('Published URL history needs a valid date and day count');
+  const file = path.join(root, PUBLISHED);
+  try { fs.lstatSync(file); } catch (error) { if (error.code === 'ENOENT') return []; throw error; }
+  const from = new Date(Date.parse(before) - days * DAY).toISOString().slice(0, 10);
+  const byDate = new Map();
+  for (const [index, line] of fs.readFileSync(regular(file), 'utf8').split('\n').entries()) {
+    if (!line.trim()) continue;
+    let record;
+    try { record = JSON.parse(line); } catch { throw new Error(`Corrupt published URL history line ${index + 1}`); }
+    if (!validDate(record?.date) || !Array.isArray(record.urls) || record.urls.some(url => typeof url !== 'string')) throw new Error(`Invalid published URL history line ${index + 1}`);
+    if (record.date < from || record.date >= before) continue;
+    byDate.set(record.date, new Set([...(byDate.get(record.date) ?? []), ...record.urls]));
+  }
+  return [...byDate].sort(([a], [b]) => a.localeCompare(b)).map(([date, urls]) => ({ date, urls: [...urls] }));
 }

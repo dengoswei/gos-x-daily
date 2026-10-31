@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { makeRuntime, freshWindow, assertCollectionAllowed } from '../runtime.mjs';
 import { createCollector } from '../collector.mjs';
 import { mergeItems, scanWindow, rankDeepLinks } from '../feed.mjs';
-import { composePrompt, validateDigest, prepareDelivery, sendDelivery } from '../digest.mjs';
+import { composePrompt, validateDigest, prepareDelivery, sendDelivery, larkMarkdown } from '../digest.mjs';
 import { runOcr } from '../ocr.mjs';
 import { createSyntheticReviewedFixture } from './helpers/review-fixture.mjs';
 
@@ -91,8 +91,36 @@ test('digest validates date, collection identity, sections and source URLs', () 
   assert.equal(validateDigest(markdown, collection).mainBullets, 1);
   assert.throws(() => validateDigest(markdown.replace(collection.digestMarker, ''), collection), /marker/);
   assert.throws(() => validateDigest(markdown.replace('2026-10-17', '2026-10-16'), collection), /date/);
-  assert.throws(() => validateDigest(markdown.replace('## Applications / Products', '## Other'), collection), /Missing section/);
+  assert.throws(() => validateDigest(markdown.replace('## 差异补充', '## Audit'), collection), /Missing section: 差异补充/);
   assert.throws(() => validateDigest(markdown.replace('[Source](https://x.com/example/status/123)', 'No source'), collection), /direct source/);
+  assert.throws(() => validateDigest(markdown.replace('暂无新增。\n\n## Applications', '- Unsourced claim.\n\n## Applications'), collection), /direct source/);
+  assert.throws(() => validateDigest(markdown.replace('- Example release: improved inference. [Source](https://x.com/example/status/123)', '暂无新增。'), collection), /no `## ` section/);
+});
+
+test('digest accepts any main section heading and the render omits sections without a URL', () => {
+  const renamed = `# X AI 日报 2026-10-17\n${collection.digestMarker}\n\n## 新的分组\n\n1. Example release. https://x.com/example/status/123\n\n## 差异补充\n\nSynthetic audit only.\n`;
+  assert.equal(validateDigest(renamed, collection).mainBullets, 1);
+  const render = larkMarkdown(markdown, collection);
+  assert.match(render, /## Frameworks \/ Infra/);
+  assert.ok(!render.includes('Breakthrough Research') && !render.includes('Applications / Products') && !render.includes('暂无新增'));
+  const nested = markdown.replace('暂无新增。\n\n## Applications', '### Paper\n\nSee https://x.com/example/status/123\n\n## Applications');
+  assert.match(larkMarkdown(nested, collection), /## Breakthrough Research\n\n### Paper/);
+});
+
+test('validateDigest reports repeated published URLs as a warning, never an error', () => {
+  const history = [{ date: '2026-10-15', urls: ['https://x.com/example/status/123'] }, { date: '2026-10-16', urls: ['https://x.com/example/status/123', 'https://other.example/'] }];
+  const result = validateDigest(markdown, collection, { publishedHistory: history });
+  assert.equal(result.ok, true);
+  assert.deepEqual(result.repeatedUrls, [{ url: 'https://x.com/example/status/123', date: '2026-10-16' }]);
+  assert.deepEqual(validateDigest(markdown, collection, { publishedHistory: [] }).repeatedUrls, []);
+  assert.equal(validateDigest(markdown, collection).repeatedUrls, undefined);
+});
+
+test('composition lists recently published URLs only when history is present', () => {
+  assert.doesNotMatch(composePrompt(collection), /<published_recently>\n\d{4}-/);
+  const prompt = composePrompt(collection, { publishedHistory: [{ date: '2026-10-16', urls: ['https://x.com/example/status/123'] }] });
+  assert.match(prompt, /<published_recently>\n2026-10-16  https:\/\/x\.com\/example\/status\/123\n<\/published_recently>/);
+  assert.match(prompt, /跟进/);
 });
 
 test('Lark plan uses bot, correct open ID, independent idempotency and concise body after review', t => {

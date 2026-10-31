@@ -8,7 +8,7 @@ import { createCollector } from './collector.mjs';
 import { collectionFromBrowserArtifacts, verifyEvidenceFiles } from './browser-artifacts.mjs';
 import { composePrompt, prepareDelivery, sendDelivery, publicationGates, readPublicationFile } from './digest.mjs';
 import { createReviewInput, validateReview } from './review.mjs';
-import { initializeDeliveryLedger } from './delivery-ledger.mjs';
+import { initializeDeliveryLedger, recentPublishedUrls } from './delivery-ledger.mjs';
 
 const root = path.dirname(fileURLToPath(import.meta.url));
 const readJson = file => JSON.parse(fs.readFileSync(file, 'utf8'));
@@ -36,7 +36,7 @@ export async function main(argv = process.argv.slice(2)) {
       'collect --config runtime.json --allow-collection',
       'import-browser --artifacts browser-capture.json --out sources.json [--config runtime.json]',
       'import-feed --artifacts feed-capture.json --sources sources.json --out sources.merged.json [--config runtime.json]',
-      'compose-input --sources sources.json --out prompt.md',
+      'compose-input --sources sources.json --out prompt.md [--published-history LEDGER_DIRECTORY] [--full]',
       'prepare-delivery --sources sources.json --digest digest.md --publication publication.json --out delivery.json --config VERIFIED_RUNTIME.json',
       'review-input --publication publication.json --out review.pending.json',
       'validate-publication --publication publication.json',
@@ -46,7 +46,9 @@ export async function main(argv = process.argv.slice(2)) {
   }
   if (command === 'compose-input') {
     const output = required('--out');
-    write(output, composePrompt(readJson(required('--sources'))));
+    const collection = readJson(required('--sources'));
+    const publishedHistory = argv.includes('--published-history') ? recentPublishedUrls(required('--published-history'), { before: collection.date }) : [];
+    write(output, composePrompt(collection, { publishedHistory, full: argv.includes('--full') }));
     return { status: 'prompt_written', output };
   }
   if (command === 'init-delivery-ledger') {

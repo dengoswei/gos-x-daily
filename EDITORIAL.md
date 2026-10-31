@@ -78,7 +78,11 @@ screening in `dispositions.json` (one included/merged/skipped row per candidate;
 see docs/RUNBOOK.md §4). Cite only URLs observed in the collection or in declared
 materials; the URL gate rejects anything else, so put each supplemental source's
 direct URL in `canonical-materials.json`. No item quota or
-company-blog quota. Do not promote unfinished reading queues just to increase
+company-blog quota. The prompt's section list is the default, but the validator
+does not pin section names; a section with nothing sourced is
+omitted from the rendered message, so never pad with placeholder sections. A URL
+already carried by a report in the previous seven days may return only as an item
+labelled 跟进 that states a new fact. Do not promote unfinished reading queues just to increase
 article count. Keep unsolicited personal PR/status minutiae out; substantive
 infrastructure developments remain eligible. No Mac-history import or Obsidian
 output is required.

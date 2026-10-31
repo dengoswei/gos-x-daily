@@ -199,3 +199,48 @@ test('required Following failure is also blocked at composition and Lark is disa
   assert.equal(defaults.lark.userId, null);
   assert.throws(() => prepareDelivery(markdown, good, defaults.lark), /Lark delivery is disabled/);
 });
+
+const watchRuntime = watchProfiles => makeRuntime({ sources: { ...config, watchProfiles } }, { runId: 'synthetic-watch-test' });
+const karpathyProfile = { handle: 'karpathy', name: 'Karpathy', required: true, latest: 10 };
+const second = (required, latest = 3) => ({ handle: 'synthetic_two', name: 'Synthetic Two', required, latest });
+
+test('default watch configuration mirrors the karpathy compatibility fields', () => {
+  assert.deepEqual(runtime.sources.watchProfiles, [karpathyProfile]);
+  const collection = convert(fixture());
+  assert.deepEqual(collection.sources.watchProfiles, [{ handle: 'karpathy', name: 'Karpathy', required: true, items: collection.sources.karpathy }]);
+  assert.equal(collection.stats.watchProfiles, 1);
+  assert.equal(collection.stats.karpathy, 1);
+  assert.deepEqual(collection.checks.watch.karpathy, collection.checks.karpathy);
+});
+
+test('an optional watch profile missing from the bundle warns; a required one throws', () => {
+  const optional = collectionFromBrowserArtifacts(watchRuntime([karpathyProfile, second(false)]), fixture());
+  assert.ok(optional.warnings.includes('synthetic_two was not captured in this run'));
+  assert.deepEqual(optional.checks.watch.synthetic_two, { attempted: false });
+  assert.deepEqual(optional.sources.watchProfiles.map(p => [p.handle, p.items.length]), [['karpathy', 1], ['synthetic_two', 0]]);
+  assert.throws(() => collectionFromBrowserArtifacts(watchRuntime([karpathyProfile, second(true)]), fixture()), /synthetic_two attempt is required/);
+});
+
+test('a captured watch profile uses its own evidence page and latest cap', () => {
+  const bundle = fixture();
+  bundle.evidence.push(evidence('two', 'https://x.com/synthetic_two'));
+  bundle.feeds.synthetic_two = { status: 'ok', pages: [{ evidenceId: 'two', items: Array.from({ length: 5 }, (_, i) => post(String(i + 50), { publishedAt: `2026-10-0${i + 1}T12:00:00Z` })) }] };
+  const collection = collectionFromBrowserArtifacts(watchRuntime([karpathyProfile, second(true)]), bundle);
+  assert.equal(collection.checks.watch.synthetic_two.items, 3);
+  assert.equal(collection.sources.watchProfiles[1].items[0].publishedAt, '2026-10-05T12:00:00.000Z');
+  assert.equal(collection.stats.watchProfiles, 4);
+  assert.ok(collection.warnings.includes('Synthetic Two capped at 3 observed posts'));
+  bundle.evidence.at(-1).url = 'https://x.com/karpathy';
+  assert.throws(() => collectionFromBrowserArtifacts(watchRuntime([karpathyProfile, second(true)]), bundle), /Evidence URL does not match/);
+});
+
+test('without a karpathy profile the compatibility fields are empty and its feed is not required', () => {
+  const bundle = fixture();
+  delete bundle.feeds.karpathy;
+  const collection = collectionFromBrowserArtifacts(watchRuntime([]), bundle);
+  assert.deepEqual(collection.sources.karpathy, []);
+  assert.deepEqual(collection.sources.watchProfiles, []);
+  assert.equal(collection.stats.karpathy, 0);
+  assert.equal(collection.stats.watchProfiles, 0);
+  assert.deepEqual(collection.checks.karpathy, { attempted: false });
+});

@@ -42,3 +42,18 @@ test('example sources use generic blog indexes and the broad-AI public feed list
   for (const feed of sources.feeds) assert.deepEqual(Object.keys(feed).sort(), ['kind', 'maxItems', 'name', 'url']);
   assert.equal(validateFeedConfig(sources), sources.feeds);
 });
+
+test('watch profiles default to the karpathy entry and are validated fail-closed', () => {
+  const sources = JSON.parse(fs.readFileSync(new URL('../config/sources.json', import.meta.url), 'utf8'));
+  const karpathy = { handle: 'karpathy', name: 'Karpathy', required: true, latest: 10 };
+  assert.deepEqual(sources.watchProfiles, [karpathy]);
+  const watch = watchProfiles => makeRuntime({ sources: { blogs: [], xiaohongshuProfiles: [], watchProfiles } }, { runId: 'watch' }).sources.watchProfiles;
+  assert.deepEqual(makeRuntime({}, { runId: 'watch' }).sources.watchProfiles, [karpathy]);
+  assert.deepEqual(watch(undefined), [karpathy]);
+  assert.deepEqual(watch([]), []);
+  assert.deepEqual(watch([karpathy, { handle: 'Second_1', name: 'Second', required: false, latest: 20 }]).map(p => p.handle), ['karpathy', 'Second_1']);
+  for (const bad of [{}, [{ ...karpathy, handle: 'bad-handle' }], [{ ...karpathy, handle: 'sixteen_chars_xx' }], [karpathy, { ...karpathy, handle: 'Karpathy' }],
+    [{ ...karpathy, handle: 'substack' }], [{ ...karpathy, handle: '__proto__' }], [{ ...karpathy, name: ' ' }], [{ ...karpathy, required: 'true' }], [{ ...karpathy, latest: 0 }], [{ ...karpathy, latest: 21 }], [{ ...karpathy, latest: 2.5 }]]) {
+    assert.throws(() => watch(bad), /watch profile|watchProfiles/i);
+  }
+});

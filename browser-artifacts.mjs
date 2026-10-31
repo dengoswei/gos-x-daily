@@ -3,11 +3,10 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
-import { freshWindow } from './runtime.mjs';
+import { freshWindow, validateWatchProfiles, defaultWatchProfiles } from './runtime.mjs';
 import { mergeItems, auditDeepLinks } from './feed.mjs';
 import { extractThreadDiscoveries } from './thread-discovery.mjs';
 
-const groups = ['xFollowing', 'xFollowingSearch', 'substack', 'karpathy'];
 const failures = new Set(['login_required', 'page_error', 'not_available']);
 const stamp = value => {
   if (typeof value !== 'string' || !/^\d{4}-\d\d-\d\dT.*(?:Z|[+-]\d\d:\d\d)$/.test(value) || !Number.isFinite(Date.parse(value))) throw new Error('Expected an explicit ISO timestamp with timezone');
@@ -76,12 +75,16 @@ export function collectionFromBrowserArtifacts(runtime, bundle) {
     'Artifact hashes verify file integrity, not screenshot transcription or semantic accuracy.'];
   const reports = { xFollowing: [], substack: [] };
   const parsed = {};
-  const checks = {};
-  const sourcePage = (group, url, status) => {
+  const checks = { watch: {} };
+  const profiles = validateWatchProfiles(runtime.sources?.watchProfiles ?? defaultWatchProfiles);
+  const groups = [{ key: 'xFollowing' }, { key: 'xFollowingSearch' }, { key: 'substack' }, ...profiles.map(profile => ({ key: profile.handle, profile }))];
+  const watchProfiles = [];
+  const watched = ({ handle, name, required }, items) => ({ handle, name, required, items });
+  const sourcePage = (group, url, status, profile) => {
     if (group === 'substack') return url.hostname === 'substack.com' && (url.pathname === '/home/secondary/subscribed' || (status !== 'ok' && /login|sign-in/.test(url.pathname)));
     if (!xHost(url.hostname)) return false;
     if (/\/i\/flow\/login|^\/login/.test(url.pathname)) return status !== 'ok';
-    if (group === 'karpathy') return /^\/karpathy\/?$/i.test(url.pathname);
+    if (profile) return new RegExp(`^/${profile.handle}/?$`, 'i').test(url.pathname);
     if (group === 'xFollowingSearch') {
       const query = url.searchParams.get('q') ?? '';
       const since = query.match(/(?:^|\s)since_time:(\d+)(?:\s|$)/), until = query.match(/(?:^|\s)until_time:(\d+)(?:\s|$)/);
@@ -91,12 +94,13 @@ export function collectionFromBrowserArtifacts(runtime, bundle) {
     }
     return /^\/home\/?$/.test(url.pathname);
   };
-  for (const group of groups) {
-    const feed = bundle.feeds?.[group];
+  for (const { key: group, profile } of groups) {
+    const feed = Object.hasOwn(bundle.feeds ?? {}, group) ? bundle.feeds[group] : undefined;
     if (!feed) {
-      if (group === 'xFollowing' || group === 'karpathy') throw new Error(`${group} attempt is required`);
+      if (group === 'xFollowing' || profile?.required) throw new Error(`${group} attempt is required`);
       parsed[group] = [];
       warnings.push(`${group} was not captured in this run`);
+      if (profile) { checks.watch[group] = { attempted: false }; watchProfiles.push(watched(profile, [])); }
       continue;
     }
     if (feed.status !== 'ok' && !failures.has(feed.status)) throw new Error(`Invalid ${group} capture status`);
@@ -104,7 +108,7 @@ export function collectionFromBrowserArtifacts(runtime, bundle) {
     if (group === 'xFollowing' && feed.status === 'ok' && feed.view !== 'following') throw new Error('X Following requires an explicitly observed Following tab');
     let found = [];
     for (const page of feed.pages) {
-      evidenceFor(page.evidenceId, url => sourcePage(group, url, feed.status));
+      evidenceFor(page.evidenceId, url => sourcePage(group, url, feed.status, profile));
       if (feed.status !== 'ok' && (page.items ?? []).length) throw new Error('A failed source cannot supply usable items');
       const predicate = group === 'substack'
         ? url => /\/p\/|\/home\/post\/|\/note\//.test(url.pathname)
@@ -113,15 +117,18 @@ export function collectionFromBrowserArtifacts(runtime, bundle) {
     }
     if (group === 'xFollowing' && feed.status !== 'ok') throw new Error(`X Following unavailable: ${feed.status}`);
     const undated = found.filter(value => !value.publishedAt).length;
-    if (group !== 'karpathy') found = found.filter(value => !value.publishedAt || (Date.parse(value.publishedAt) >= Date.parse(window.start) && Date.parse(value.publishedAt) < Date.parse(window.end)));
+    if (!profile) found = found.filter(value => !value.publishedAt || (Date.parse(value.publishedAt) >= Date.parse(window.start) && Date.parse(value.publishedAt) < Date.parse(window.end)));
     else {
+      const { name, latest } = profile;
       if (found.every(value => value.publishedAt)) found.sort((a, b) => Date.parse(b.publishedAt) - Date.parse(a.publishedAt));
-      if (found.length > 10) warnings.push('Karpathy capped at 10 observed posts');
-      found = found.slice(0, 10);
-      if (found.length < 10) warnings.push(`Karpathy only ${found.length}/10 posts observed; latest-ten coverage is not established`);
+      if (found.length > latest) warnings.push(`${name} capped at ${latest} observed posts`);
+      found = found.slice(0, latest);
+      if (found.length < latest) warnings.push(`${name} only ${found.length}/${latest} posts observed; latest-${latest} coverage is not established`);
     }
     parsed[group] = found;
-    checks[group] = { attempted: true, available: feed.status === 'ok' && found.length > 0, items: found.length, status: feed.status };
+    const check = { attempted: true, available: feed.status === 'ok' && found.length > 0, items: found.length, status: feed.status };
+    if (profile) { checks.watch[group] = check; watchProfiles.push(watched(profile, found)); }
+    else checks[group] = check;
     if (feed.status !== 'ok') warnings.push(`${group} unavailable: ${feed.status}`);
     if (undated) warnings.push(`${group}: ${undated} observed item(s) lack exact dates; do not claim all are fresh`);
     const report = { ...window, source: group, scanned: false, reason: feed.status === 'ok' ? 'bounded_browser_capture' : feed.status,
@@ -130,6 +137,9 @@ export function collectionFromBrowserArtifacts(runtime, bundle) {
     if (group.startsWith('xFollowing')) reports.xFollowing.push(report);
     if (group === 'substack') reports.substack.push(report);
   }
+  // digest.mjs and the prompts read the karpathy group by name; mirror that profile here.
+  const karpathy = watchProfiles.find(profile => profile.handle === 'karpathy');
+  checks.karpathy = karpathy ? checks.watch.karpathy : { attempted: false };
   if (!parsed.xFollowing.length) throw new Error('X Following produced 0 usable items; no digest may be composed');
   const blogs = [];
   for (const blog of runtime.sources.blogs ?? []) {
@@ -179,9 +189,9 @@ export function collectionFromBrowserArtifacts(runtime, bundle) {
     date: new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date(capturedAt)),
     collectedAt: capturedAt, coverage: { window, digestWindow: freshWindow(startedAt, runtime.lookbackHours), assurance: 'best_effort_ui_not_all_posts', reports, carriedFrom: null },
     checks, warnings, deepLinkAudit, provenance: { transport: bundle.transport, startedAt, evidence: [...evidence.values()] },
-    sources: { xFollowing, substack: parsed.substack, karpathy: parsed.karpathy, blogs, xiaohongshu, deepArticles, threadContexts: threadDiscovery.contexts },
+    sources: { xFollowing, substack: parsed.substack, karpathy: karpathy?.items ?? [], watchProfiles, blogs, xiaohongshu, deepArticles, threadContexts: threadDiscovery.contexts },
     stats: { xFollowing: xFollowing.length, freshXFollowing: parsed.xFollowing.length, substack: parsed.substack.length,
-      karpathy: parsed.karpathy.length, blogs: blogs.length, xiaohongshu: xiaohongshu.reduce((count, profile) => count + profile.notes.length, 0), deepArticles: deepArticles.length,
+      karpathy: karpathy?.items.length ?? 0, watchProfiles: watchProfiles.reduce((count, profile) => count + profile.items.length, 0), blogs: blogs.length, xiaohongshu: xiaohongshu.reduce((count, profile) => count + profile.notes.length, 0), deepArticles: deepArticles.length,
       ...threadDiscovery.stats },
   };
 }

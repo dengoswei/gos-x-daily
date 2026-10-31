@@ -5,7 +5,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { mergeItems, scanWindow, auditDeepLinks, readFeedDom } from './feed.mjs';
 import { runOcr } from './ocr.mjs';
-import { assertCollectionAllowed, freshWindow } from './runtime.mjs';
+import { assertCollectionAllowed, freshWindow, validateWatchProfiles, defaultWatchProfiles } from './runtime.mjs';
 import { openCoverageStore, recordCollectionCoverage, runCoveragePlan, coverageReport } from './coverage.mjs';
 
 // Article links on a blog index page: same origin, under articleBaseUrl, not the index itself.
@@ -55,8 +55,10 @@ export function createCollector(runtime, { fetchImpl = globalThis.fetch, WebSock
   const REQUIRED_PAGES = [
     { key: 'xFollowing', label: 'X Following', url: 'https://x.com/home?filter=following', match: url => url.includes('x.com/home?filter=following') },
     { key: 'substack', label: 'Substack Subscribed', url: 'https://substack.com/home/secondary/subscribed', match: url => url.includes('substack.com/home/secondary/subscribed') },
-    { key: 'karpathy', label: 'Karpathy', url: 'https://x.com/karpathy', match: url => url.startsWith('https://x.com/karpathy') },
+    ...validateWatchProfiles(runtime.sources?.watchProfiles ?? defaultWatchProfiles).map(profile => ({ key: `watch:${profile.handle}`, label: profile.name, url: `https://x.com/${profile.handle}`, profile,
+      match: url => new RegExp(`^https://x\\.com/${profile.handle}(?:[/?#]|$)`, 'i').test(url) })),
   ];
+  const pageUrl = key => REQUIRED_PAGES.find(page => page.key === key).url;
   let semanticScholarRateLimited = false;
   let active = false;
   let deadline = Infinity;
@@ -1852,7 +1854,7 @@ async function navigateExistingTarget(target, url) {
           warnings.push(`${page.label} page unavailable: ${error.message}`);
         }
       }
-      await navigateExistingTarget(pages.xFollowing, REQUIRED_PAGES[0].url);
+      await navigateExistingTarget(pages.xFollowing, pageUrl('xFollowing'));
       await waitForXTimelineContent(pages.xFollowing, 20000);
       await clickSeeNewPosts(pages.xFollowing);
       const following = await collectFeedWindow(pages.xFollowing, 'x', window);
@@ -1900,19 +1902,27 @@ async function navigateExistingTarget(target, url) {
       let substackItems = [];
       if (pages.substack) {
         try {
-          await navigateExistingTarget(pages.substack, REQUIRED_PAGES[1].url);
+          await navigateExistingTarget(pages.substack, pageUrl('substack'));
           const sub = await collectFeedWindow(pages.substack, 'substack', window);
           substackItems = sub.items;
           reports.substack.push(sub.coverage);
         } catch (error) { warnings.push(`Substack unavailable: ${error.message}`); }
       }
-      let karpathyItems = [];
-      if (pages.karpathy) {
-        try {
-          await navigateExistingTarget(pages.karpathy, REQUIRED_PAGES[2].url);
-          karpathyItems = await extractHydratedXTimeline(pages.karpathy, 'Karpathy', warnings, 10);
-        } catch (error) { warnings.push(`Karpathy sanity check unavailable: ${error.message}`); }
+      const watchProfiles = [], watchChecks = {};
+      for (const { key, url, profile } of REQUIRED_PAGES.filter(page => page.profile)) {
+        let items = [];
+        if (pages[key]) {
+          try {
+            await navigateExistingTarget(pages[key], url);
+            items = await extractHydratedXTimeline(pages[key], profile.name, warnings, profile.latest);
+          } catch (error) { warnings.push(`${profile.name} sanity check unavailable: ${error.message}`); }
+        }
+        watchProfiles.push({ handle: profile.handle, name: profile.name, required: profile.required, items });
+        watchChecks[profile.handle] = { attempted: true, available: Boolean(pages[key]), items: items.length };
       }
+      // digest.mjs and the prompts read the karpathy group by name; mirror that profile here.
+      const karpathyItems = watchProfiles.find(profile => profile.handle === 'karpathy')?.items ?? [];
+      const karpathyCheck = watchChecks.karpathy ?? { attempted: false };
       for (const [source, values] of Object.entries(reports)) {
         for (const report of values) if (!report.scanned) warnings.push(`${source} fresh-window scan incomplete: ${report.reason}`);
       }
@@ -1935,11 +1945,11 @@ async function navigateExistingTarget(target, url) {
         date: new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit' }).format(clock()),
         collectedAt: clock().toISOString(),
         coverage: { window: freshWindow(runStartedAt, 48), digestWindow: window, assurance: 'best_effort_ui_not_all_posts', reports, carriedFrom: 'gos_new_remote_state_only', execution: catchup },
-        checks: { xFollowing: { attempted: true, available: true, status: 'ok', items: following.items.length }, karpathy: { attempted: true, available: Boolean(pages.karpathy), items: karpathyItems.length }, blogs: blogChecks },
+        checks: { xFollowing: { attempted: true, available: true, status: 'ok', items: following.items.length }, karpathy: karpathyCheck, watch: watchChecks, blogs: blogChecks },
         warnings, deepLinkAudit,
-        sources: { xFollowing: xItems, substack: substackItems, karpathy: karpathyItems, blogs, xiaohongshu, deepArticles },
+        sources: { xFollowing: xItems, substack: substackItems, karpathy: karpathyItems, watchProfiles, blogs, xiaohongshu, deepArticles },
         stats: { xFollowing: xItems.length, freshXFollowing: following.items.length, substack: substackItems.length,
-          karpathy: karpathyItems.length, blogs: blogs.length, xiaohongshu: xiaohongshu.reduce((n, p) => n + p.notes.length, 0), deepArticles: deepArticles.length },
+          karpathy: karpathyItems.length, watchProfiles: watchProfiles.reduce((n, p) => n + p.items.length, 0), blogs: blogs.length, xiaohongshu: xiaohongshu.reduce((n, p) => n + p.notes.length, 0), deepArticles: deepArticles.length },
       };
       result.coverage.accounting = recordCollectionCoverage(store.state, result);
       store.save(store.state);

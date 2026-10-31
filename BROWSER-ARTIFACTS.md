@@ -18,8 +18,9 @@ default. See docs/RUNBOOK.md for portable controller responsibilities.
    screen. Save screenshots from this run. Copy direct post URLs and displayed
    text accurately. Record exact publication timestamps only when actually
    observed; otherwise use null. Never invent text, dates, sources or coverage.
-3. Attempt the Karpathy profile and aim for ten latest posts. Record unavailable
-   or login-required evidence explicitly. Optional sources are the subscribed
+3. Attempt every configured watch account (`watchProfiles` in the sources file;
+   by default the Karpathy profile, ten latest posts) and aim for its `latest`
+   posts. Record unavailable or login-required evidence explicitly. Optional sources are the subscribed
    Substack feed, the two configured official blogs, and configured Xiaohongshu profiles.
 4. Save screenshots inside the bundle directory, using relative paths, then
    compute their SHA-256. The importer verifies bytes and path containment. It
@@ -80,8 +81,14 @@ page's `evidenceId` must identify a matching source screenshot. Supported status
 values: `ok`, `login_required`, `page_error`, `not_available`. Failed sources must
 not carry usable items. X Following must have `status: ok`, `view: following`
 and at least one usable post after filtering. Otherwise import and composition
-are blocked, even if blogs or Karpathy contain useful material. Karpathy attempt
-is required; its failure is an explicit additive-source warning.
+are blocked, even if blogs or watch accounts contain useful material.
+
+Watch accounts: each configured profile is recorded under `feeds.<handle>` (the
+example's `karpathy` key) with the same pages/items shape. Its evidence must be the
+profile page `https://x.com/<handle>`. An attempt is required for profiles with
+`required: true`; a missing optional profile is a warning. A failed attempt is an
+explicit additive-source warning. Observed posts are capped at the profile's
+`latest`, with a warning when fewer were observed.
 
 Optional feed keys:
 - `xFollowingSearch`: same pages/items shape; evidence must be an observed X
@@ -225,7 +232,7 @@ local config and inspect its effective value. Older discoveries still need
 their true original dates and catch-up/historical labels.
 Capture timestamps must fall within one run of at most two hours. Dated feed
 items outside the window are excluded; undated items remain explicitly uncertain.
-Karpathy/blogs/Xiaohongshu are latest-source checks, not asserted to be today's
+Watch accounts/blogs/Xiaohongshu are latest-source checks, not asserted to be today's
 publication. Every feed coverage report remains `scanned: false` with bounded
 capture status; screenshot snapshots cannot prove that all posts were collected.
 The collection retains evidence provenance, counts, missing-source warnings and

@@ -70,6 +70,10 @@ test('complete forward run: synthetic browser import, prompt, supplemental mater
   assert.equal(prepared.status, 'prepared_not_sent');
   assert.deepEqual(prepared.validation.urlBinding, { checked: 2, matchedCollection: 1, matchedMaterials: 1 });
   assert.deepEqual(prepared.validation.dispositions.supplementUrls, ['https://newsletter.example.invalid/p/issue-1']);
-  assert.match(JSON.parse(fs.readFileSync(path.join(root, 'delivery.json'))).args[7], /候选处置：共 1 条候选，收录 1 条，合并 0 条，跳过 0 条。/);
+  const rendered = JSON.parse(fs.readFileSync(path.join(root, 'delivery.json'))).args[7];
+  assert.ok(!rendered.includes('Breakthrough Research') && !rendered.includes('No synthetic item.'));
+  const known = sources.coverage.accounting.knownCandidates;
+  assert.ok(rendered.endsWith(`\n\n采集完整性：本期为浏览器截图抽样（观察 ${known.observedPosts} 条帖子、3 张截图），未做区间遍历，近24小时与近48小时覆盖均未验证；已观察链接 ${known.observedLinks} 个，规则过滤 ${known.filterDrops} 个，待深读 ${known.deepReadBacklog} 个（其中失败 ${known.deepReadFailures} 个）。未看到的帖子数未知。\n候选处置：共 1 条候选，收录 1 条，合并 0 条，跳过 0 条。\n`), rendered);
+  assert.deepEqual(prepared.validation.repeatedUrls, []);
   assert.deepEqual(fs.readdirSync(ledgerDir), ['ledger.json']);
 });

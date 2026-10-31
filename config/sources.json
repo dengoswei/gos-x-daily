@@ -1,4 +1,7 @@
 {
+  "watchProfiles": [
+    { "handle": "karpathy", "name": "Karpathy", "required": true, "latest": 10 }
+  ],
   "xiaohongshuProfiles": [],
   "blogs": [
     {

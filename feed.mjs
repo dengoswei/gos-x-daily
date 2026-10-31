@@ -192,6 +192,13 @@ export function auditDeepLinks(items, limit = 12) {
           (record.eligible === prev.eligible && record.score > prev.score)) links.set(url.href, record);
     }
   }
+  // Fan-in rewards a link shared by several distinct posts; it is topic-neutral by design.
+  const sources = new Map();
+  for (const record of records) sources.set(record.href, (sources.get(record.href) ?? new Set()).add(record.sourceId));
+  for (const record of records) {
+    record.fanIn = sources.get(record.href).size;
+    record.score += Math.min(record.fanIn - 1, 3);
+  }
   for (const record of records) {
     if (links.has(record.href) && links.get(record.href) !== record) {
       record.eligibilityReason = record.reason;
@@ -208,6 +215,24 @@ export function auditDeepLinks(items, limit = 12) {
     link.reason = link.selected ? 'ranked_for_deep_read' : 'deep_read_budget';
   });
   return [...ranked, ...records.filter(link => !link.eligible)];
+}
+
+const structuralReasons = new Set(['invalid_url', 'unsupported_protocol', 'embedded_credentials', 'social_link',
+  'analytics_link', 'substack_navigation', 'homepage_navigation']);
+
+/** Links shared by >= 2 distinct items: [{ url, fanIn, itemKeys }], fanIn desc then url asc. keyOf names each item. */
+export function clusterByLink(items, { keyOf = itemKey } = {}) {
+  const groups = new Map();
+  for (const item of items) {
+    const key = keyOf(item);
+    for (const record of auditDeepLinks([{ ...item, links: item.links || [] }], 0)) {
+      // Profile, hashtag and navigation links are page chrome, not a shared subject.
+      if (structuralReasons.has(record.reason) || structuralReasons.has(record.eligibilityReason)) continue;
+      groups.set(record.href, (groups.get(record.href) ?? new Set()).add(key));
+    }
+  }
+  return [...groups].filter(([, keys]) => keys.size >= 2).map(([url, keys]) => ({ url, fanIn: keys.size, itemKeys: [...keys] }))
+    .sort((a, b) => b.fanIn - a.fanIn || (a.url < b.url ? -1 : a.url > b.url ? 1 : 0));
 }
 
 // Backward-compatible selection API: omit filtered links, retain eligible backlog.

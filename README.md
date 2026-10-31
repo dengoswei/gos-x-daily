@@ -32,7 +32,7 @@ Next read [AGENTS.md](AGENTS.md), [EDITORIAL.md](EDITORIAL.md), the
 
 | Stage | In this repository | Required outside this CLI |
 |---|---|---|
-| Browser capture | Offline `import-browser` adapter with evidence/hash checks | Authorized browser tools, actual selected X Following, screenshots/transcription, genuine Karpathy attempt |
+| Browser capture | Offline `import-browser` adapter with evidence/hash checks | Authorized browser tools, actual selected X Following, screenshots/transcription, genuine attempt at each configured watch account |
 | Sources | Thread/quote context, ranking, rolling coverage accounting | Relevant Gmail/primary article reads, canonical materials and provenance |
 | Writing | `compose-input`, editorial prompts, structural digest validation | Authorized writer/model; it must explicitly read supplemental materials |
 | Review | Pending review generation and exact artifact/render binding | Genuinely independent reviewer: blind comprehension first, source fidelity second |
@@ -64,6 +64,21 @@ node cli.mjs inspect-config --config config/runtime.local.json
 - Collection and Lark delivery are disabled. `CHANGE-ME` is not a verified deployment.
   See [Lark integration](docs/LARK.md) before configuring it.
 
+### Watch accounts
+
+`watchProfiles` in the sources file lists X accounts whose latest posts are checked
+each run, as `{ handle, name, required, latest }`: `handle` matches
+`^[A-Za-z0-9_]{1,15}$` and is unique (case-insensitive; `xFollowing`,
+`xFollowingSearch` and `substack` are reserved), `name` is non-empty, `required` is a
+boolean and `latest` an integer 1..20. When the key is absent the default is
+`[{ "handle": "karpathy", "name": "Karpathy", "required": true, "latest": 10 }]`;
+`[]` configures no watch accounts. A browser bundle records each account under
+`feeds.<handle>`; a missing `required` account blocks import, a missing optional
+one is a warning. Collections carry `sources.watchProfiles` (`[{ handle, name,
+required, items }]`), `stats.watchProfiles` and `checks.watch.<handle>`;
+`sources.karpathy`, `stats.karpathy` and `checks.karpathy` mirror the `karpathy`
+profile (`[]`, `0`, `{ attempted: false }` when it is not configured).
+
 ### Feeds and blog indexes
 
 `feeds` in the sources file lists public feeds as `{ name, url, kind, maxItems }`
@@ -91,7 +106,10 @@ index pages are client-rendered and yield no links without the browser.
 - `coverage.mjs`, `feed.mjs`: bounded scans, deduplication and honest coverage gaps.
 - `digest.mjs`, `review.mjs`, `delivery-ledger.mjs`: writing/review/delivery contracts.
 - `collector.mjs`, `ocr.mjs`: optional direct-CDP / local Tesseract path.
-- `prompts/`, `EDITORIAL.md`: user-owned composition and independent review rules.
+- `compose.mjs`: compact composition input (candidates keyed as `binding.mjs` keys them,
+  shared-link clusters, deep reads, recently published URLs) without audit records or evidence paths.
+- `prompts/`, `EDITORIAL.md`: user-owned composition and independent review rules;
+  `prompts/compose-digest.md` holds every composition rule (the `summarize-*.md` files are stubs).
 - `examples/`: deliberately incomplete path templates, **not evidence or approval**.
 - `test/`: synthetic, no-production-network regression tests.
 

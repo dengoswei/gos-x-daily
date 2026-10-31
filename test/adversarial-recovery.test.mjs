@@ -47,6 +47,21 @@ test('independent audit: finite partial coverage is disclosed without turning ba
   assert.match(line, /待深读 4/); assert.match(line, /未看到的帖子数未知/);
 });
 
+test('browser sampling wording applies only to a fully unscanned supported-browser capture', () => {
+  const sampled = (transport, recent, full) => ({ provenance: { transport, evidence: [{ kind: 'screenshot' }, { kind: 'screenshot' }, { kind: 'fetched_document' }] },
+    coverage: { accounting: { windows: { '24h': { unscannedHours: recent }, '48h': { unscannedHours: full } },
+      knownCandidates: { observedPosts: 7, observedLinks: 10, filterDrops: 2, deepReadBacklog: 4, deepReadFailures: 1 } } } });
+  assert.equal(coverageStatusLine(sampled('gos-supported-browser', 24, 48)),
+    '采集完整性：本期为浏览器截图抽样（观察 7 条帖子、2 张截图），未做区间遍历，近24小时与近48小时覆盖均未验证；已观察链接 10 个，规则过滤 2 个，待深读 4 个（其中失败 1 个）。未看到的帖子数未知。');
+  for (const [transport, recent, full] of [['gos-supported-browser', 23, 48], ['gos-supported-browser', 24, 47], ['cdp', 24, 48], [undefined, 24, 48]]) {
+    assert.match(coverageStatusLine(sampled(transport, recent, full)), /小时未验证扫描/);
+  }
+  const broken = sampled('gos-supported-browser', 24, 48); broken.coverage.accounting.knownCandidates.observedPosts = -1;
+  assert.throws(() => coverageStatusLine(broken), /observed post/);
+  broken.coverage.accounting.knownCandidates.filterDrops = 11;
+  assert.throws(() => coverageStatusLine(broken), /Inconsistent/);
+});
+
 test('independent audit: only boolean true can establish a successful CLI acknowledgment', t => {
   for (const ok of ['false', 'true', 1, {}, []]) {
     const f = createSyntheticReviewedFixture(t);

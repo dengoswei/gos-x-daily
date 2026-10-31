@@ -16,6 +16,11 @@ history or promise exhaustive X recall.
   cannot certify whole intervals from oldest/newest sampled posts.
 - Keep 24-hour and 48-hour unscanned hours separate from known queue counts.
   Unseen-post count remains unknown. Do not sum overlapping thread/feed counts.
+- The rendered coverage line for a supported-browser capture whose 24h and 48h
+  windows are both entirely unscanned says so plainly: `本期为浏览器截图抽样（观察 N
+  条帖子、M 张截图），未做区间遍历，近24小时与近48小时覆盖均未验证`, followed by the
+  link/filter/deep-read counts. N is `knownCandidates.observedPosts` and M the number
+  of screenshot evidence entries. Any other case reports unscanned hours per window.
 - Preserve partial results and exact failure reasons, actual timestamps, source
   dates and quote context. No missing receipt or history implies novelty.
 
