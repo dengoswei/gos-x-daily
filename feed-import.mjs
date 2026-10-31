@@ -140,7 +140,8 @@ export function mergeFeedDocuments(runtime, collection, bundle, baseDir) {
   const fetchedAt = stamp(bundle.fetchedAt, 'fetchedAt');
   const collectedAt = stamp(collection.collectedAt, 'collection collectedAt');
   if (Date.parse(startedAt) > Date.parse(fetchedAt) || Date.parse(fetchedAt) - Date.parse(startedAt) > 2 * 3600000) throw new Error('Feed fetches must belong to one run of at most two hours');
-  if (Date.parse(startedAt) > Date.parse(collectedAt) || Date.parse(collectedAt) - Date.parse(startedAt) > 2 * 3600000) throw new Error('Feed fetch must start within the two hours before the collection was captured');
+  // Feeds may be fetched shortly before or after the browser capture; both sides share one two-hour run.
+  if (Math.abs(Date.parse(startedAt) - Date.parse(collectedAt)) > 2 * 3600000) throw new Error('Feed fetch must start within two hours of the browser capture');
   const base = fs.realpathSync(baseDir);
   if (!Array.isArray(bundle.documents) || !bundle.documents.length) throw new Error('Fetched feed documents are required');
   const failures = bundle.failures ?? [];

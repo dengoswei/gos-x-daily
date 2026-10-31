@@ -47,8 +47,8 @@ updates this deployment's coverage state. Outputs use exclusive creation.
 `tools/fetch-feeds.mjs` is a network tool; the CLI is not. It downloads only the
 public feeds listed under `feeds` in the sources file (HTTPS only, at most 3 HTTPS
 redirects, 20 s and 8 MiB per feed) and records each failure in the bundle.
-Run it during the browser capture: its `startedAt` must not be later than the
-browser `capturedAt`, nor more than 2 hours before it. Write into the same run
+Run it before or after the browser capture: its `startedAt` must lie within
+2 hours of the browser `capturedAt` either way. Write into the same run
 directory as `browser-capture.json` so all evidence paths share one base.
 
 ```sh

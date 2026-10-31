@@ -150,8 +150,8 @@ test('merge rejects unconfigured, duplicate, out-of-run and mismatched feed capt
     [b => { b.documents[0].id = 'following'; }, /duplicate feed document ID/],
     [b => { b.documents[0].url = 'https://blog.example/other.xml'; }, /does not match configured feed/],
     [b => { b.documents[0].fetchedAt = '2026-10-17T02:00:00Z'; }, /outside this fetch run/],
-    [b => { b.startedAt = '2026-10-17T01:30:00Z'; b.fetchedAt = '2026-10-17T01:31:00Z'; }, /two hours before/],
-    [b => { b.startedAt = '2026-10-16T22:00:00Z'; }, /two hours before|one run/],
+    [b => { b.startedAt = '2026-10-17T03:30:00Z'; b.fetchedAt = '2026-10-17T03:31:00Z'; }, /within two hours/],
+    [b => { b.startedAt = '2026-10-16T22:00:00Z'; }, /within two hours|one run/],
     [b => { b.transport = 'gos-supported-browser'; }, /schema\/transport/],
     [b => { b.failures = [{ feed: 'Unknown', error: 'x' }]; }, /unconfigured feed/],
     [b => { b.failures = [{ feed: feeds[0].name, error: 'x' }]; }, /both fetched and failed/],
@@ -218,4 +218,11 @@ test('fetch tool follows bounded HTTPS redirects, records failures and its bundl
   fs.rmSync(path.join(out, 'sources.merged.json'));
   await assert.rejects(main(args), /hash mismatch/);
   assert.equal(fs.existsSync(path.join(out, 'sources.merged.json')), false);
+});
+
+test('feed fetch started after the browser capture is accepted within two hours', t => {
+  const { dir, bundle } = fixtureDir(t);
+  bundle.startedAt = '2026-10-17T02:30:00.000Z'; bundle.fetchedAt = '2026-10-17T02:31:00.000Z';
+  for (const document of bundle.documents) document.fetchedAt = '2026-10-17T02:30:30.000Z';
+  assert.ok(mergeFeedDocuments(runtime, collection(), bundle, dir).stats.feeds > 0);
 });
