@@ -85,7 +85,9 @@ even in a private repository. See [SECURITY.md](SECURITY.md).
 
 Offline tests do not establish live login, capture quality, semantic review,
 Lark acceptance, recipient-read status, or scheduler wiring. Those must be verified
-for each deployment. Code backup is not a backup of private publication history.
+for each deployment. Code backup is not a backup of private publication history. Publishing this repo
+does not modify an existing deployment or make it automatically follow `main`;
+see the runbook for explicit version promotion.
 
 No license has been selected. Source is published for the owner's requested
 review and operation workflow. [Provenance](docs/PROVENANCE.md).

@@ -108,3 +108,34 @@ state location, concurrency control, failure handling and independent review ste
 Report capture, semantic review, prepared plan, API acceptance and scheduling as
 separate milestones. Never claim "only credentials remain" before verifying the
 other integration boundaries.
+
+## 7. Review changes and promote a version deliberately
+
+The repository is the portable source baseline, not automatic deployment wiring.
+Publishing or updating `main` does not change an already-running installation.
+Keep its sent publication packs, credentials, delivery ledger and scheduler intact.
+
+On another machine/agent, clone the repo, read AGENTS.md, create a working branch,
+review the diff and run `npm test`, `npm run check`, and `npm run test:synthetic`.
+Use synthetic fixtures for code review; never commit private source captures or
+production state. Prefer a reviewed pull request for subsequent improvements.
+
+For a separately authorized production upgrade:
+
+1. Choose an exact reviewed commit with passing CI; record its SHA in private
+   deployment metadata. Do not silently run an unreviewed moving `main` checkout.
+2. Check out that commit in a new release directory, run the offline checks, and
+   configure private runtime/source paths outside tracked files. Re-verify local
+   browser/model/Lark capabilities instead of assuming the old machine's sessions.
+3. Preserve the existing verified delivery ledger and idempotency namespace when
+   upgrading the same deployment. Do not initialize a new empty ledger, migrate
+   uncertain receipts, replay old packs, or copy credentials through Git.
+4. Quiesce the old controller only under deployment authority, so old and new
+   versions cannot concurrently send. Change the scheduler/release pointer only
+   after the configured workflow and genuine independent-review handoff are checked.
+5. Verify one authorized forward-run outcome. Retain the prior release for code
+   rollback, but never roll back delivery attempts/receipts or reset their guards.
+
+Local tests, a public source commit and CI success establish source verification,
+not successful production promotion. Report the deployed SHA and live-run evidence
+separately; if no promotion occurred, say so explicitly.
