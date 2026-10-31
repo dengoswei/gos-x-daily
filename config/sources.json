@@ -1,0 +1,19 @@
+{
+  "xiaohongshuProfiles": [],
+  "blogs": [
+    {
+      "name": "Anthropic Engineering",
+      "type": "anthropic_engineering",
+      "indexUrl": "https://www.anthropic.com/engineering",
+      "articleBaseUrl": "https://www.anthropic.com/engineering/",
+      "maxArticles": 3
+    },
+    {
+      "name": "Claude Blog",
+      "type": "claude_blog",
+      "indexUrl": "https://claude.com/blog",
+      "articleBaseUrl": "https://claude.com/blog/",
+      "maxArticles": 3
+    }
+  ]
+}
