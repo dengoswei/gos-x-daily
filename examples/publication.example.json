@@ -2,7 +2,7 @@
   "rootDir": ".",
   "snapshotInputs": {
     "digestPath": "digest.md",
-    "sourcesPath": "sources.json",
+    "sourcesPath": "sources.merged.json",
     "dispositionsPath": "dispositions.json",
     "materialsPaths": [
       "browser-capture.json",

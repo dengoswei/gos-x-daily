@@ -64,6 +64,12 @@ counted in a warning), caps each feed at `maxItems`, and adds each document to
 is a warning; a document for an unconfigured feed is an error. Feed entries are
 publisher statements, not independently verified facts.
 
+When feeds were imported, the merged file is the collection for everything that
+follows: use it for `compose-input --sources`, `prepare-delivery --sources` and as
+`sourcesPath` in `publication.json`. Candidate keys, dispositions and the URL gate
+are all computed from that one file; pointing them at the pre-merge `sources.json`
+makes every feed key unknown and every cited feed URL unobserved.
+
 ## 3. Preserve and read supplemental materials
 
 Gmail is controller work: there is no Gmail import command. Save only relevant
@@ -79,7 +85,7 @@ files too.
 Every supplemental source the digest may cite (a Gmail newsletter, a manually read
 primary source) must carry its direct `url` in `canonical-materials.json`: a saved
 body often does not contain its own URL. The URL gate accepts a digest main-body
-URL only if it appears in `sources.json` or in the text of a declared material or
+URL only if it appears in the collection file (`sourcesPath`) or in the text of a declared material or
 evidence file (`.txt/.md/.json/.jsonl/.html/.xml`); anything else is rejected as
 unobserved, with up to three observed URLs on the same host as a hint. Comparison
 ignores `utm_*`/click-tracking parameters, `www.`, host case and a trailing `/`.
@@ -141,7 +147,7 @@ through authorized means. Use docs/LARK.md; do not ask for secrets in chat. Only
 then enable the verified local Lark target and prepare offline:
 
 ```sh
-node cli.mjs prepare-delivery --sources "$RUN/sources.json" --digest "$RUN/digest.md" --publication "$RUN/publication.json" --out "$RUN/delivery.json" --config config/runtime.local.json
+node cli.mjs prepare-delivery --sources "$RUN/sources.merged.json" --digest "$RUN/digest.md" --publication "$RUN/publication.json" --out "$RUN/delivery.json" --config config/runtime.local.json
 ```
 
 Preparation re-runs the URL and dispositions gates, requires `dispositionsPath`
