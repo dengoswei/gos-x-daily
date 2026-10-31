@@ -3,17 +3,122 @@
   "blogs": [
     {
       "name": "Anthropic Engineering",
-      "type": "anthropic_engineering",
+      "type": "html-index",
       "indexUrl": "https://www.anthropic.com/engineering",
       "articleBaseUrl": "https://www.anthropic.com/engineering/",
       "maxArticles": 3
     },
     {
       "name": "Claude Blog",
-      "type": "claude_blog",
+      "type": "html-index",
       "indexUrl": "https://claude.com/blog",
       "articleBaseUrl": "https://claude.com/blog/",
       "maxArticles": 3
+    },
+    {
+      "name": "Thinking Machines",
+      "type": "html-index",
+      "indexUrl": "https://thinkingmachines.ai/blog/",
+      "articleBaseUrl": "https://thinkingmachines.ai/blog/",
+      "maxArticles": 3
+    }
+  ],
+  "feeds": [
+    {
+      "name": "Hugging Face Daily Papers",
+      "url": "https://huggingface.co/api/daily_papers",
+      "kind": "hf-daily-papers",
+      "maxItems": 20
+    },
+    {
+      "name": "OpenAI News",
+      "url": "https://openai.com/news/rss.xml",
+      "kind": "rss",
+      "maxItems": 20
+    },
+    {
+      "name": "Google DeepMind blog",
+      "url": "https://deepmind.google/blog/rss.xml",
+      "kind": "rss",
+      "maxItems": 10
+    },
+    {
+      "name": "Google AI blog",
+      "url": "https://blog.google/technology/ai/rss/",
+      "kind": "rss",
+      "maxItems": 10
+    },
+    {
+      "name": "Hugging Face blog",
+      "url": "https://huggingface.co/blog/feed.xml",
+      "kind": "rss",
+      "maxItems": 20
+    },
+    {
+      "name": "Qwen blog",
+      "url": "https://qwenlm.github.io/blog/index.xml",
+      "kind": "rss",
+      "maxItems": 10
+    },
+    {
+      "name": "Interconnects",
+      "url": "https://www.interconnects.ai/feed",
+      "kind": "rss",
+      "maxItems": 10
+    },
+    {
+      "name": "Ahead of AI",
+      "url": "https://magazine.sebastianraschka.com/feed",
+      "kind": "rss",
+      "maxItems": 10
+    },
+    {
+      "name": "Lilian Weng",
+      "url": "https://lilianweng.github.io/index.xml",
+      "kind": "rss",
+      "maxItems": 10
+    },
+    {
+      "name": "smol.ai AI News",
+      "url": "https://news.smol.ai/rss.xml",
+      "kind": "rss",
+      "maxItems": 10
+    },
+    {
+      "name": "PyTorch blog",
+      "url": "https://pytorch.org/blog/feed.xml",
+      "kind": "rss",
+      "maxItems": 10
+    },
+    {
+      "name": "NVIDIA Developer blog",
+      "url": "https://developer.nvidia.com/blog/tag/generative-ai/feed",
+      "kind": "rss",
+      "maxItems": 10
+    },
+    {
+      "name": "SemiAnalysis",
+      "url": "https://semianalysis.com/feed/",
+      "kind": "rss",
+      "maxItems": 10
+    },
+    {
+      "name": "Chips and Cheese",
+      "url": "https://chipsandcheese.com/feed",
+      "kind": "rss",
+      "maxItems": 10
+    },
+    {
+      "name": "vLLM releases",
+      "url": "https://github.com/vllm-project/vllm/releases.atom",
+      "kind": "atom",
+      "maxItems": 5
+    },
+    {
+      "name": "SGLang releases",
+      "url": "https://github.com/sgl-project/sglang/releases.atom",
+      "kind": "atom",
+      "maxItems": 5
     }
   ]
 }

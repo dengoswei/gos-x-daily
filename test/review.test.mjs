@@ -68,6 +68,19 @@ test('every raw artifact change and exact-render change invalidate the review', 
   assert.throws(() => validateReview(review, { ...options, authorId: 'another-author' }), /identity/);
 });
 
+test('an optional dispositions ledger is hashed into the snapshot and invalidates approval when edited', t => {
+  const options = setup(t);
+  fs.writeFileSync(path.join(options.rootDir, 'dispositions.json'), '{"schemaVersion":1,"items":[]}\n');
+  const bound = { ...options, dispositionsPath: 'dispositions.json' }, review = syntheticApproval(bound);
+  assert.equal(review.bindings.files.find(file => file.role === 'dispositions').path, 'dispositions.json');
+  assert.equal(validateReview(review, bound).ok, true);
+  assert.throws(() => validateReview(review, options), /stale|tampered/);
+  fs.appendFileSync(path.join(options.rootDir, 'dispositions.json'), '\n');
+  assert.throws(() => validateReview(review, bound), /stale|tampered/);
+  const unit = syntheticApproval(bound); unit.units[0].fidelity.sourcePaths = ['dispositions.json'];
+  assert.throws(() => validateReview(unit, bound), /fidelity/);
+});
+
 test('omitted, duplicated, reordered, or edited units cannot masquerade as full review', t => {
   const options = setup(t);
   for (const mutate of [r => r.units.pop(), r => { r.units[1] = structuredClone(r.units[0]); }, r => r.units.reverse(), r => { r.units[0].text += 'changed'; }, r => { r.units[0].sha256 = '0'.repeat(64); }]) {

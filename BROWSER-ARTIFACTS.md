@@ -193,6 +193,13 @@ list raw bundle/canonical material files in `materialsPaths` and every browser,
 mail/body and primary-text evidence file in `evidencePaths`. No dangling unlisted
 material reference is acceptable; nested references are not auto-discovered.
 
+Publication gates bind the digest to this capture: each main-body URL must appear
+in the imported collection (items, links, deep-link audit, thread contexts) or in
+the text of a declared material/evidence file, so every Gmail or manually read
+source needs its direct `url` in `canonical-materials.json`. `dispositions.json`
+(`snapshotInputs.dispositionsPath`) must give every candidate exactly one
+included/merged/skipped row; it is hashed into the review snapshot.
+
 After a genuine digest and all materials exist: create pending review, complete
 independent comprehension then fidelity/audit/exact-render review, validate the
 exact bindings and only then prepare a gated plan. A missing/disabled verified

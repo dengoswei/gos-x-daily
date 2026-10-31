@@ -143,7 +143,7 @@ export async function scanWindow({ read, scroll, window, maxPages = 80, maxMs = 
 const technicalTopic = /\b(RL|GRPO|PPO|TRL|BF16|FP8|optimizer|rollout|checkpoint|training|inference|weight.?sync|delta|kernel|GPU|LLMs?|agents?|research|scaling|mechanistic[\s-]+interpretability|interpretability|mech[\s-]?interp|neurons?|superposition|monosemanticity|polysemanticity|sparse[\s-]+autoencoders?|SAEs?|feature[\s-]+visuali[sz]ation|Goodfire|Nick[\s_-]*Cammarata|nickcammarata)\b|(?<![\w.])AI\b|训练|推理|论文|权重|研究|可解释性|神经元|叠加/i;
 const navigationLabel = /^(?:home(?:page)?|website|official (?:site|website)|my (?:site|website)|profile|sign[ -]?in|log[ -]?in|subscribe|首页|主页|官网)\s*[.!]?$/i;
 
-function canonicalLink(href) {
+export function canonicalLink(href) {
   const url = new URL(href);
   // Preserve hash-router paths; ordinary section anchors do not change articles.
   if (!/^#!?\//.test(url.hash)) url.hash = '';

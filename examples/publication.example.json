@@ -3,6 +3,7 @@
   "snapshotInputs": {
     "digestPath": "digest.md",
     "sourcesPath": "sources.json",
+    "dispositionsPath": "dispositions.json",
     "materialsPaths": [
       "browser-capture.json",
       "canonical-materials.json",

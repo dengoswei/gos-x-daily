@@ -42,6 +42,28 @@ These are offline commands. Import verifies evidence bytes, writes sources and
 updates this deployment's coverage state. Outputs use exclusive creation.
 `collect` is a different, conditional direct-CDP route, not a CUA driver.
 
+## 2b. Fetch and import feeds
+
+`tools/fetch-feeds.mjs` is a network tool; the CLI is not. It downloads only the
+public feeds listed under `feeds` in the sources file (HTTPS only, at most 3 HTTPS
+redirects, 20 s and 8 MiB per feed) and records each failure in the bundle.
+Run it during the browser capture: its `startedAt` must not be later than the
+browser `capturedAt`, nor more than 2 hours before it. Write into the same run
+directory as `browser-capture.json` so all evidence paths share one base.
+
+```sh
+node tools/fetch-feeds.mjs --sources config/sources.local.json --out "$RUN"
+node cli.mjs import-feed --artifacts "$RUN/feed-capture.json" --sources "$RUN/sources.json" --out "$RUN/sources.merged.json" --config config/runtime.local.json
+node cli.mjs compose-input --sources "$RUN/sources.merged.json" --out "$RUN/prompt.md"
+```
+
+Import re-verifies every document hash, keeps items published within the
+configured lookback before the fetch `startedAt` (undated items are kept and
+counted in a warning), caps each feed at `maxItems`, and adds each document to
+`provenance.evidence` as `fetched_document`. A configured feed without a document
+is a warning; a document for an unconfigured feed is an error. Feed entries are
+publisher statements, not independently verified facts.
+
 ## 3. Preserve and read supplemental materials
 
 Gmail is controller work: there is no Gmail import command. Save only relevant
@@ -50,17 +72,44 @@ time and full-body/excerpt limits. Save primary texts and meaningful images when
 needed. Do not export mailbox dumps or unrelated personal content.
 
 Create canonical materials mapping each item/candidate to real files, hashes,
-source dates, central claim, method/result and limitations. Screen all observed
-candidates and preserve dispositions. `compose-input` includes source JSON only:
-the writer and reviewer must explicitly read all supplemental files too.
+source dates, central claim, method/result and limitations. `compose-input` includes
+source JSON only: the writer and reviewer must explicitly read all supplemental
+files too.
+
+Every supplemental source the digest may cite (a Gmail newsletter, a manually read
+primary source) must carry its direct `url` in `canonical-materials.json`: a saved
+body often does not contain its own URL. The URL gate accepts a digest main-body
+URL only if it appears in `sources.json` or in the text of a declared material or
+evidence file (`.txt/.md/.json/.jsonl/.html/.xml`); anything else is rejected as
+unobserved, with up to three observed URLs on the same host as a hint. Comparison
+ignores `utm_*`/click-tracking parameters, `www.`, host case and a trailing `/`.
 
 ## 4. Draft, freeze and independently review
 
 Write digest.md under EDITORIAL.md. No quota; explain actual method/conclusion,
 not merely settings/metrics. Preserve material limitations in the final render.
+
+Next to it write `dispositions.json`: one row per candidate key listed at the end
+of the `compose-input` prompt (`schemaVersion: 1`, the collection's `collectionId`):
+
+```json
+{ "schemaVersion": 1, "collectionId": "ACTUAL-COLLECTION-ID", "items": [
+  { "key": "x:123", "disposition": "included", "section": "Breakthrough Research", "url": "https://..." },
+  { "key": "x:456", "disposition": "merged", "mergedInto": "x:123" },
+  { "keys": ["x:789", "blog:https://..."], "disposition": "skipped", "reason": "low_signal" } ] }
+```
+
+`included` needs the `##` section it appears under and a URL cited in the main
+body; `merged` must point at an included key; `skipped` takes one reason of
+`off_topic|promotion|duplicate_topic|outside_window|low_signal|unreadable|other`
+and an optional `note`. Citing a candidate's own URL (post, blog, deep-read or
+note URL) requires that candidate to be `included`; any other cited URL (a link
+inside a post, a supplement) only has to be observed. Missing, duplicate or
+unknown keys fail.
 Use `examples/publication.example.json` as a path template. Replace every placeholder
-with actual paths/identity, including the exact already-initialized ledgerDir
-(not a new sibling directory); list all materials and **every** screenshot, relevant
+with actual paths/identity, including `dispositionsPath` and the exact
+already-initialized ledgerDir (not a new sibling directory); list all materials
+(including `canonical-materials.json`) and **every** screenshot, relevant
 mail body and primary text relied on. Nested material references are not discovered
 automatically. Avoid dangling unlisted evidence references.
 
@@ -68,7 +117,9 @@ automatically. Avoid dangling unlisted evidence references.
 node cli.mjs review-input --publication "$RUN/publication.json" --out "$RUN/review.pending.json"
 ```
 
-This creates pending fields, never approval. Assign a genuinely independent
+This first runs the URL and dispositions gates, then creates pending fields, never
+approval. The review binds the dispositions file and the rendered message, which
+ends with a `候选处置` count line. Assign a genuinely independent
 reviewer. Blind comprehension comes first; fidelity against preserved evidence
 comes second. Review each required unit, the source/coverage audit and exact
 rendered text. Fix material findings in every affected copy and create a fresh
@@ -93,9 +144,11 @@ then enable the verified local Lark target and prepare offline:
 node cli.mjs prepare-delivery --sources "$RUN/sources.json" --digest "$RUN/digest.md" --publication "$RUN/publication.json" --out "$RUN/delivery.json" --config config/runtime.local.json
 ```
 
-Preparation never sends. The separate `send` command also requires explicit
-`--allow-send`, `X_DAILY_ALLOW_SEND=1`, matching verified target, exact unchanged
-publication/review, and a forward ledger. See CLI help; do not run it without actual
+Preparation re-runs the URL and dispositions gates, requires `dispositionsPath`
+and renders the same message as `review-input`; editing `dispositions.json` after
+approval invalidates the review. Preparation never sends. The separate `send`
+command also requires explicit `--allow-send`, `X_DAILY_ALLOW_SEND=1`, matching
+verified target, exact unchanged publication/review, and a forward ledger. See CLI help; do not run it without actual
 send authority. No automatic retry: timeout/process failure/missing or malformed
 confirmation may mean uncertain delivery. Reconcile externally before any retry.
 Preserve API message IDs; acceptance is not proof the user read the report.

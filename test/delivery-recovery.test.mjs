@@ -18,6 +18,19 @@ test('legacy no-review and missing-ledger preparation fail closed', t => {
   assert.throws(() => planFor(f), /ENOENT/);
 });
 
+test('preparation requires a dispositions ledger and an approval bound to its exact bytes', t => {
+  const f = createSyntheticReviewedFixture(t);
+  const { dispositionsPath, ...withoutLedger } = f.snapshotInputs;
+  assert.throws(() => prepareDelivery(f.markdown, f.collection, f.target, { ...f.publication, snapshotInputs: withoutLedger }), /dispositionsPath is required/);
+  const file = path.join(f.rootDir, dispositionsPath);
+  const ledger = JSON.parse(fs.readFileSync(file));
+  ledger.items[0].section = 'Frameworks / Infra ';
+  fs.writeFileSync(file, JSON.stringify(ledger));
+  assert.throws(() => planFor(f), /stale|tampered/);
+  fs.writeFileSync(file, JSON.stringify({ ...ledger, items: [] }));
+  assert.throws(() => planFor(f), /Missing disposition/);
+});
+
 test('pending or failed review cannot prepare a send plan', t => {
   const f = createSyntheticReviewedFixture(t);
   const file = path.join(f.rootDir, f.reviewPath);
@@ -28,7 +41,7 @@ test('pending or failed review cannot prepare a send plan', t => {
 });
 
 test('every send revalidates exact draft, sources, materials, evidence and review bytes', t => {
-  for (const file of ['digest.md', 'sources.json', 'materials.json', 'evidence/source.txt', 'review.approved.json']) {
+  for (const file of ['digest.md', 'sources.json', 'dispositions.json', 'materials.json', 'evidence/source.txt', 'review.approved.json']) {
     const f = createSyntheticReviewedFixture(t), plan = planFor(f);
     fs.appendFileSync(path.join(f.rootDir, file), '\n');
     let calls = 0;

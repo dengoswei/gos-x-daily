@@ -64,10 +64,30 @@ node cli.mjs inspect-config --config config/runtime.local.json
 - Collection and Lark delivery are disabled. `CHANGE-ME` is not a verified deployment.
   See [Lark integration](docs/LARK.md) before configuring it.
 
+### Feeds and blog indexes
+
+`feeds` in the sources file lists public feeds as `{ name, url, kind, maxItems }`
+with `kind` one of `rss`, `atom` or `hf-daily-papers`. The example list is broad
+across AI research, products, tooling and opinion. Any GitHub project's releases
+can be added the same way with `https://github.com/<owner>/<repo>/releases.atom`
+and `"kind": "atom"`.
+
+**`tools/fetch-feeds.mjs` talks to the network; `cli.mjs` does not.** The tool
+downloads the configured feeds into `feed-capture.json` plus hashed documents;
+`cli.mjs import-feed` verifies those bytes offline and adds in-window items to an
+imported collection as `sources.feeds` (see the runbook, section 2b). For Daily
+Papers, `publishedAt` is the listing date and `paperPublishedAt` the paper's own date.
+
+Blogs use `"type": "html-index"`: the conditional collector renders `indexUrl` in
+its CDP browser and keeps links under `articleBaseUrl` (optionally narrowed by an
+`articlePattern` regex on the path), falling back to static HTML anchors. Some
+index pages are client-rendered and yield no links without the browser.
+
 ## Repository map
 
 - `cli.mjs`: offline entry points plus separately gated collection / send.
 - `browser-artifacts.mjs`, `thread-discovery.mjs`: evidence imports and thread context.
+- `feed-import.mjs`, `tools/fetch-feeds.mjs`: offline feed import and its separate network fetch tool.
 - `coverage.mjs`, `feed.mjs`: bounded scans, deduplication and honest coverage gaps.
 - `digest.mjs`, `review.mjs`, `delivery-ledger.mjs`: writing/review/delivery contracts.
 - `collector.mjs`, `ocr.mjs`: optional direct-CDP / local Tesseract path.

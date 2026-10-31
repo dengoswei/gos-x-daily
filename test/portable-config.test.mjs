@@ -6,6 +6,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { main } from '../cli.mjs';
 import { makeRuntime } from '../runtime.mjs';
+import { validateFeedConfig } from '../feed-import.mjs';
 
 test('personal source configuration resolves relative to its runtime file, not shell cwd', async t => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'xdaily-config-'));
@@ -29,4 +30,15 @@ test('default public example stays portable and collection/delivery stay disable
   assert.equal(result.sourceCounts.xiaohongshuProfiles, 0);
   assert.equal(makeRuntime({ dataDir: './data' }, { runId: 'portable' }).runDir,
     path.resolve(fileURLToPath(new URL('../', import.meta.url)), 'data/runs/portable'));
+});
+
+test('example sources use generic blog indexes and the broad-AI public feed list, without topic filters', () => {
+  const sources = JSON.parse(fs.readFileSync(new URL('../config/sources.json', import.meta.url), 'utf8'));
+  assert.deepEqual(sources.blogs.map(blog => [blog.name, blog.type]),
+    [['Anthropic Engineering', 'html-index'], ['Claude Blog', 'html-index'], ['Thinking Machines', 'html-index']]);
+  assert.deepEqual(sources.feeds.map(feed => feed.name), ['Hugging Face Daily Papers', 'OpenAI News', 'Google DeepMind blog', 'Google AI blog',
+    'Hugging Face blog', 'Qwen blog', 'Interconnects', 'Ahead of AI', 'Lilian Weng', 'smol.ai AI News', 'PyTorch blog', 'NVIDIA Developer blog',
+    'SemiAnalysis', 'Chips and Cheese', 'vLLM releases', 'SGLang releases']);
+  for (const feed of sources.feeds) assert.deepEqual(Object.keys(feed).sort(), ['kind', 'maxItems', 'name', 'url']);
+  assert.equal(validateFeedConfig(sources), sources.feeds);
 });

@@ -45,22 +45,31 @@ test('complete forward run: synthetic browser import, prompt, supplemental mater
   await main(['compose-input', '--sources', path.join(root, 'sources.json'), '--out', path.join(root, 'prompt.md')]);
   const prompt = fs.readFileSync(path.join(root, 'prompt.md'), 'utf8');
   assert.match(prompt, /cross-author/); assert.match(prompt, /2026-10-15/); assert.match(prompt, /goodfire\.ai/);
-  const markdown = `# X AI 日报 ${sources.date}\n${sources.digestMarker}\n\n## Frameworks / Infra\n- SYNTHETIC mechanism only. https://goodfire.ai/\n\n## Breakthrough Research\nNo synthetic item.\n\n## Applications / Products\nNo synthetic item.\n\n## 差异补充\nSYNTHETIC Following sample only; Karpathy page error; unknown missed posts.\n`;
+  const markdown = `# X AI 日报 ${sources.date}\n${sources.digestMarker}\n\n## Frameworks / Infra\n- SYNTHETIC mechanism only. https://goodfire.ai/\n\n## Breakthrough Research\nNo synthetic item.\n\n## Applications / Products\n- SYNTHETIC received newsletter item. https://newsletter.example.invalid/p/issue-1?utm_source=mail\n\n## 差异补充\nSYNTHETIC Following sample only; Karpathy page error; unknown missed posts.\n`;
   fs.writeFileSync(path.join(root, 'digest.md'), markdown);
   fs.writeFileSync(path.join(root, 'mail-body.txt'), 'SYNTHETIC received email only, not fetched or complete subscription coverage.\n');
   writeJson('materials.json', { kind: 'SYNTHETIC', sourceFiles: ['mail-body.txt'], originalQuoteDate: '2026-10-15' });
+  // A saved mail body rarely contains its own URL, so the canonical materials carry it.
+  writeJson('canonical-materials.json', { kind: 'SYNTHETIC', items: [{ source: 'gmail', url: 'https://newsletter.example.invalid/p/issue-1', file: 'mail-body.txt' }] });
+  writeJson('dispositions.json', { schemaVersion: 1, collectionId: sources.collectionId,
+    items: [{ key: 'x:12345', disposition: 'included', section: 'Frameworks / Infra', url: 'https://goodfire.ai/' }] });
+  const prompted = fs.readFileSync(path.join(root, 'prompt.md'), 'utf8');
+  assert.match(prompted, /<candidate_keys>\nx:12345\n<\/candidate_keys>/);
   const ledgerDir = path.join(root, 'delivery-ledger');
   initializeDeliveryLedger(ledgerDir, { notBeforeDate: '2026-10-31', createdBy: 'SYNTHETIC-test' });
-  const snapshotInputs = { digestPath: 'digest.md', sourcesPath: 'sources.json', materialsPaths: ['materials.json', 'mail-body.txt'], evidencePaths: evidence.map(e => e.path), authorId: 'SYNTHETIC-writer' };
+  const snapshotInputs = { digestPath: 'digest.md', sourcesPath: 'sources.json', dispositionsPath: 'dispositions.json', materialsPaths: ['materials.json', 'canonical-materials.json', 'mail-body.txt'], evidencePaths: evidence.map(e => e.path), authorId: 'SYNTHETIC-writer' };
   const publication = { rootDir: root, snapshotInputs, reviewPath: 'review.approved.json', ledgerDir };
   writeJson('publication.json', publication);
   await main(['review-input', '--publication', path.join(root, 'publication.json'), '--out', path.join(root, 'review.pending.json')]);
   assert.equal(JSON.parse(fs.readFileSync(path.join(root, 'review.pending.json'))).status, 'pending');
   // The only auto-filled approval is a clearly labelled test fixture, never a production API.
-  writeJson('review.approved.json', approveSyntheticReview({ ...snapshotInputs, rootDir: root, renderedMarkdown: larkMarkdown(markdown, sources) }));
+  writeJson('review.approved.json', approveSyntheticReview({ ...snapshotInputs, rootDir: root, renderedMarkdown: larkMarkdown(markdown, sources, { dispositions: JSON.parse(fs.readFileSync(path.join(root, 'dispositions.json'))) }) }));
   const approved = await main(['validate-publication', '--publication', path.join(root, 'publication.json')]);
   assert.equal(approved.ok, true);
   const prepared = await main(['prepare-delivery', '--publication', path.join(root, 'publication.json'), '--sources', path.join(root, 'sources.json'), '--digest', path.join(root, 'digest.md'), '--config', path.join(root, 'runtime.json'), '--out', path.join(root, 'delivery.json')]);
   assert.equal(prepared.status, 'prepared_not_sent');
+  assert.deepEqual(prepared.validation.urlBinding, { checked: 2, matchedCollection: 1, matchedMaterials: 1 });
+  assert.deepEqual(prepared.validation.dispositions.supplementUrls, ['https://newsletter.example.invalid/p/issue-1']);
+  assert.match(JSON.parse(fs.readFileSync(path.join(root, 'delivery.json'))).args[7], /候选处置：共 1 条候选，收录 1 条，合并 0 条，跳过 0 条。/);
   assert.deepEqual(fs.readdirSync(ledgerDir), ['ledger.json']);
 });

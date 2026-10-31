@@ -73,7 +73,11 @@ Gmail, Xiaohongshu, official sources and optional Substack supplement the feed.
 Failed optional access does not establish that no new content exists.
 
 Screen all observed candidates, retain provenance and dispositions, and merge
-genuinely duplicate topics without concealing separate findings. No item quota or
+genuinely duplicate topics without concealing separate findings. Record the
+screening in `dispositions.json` (one included/merged/skipped row per candidate;
+see docs/RUNBOOK.md §4). Cite only URLs observed in the collection or in declared
+materials; the URL gate rejects anything else, so put each supplemental source's
+direct URL in `canonical-materials.json`. No item quota or
 company-blog quota. Do not promote unfinished reading queues just to increase
 article count. Keep unsolicited personal PR/status minutiae out; substantive
 infrastructure developments remain eligible. No Mac-history import or Obsidian

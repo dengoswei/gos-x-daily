@@ -6,7 +6,7 @@ import { makeRuntime } from './runtime.mjs';
 import { loadCoverageState, openCoverageStore, planCoverage, coverageReport, recordCollectionCoverage, executionPolicy } from './coverage.mjs';
 import { createCollector } from './collector.mjs';
 import { collectionFromBrowserArtifacts, verifyEvidenceFiles } from './browser-artifacts.mjs';
-import { composePrompt, prepareDelivery, sendDelivery, larkMarkdown, readPublicationFile } from './digest.mjs';
+import { composePrompt, prepareDelivery, sendDelivery, publicationGates, readPublicationFile } from './digest.mjs';
 import { createReviewInput, validateReview } from './review.mjs';
 import { initializeDeliveryLedger } from './delivery-ledger.mjs';
 
@@ -35,6 +35,7 @@ export async function main(argv = process.argv.slice(2)) {
       'coverage-report [--config runtime.json] [--now ISO] [--out report.json]',
       'collect --config runtime.json --allow-collection',
       'import-browser --artifacts browser-capture.json --out sources.json [--config runtime.json]',
+      'import-feed --artifacts feed-capture.json --sources sources.json --out sources.merged.json [--config runtime.json]',
       'compose-input --sources sources.json --out prompt.md',
       'prepare-delivery --sources sources.json --digest digest.md --publication publication.json --out delivery.json --config VERIFIED_RUNTIME.json',
       'review-input --publication publication.json --out review.pending.json',
@@ -61,19 +62,20 @@ export async function main(argv = process.argv.slice(2)) {
     const p = publication();
     const markdown = readPublicationFile(p.rootDir, p.snapshotInputs.digestPath);
     const collection = JSON.parse(readPublicationFile(p.rootDir, p.snapshotInputs.sourcesPath));
-    const inputs = { ...p.snapshotInputs, rootDir: p.rootDir, renderedMarkdown: larkMarkdown(markdown, collection) };
+    const gates = publicationGates(p.rootDir, p.snapshotInputs, markdown, collection);
+    const inputs = { ...p.snapshotInputs, rootDir: p.rootDir, renderedMarkdown: gates.renderedMarkdown };
     if (command === 'review-input') {
       const output = required('--out');
       write(output, JSON.stringify(createReviewInput(inputs), null, 2) + '\n');
-      return { status: 'pending_independent_review', output, notApproval: true };
+      return { status: 'pending_independent_review', output, notApproval: true, digest: gates.validation };
     }
-    return { status: 'structural_review_binding_passed_not_semantic_proof', ...validateReview(JSON.parse(readPublicationFile(p.rootDir, p.reviewPath)), inputs) };
+    return { status: 'structural_review_binding_passed_not_semantic_proof', digest: gates.validation, ...validateReview(JSON.parse(readPublicationFile(p.rootDir, p.reviewPath)), inputs) };
   }
   if (command === 'send') {
     const config = readJson(required('--config'));
     return sendDelivery(readJson(required('--plan')), { authorized: argv.includes('--allow-send'), target: config.lark });
   }
-  if (!['inspect-config', 'collect', 'prepare-delivery', 'import-browser', 'coverage-plan', 'coverage-report'].includes(command)) throw new Error(`Unknown command: ${command}`);
+  if (!['inspect-config', 'collect', 'prepare-delivery', 'import-browser', 'import-feed', 'coverage-plan', 'coverage-report'].includes(command)) throw new Error(`Unknown command: ${command}`);
   const configFile = path.resolve(value('--config', path.join(root, 'config/runtime.example.json')));
   const config = readJson(configFile);
   const sourcesFile = config.sourcesFile ? path.resolve(path.dirname(configFile), config.sourcesFile) : path.join(root, 'config/sources.json');
@@ -98,6 +100,18 @@ export async function main(argv = process.argv.slice(2)) {
       store.save(store.state);
     } finally { store.close(); }
     return { status: 'browser_artifacts_imported', coverage: collection.coverage.accounting, output, collectionId: collection.collectionId, stats: collection.stats, warnings: collection.warnings };
+  }
+  if (command === 'import-feed') {
+    const { verifyDocumentFiles, mergeFeedDocuments } = await import('./feed-import.mjs');
+    const artifactFile = required('--artifacts');
+    const bundle = readJson(artifactFile);
+    const baseDir = path.dirname(path.resolve(artifactFile));
+    verifyDocumentFiles(bundle, baseDir);
+    const input = readJson(required('--sources'));
+    const collection = mergeFeedDocuments(runtime, input, bundle, baseDir);
+    const output = required('--out');
+    write(output, JSON.stringify(collection, null, 2) + '\n');
+    return { status: 'feed_documents_imported', stats: collection.stats, warnings: collection.warnings.slice((input.warnings ?? []).length), output };
   }
   if (command === 'coverage-plan' || command === 'coverage-report') {
     const now = value('--now', new Date().toISOString());

@@ -8,6 +8,35 @@ import { runOcr } from './ocr.mjs';
 import { assertCollectionAllowed, freshWindow } from './runtime.mjs';
 import { openCoverageStore, recordCollectionCoverage, runCoveragePlan, coverageReport } from './coverage.mjs';
 
+// Article links on a blog index page: same origin, under articleBaseUrl, not the index itself.
+// Relative hrefs resolve against indexUrl; articlePattern optionally narrows the pathname.
+export function filterIndexLinks(links, blog) {
+  const base = new URL(blog.articleBaseUrl);
+  const basePath = base.origin + base.pathname;
+  const pattern = blog.articlePattern ? new RegExp(blog.articlePattern) : null;
+  const max = Number(blog.maxArticles || 3);
+  const seen = new Set(), out = [];
+  for (const link of links ?? []) {
+    let url;
+    try { url = new URL(link?.href, blog.indexUrl); } catch { continue; }
+    if (url.protocol !== 'https:' || url.username || url.password) continue;
+    const page = url.origin + url.pathname;
+    if (!page.startsWith(basePath) || page.replace(/\/$/, '') === basePath.replace(/\/$/, '')) continue;
+    if (pattern && !pattern.test(url.pathname)) continue;
+    if (seen.has(page)) continue;
+    seen.add(page);
+    out.push({ source: 'blog', name: blog.name, title: typeof link.text === 'string' ? link.text.replace(/\s+/g, ' ').trim().slice(0, 300) : '', url: page });
+    if (out.length >= max) break;
+  }
+  return out;
+}
+
+// Static-HTML fallback for index pages that are not client-rendered. Anchors only, like the
+// rendered path, so <link rel="alternate"> feeds and stylesheets never become articles.
+export function indexLinksFromHtml(html) {
+  return [...String(html).matchAll(/<a\b[^>]*?\shref=["']([^"']+)["']/gi)].map(match => ({ href: match[1].replace(/&amp;/g, '&'), text: '' }));
+}
+
 export function createCollector(runtime, { fetchImpl = globalThis.fetch, WebSocketImpl = globalThis.WebSocket, clock = () => new Date() } = {}) {
   const LOCAL_DIR = runtime.runDir;
   const XIAOHONGSHU_ARTIFACT_DIR = path.join(LOCAL_DIR, 'xiaohongshu');
@@ -522,40 +551,23 @@ function parseJsonLdArticle(html) {
   return {};
 }
 
-function parseAnthropicEngineeringIndex(html, blog) {
-  const links = [];
-  const regex = /href=["']\/engineering\/([a-z0-9-]+)["']/gi;
-  let match;
-  while ((match = regex.exec(html)) !== null) {
-    links.push({
-      source: 'blog',
-      name: blog.name,
-      title: '',
-      url: new URL(`/engineering/${match[1]}`, blog.indexUrl).toString(),
-    });
-  }
-  return uniqueBy(links, (item) => item.url);
-}
+const BLOG_INDEX_TYPES = ['html-index', 'anthropic_engineering', 'claude_blog'];
 
-function parseClaudeBlogIndex(html, blog) {
-  const links = [];
-  const regex = /href=["']\/blog\/([a-z0-9-]+)["']/gi;
-  let match;
-  while ((match = regex.exec(html)) !== null) {
-    links.push({
-      source: 'blog',
-      name: blog.name,
-      title: '',
-      url: new URL(`/blog/${match[1]}`, blog.indexUrl).toString(),
-    });
+async function renderedIndexLinks(blog) {
+  const { target, created } = await getOrCreateExactUrlTarget(blog.indexUrl);
+  const client = new TargetClient(target);
+  try {
+    await client.waitForReady(15000);
+    const started = Date.now();
+    for (;;) {
+      const links = JSON.parse(await client.eval(`JSON.stringify([...document.querySelectorAll('a[href]')].map(a => ({ href: a.href, text: a.innerText })))`, 10000));
+      if (filterIndexLinks(links, blog).length || Date.now() - started >= 15000) return links;
+      await sleep(1000);
+    }
+  } finally {
+    client.close();
+    if (created) await closeTarget(target.id);
   }
-  return uniqueBy(links, (item) => item.url);
-}
-
-function parseBlogIndex(html, blog) {
-  if (blog.type === 'anthropic_engineering') return parseAnthropicEngineeringIndex(html, blog);
-  if (blog.type === 'claude_blog') return parseClaudeBlogIndex(html, blog);
-  return [];
 }
 
 function extractBlogArticle(html, article) {
@@ -577,49 +589,53 @@ async function collectBlogs(warnings) {
   const config = loadSourceConfig();
   const blogs = Array.isArray(config.blogs) ? config.blogs : [];
   const results = [];
+  const checks = {};
+  const headers = {
+    'User-Agent': BLOG_USER_AGENT,
+    Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+    'Accept-Language': 'en-US,en;q=0.9',
+  };
 
   for (const blog of blogs) {
+    checks[blog.name] = { attempted: true, items: 0, status: 'failed' };
     try {
-      const indexHtml = await fetchText(blog.indexUrl, {
-        headers: {
-          'User-Agent': BLOG_USER_AGENT,
-          Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-          'Accept-Language': 'en-US,en;q=0.9',
-        },
-      }, 25000);
-      const maxArticles = Number(blog.maxArticles || 3);
-      const candidates = parseBlogIndex(indexHtml, blog).slice(0, maxArticles);
+      if (!BLOG_INDEX_TYPES.includes(blog.type ?? 'html-index')) throw new Error(`unsupported blog type ${blog.type}`);
+      // Client-rendered indexes only expose article links after rendering; static HTML is the fallback.
+      let candidates = [];
+      try {
+        candidates = filterIndexLinks(await renderedIndexLinks(blog), blog);
+      } catch (error) {
+        warnings.push(`Blog ${blog.name} rendered index unavailable: ${error.message}`);
+      }
+      if (!candidates.length) candidates = filterIndexLinks(indexLinksFromHtml(await fetchText(blog.indexUrl, { headers }, 25000)), blog);
       if (candidates.length === 0) {
         warnings.push(`Blog ${blog.name} produced 0 article candidates`);
+        checks[blog.name].status = 'no_candidates';
         continue;
       }
 
       for (const candidate of candidates) {
         try {
-          const articleHtml = await fetchText(candidate.url, {
-            headers: {
-              'User-Agent': BLOG_USER_AGENT,
-              Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-              'Accept-Language': 'en-US,en;q=0.9',
-            },
-          }, 25000);
+          const articleHtml = await fetchText(candidate.url, { headers }, 25000);
           const article = extractBlogArticle(articleHtml, candidate);
           if (!article.url || !article.content) {
             warnings.push(`Blog ${blog.name} skipped article without url/content: ${candidate.url}`);
             continue;
           }
           results.push(article);
+          checks[blog.name].items += 1;
           await sleep(300);
         } catch (error) {
           warnings.push(`Blog article extraction failed for ${candidate.url}: ${error.message}`);
         }
       }
+      checks[blog.name].status = checks[blog.name].items ? 'ok' : 'articles_failed';
     } catch (error) {
       warnings.push(`Blog ${blog.name} extraction failed: ${error.message}`);
     }
   }
 
-  return uniqueBy(results, (item) => item.url);
+  return { items: uniqueBy(results, (item) => item.url), checks };
 }
 
 async function waitForText(target, pattern, timeoutMs = 15000) {
@@ -1900,7 +1916,7 @@ async function navigateExistingTarget(target, url) {
       for (const [source, values] of Object.entries(reports)) {
         for (const report of values) if (!report.scanned) warnings.push(`${source} fresh-window scan incomplete: ${report.reason}`);
       }
-      const blogs = await collectBlogs(warnings).catch(error => { warnings.push(`Blogs unavailable: ${error.message}`); return []; });
+      const { items: blogs, checks: blogChecks } = await collectBlogs(warnings).catch(error => { warnings.push(`Blogs unavailable: ${error.message}`); return { items: [], checks: {} }; });
       const xiaohongshu = await collectXiaohongshu(warnings).catch(error => { warnings.push(`Xiaohongshu unavailable: ${error.message}`); return []; });
       const deepLinkAudit = extractInterestingLinks([...xItems, ...substackItems]);
       const deepArticles = [];
@@ -1919,7 +1935,7 @@ async function navigateExistingTarget(target, url) {
         date: new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit' }).format(clock()),
         collectedAt: clock().toISOString(),
         coverage: { window: freshWindow(runStartedAt, 48), digestWindow: window, assurance: 'best_effort_ui_not_all_posts', reports, carriedFrom: 'gos_new_remote_state_only', execution: catchup },
-        checks: { xFollowing: { attempted: true, available: true, status: 'ok', items: following.items.length }, karpathy: { attempted: true, available: Boolean(pages.karpathy), items: karpathyItems.length } },
+        checks: { xFollowing: { attempted: true, available: true, status: 'ok', items: following.items.length }, karpathy: { attempted: true, available: Boolean(pages.karpathy), items: karpathyItems.length }, blogs: blogChecks },
         warnings, deepLinkAudit,
         sources: { xFollowing: xItems, substack: substackItems, karpathy: karpathyItems, blogs, xiaohongshu, deepArticles },
         stats: { xFollowing: xItems.length, freshXFollowing: following.items.length, substack: substackItems.length,
