@@ -147,7 +147,11 @@ test('evidence hashing rejects tampering, missing files and path/symlink escapes
   assert.throws(() => verifyEvidenceFiles(bundle, dir), /inside the artifact/);
   bundle.evidence[0].path = 'evidence/missing.png';
   assert.throws(() => verifyEvidenceFiles(bundle, dir), /ENOENT/);
-  fs.symlinkSync('/etc/hostname', path.join(dir, 'evidence/escape.png'));
+  const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'xdaily-outside-'));
+  t.after(() => fs.rmSync(outside, { recursive: true, force: true }));
+  const outsideFile = path.join(outside, 'target.txt');
+  fs.writeFileSync(outsideFile, 'synthetic outside-root evidence');
+  fs.symlinkSync(outsideFile, path.join(dir, 'evidence/escape.png'));
   bundle.evidence[0].path = 'evidence/escape.png';
   assert.throws(() => verifyEvidenceFiles(bundle, dir), /escaped/);
 });
