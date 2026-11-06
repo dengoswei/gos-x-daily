@@ -1,0 +1,25 @@
+{
+  "collectionEnabled": false,
+  "dataDir": "./data",
+  "cdpPort": 9449,
+  "lookbackHours": 48,
+  "maxPages": 200,
+  "maxFeedMs": 300000,
+  "ocr": {
+    "provider": "none",
+    "binary": "tesseract",
+    "languages": "eng+chi_sim+chi_tra"
+  },
+  "lark": {
+    "enabled": false,
+    "userId": null,
+    "deploymentId": "CHANGE-ME",
+    "executable": "/ABSOLUTE/PATH/TO/VERIFIED/lark-cli"
+  },
+  "totalBudgetMs": 3000000,
+  "maxConcurrency": 2,
+  "initialWindowHours": 6,
+  "minWindowMinutes": 30,
+  "deepReadLimit": 24,
+  "sourcesFile": "sources.json"
+}

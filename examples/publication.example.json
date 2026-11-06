@@ -1,0 +1,22 @@
+{
+  "rootDir": ".",
+  "snapshotInputs": {
+    "digestPath": "digest.md",
+    "sourcesPath": "sources.merged.json",
+    "dispositionsPath": "dispositions.json",
+    "materialsPaths": [
+      "browser-capture.json",
+      "canonical-materials.json",
+      "mail/newsletter-index.json"
+    ],
+    "evidencePaths": [
+      "evidence/REPLACE-WITH-ACTUAL-FOLLOWING-SCREENSHOT.png",
+      "evidence/REPLACE-WITH-ACTUAL-KARPATHY-ATTEMPT-SCREENSHOT.png",
+      "mail/REPLACE-WITH-ACTUAL-RECEIVED-BODY.txt",
+      "primary/REPLACE-WITH-ACTUAL-READ-SOURCE.txt"
+    ],
+    "authorId": "REPLACE-WITH-ACTUAL-WRITER-TASK-ID"
+  },
+  "reviewPath": "review.approved.json",
+  "ledgerDir": "/ABSOLUTE/PATH/TO/EXISTING/delivery-ledger"
+}
