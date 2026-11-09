@@ -1,5 +1,19 @@
 # Agent instructions
 
+## Provisioned Mac policy
+
+The installed Mac controller follows `deployment/mac/RUNBOOK.md` and
+`prompts/run-daily.md`. With explicit `reviewMode: "self"`, the author records a
+real self-check using the same identity and `sourceBlind: false`. Default callers
+retain independent review. Both modes require every review unit, preserved
+original evidence, exact byte binding and no unresolved material issues.
+
+Use subagents for independent source batches, story processing and reader checks
+as specified in `docs/AGENT-WORKFLOW.md`. Give them fresh bounded contexts and
+file paths; return concise findings instead of original-source dumps. Coordinate
+exclusive browser surface ownership. Only the parent may import persistent
+coverage, finalize publication bindings or invoke the authorized sole sender.
+
 ## First steps
 
 1. Read README.md, EDITORIAL.md and docs/RUNBOOK.md.
@@ -13,7 +27,7 @@
 
 - Default collection and delivery stay disabled. Do not weaken approval/hash/path,
   target, idempotency, ledger or environment gates to make a test/demo succeed.
-- A real writer cannot approve their own digest. A reviewer first reconstructs
+- Under the default independent-review contract, a real writer cannot approve their own digest. The provisioned explicit self-review contract above is distinct. A reviewer first reconstructs
   each item from the final prose alone, then reads evidence. Comprehension and
   fidelity must separately pass; review exact rendered audit/coverage text too.
 - Test helpers are synthetic only. Never reuse `approveSyntheticReview` in real

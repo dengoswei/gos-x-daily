@@ -77,8 +77,10 @@ export function coverageReport(state, now = new Date()) {
           reasons: matching.length ? [...new Set(matching.map(attempt => attempt.reason))] : ['never_scanned'] };
       });
     });
-    const unscannedHours = gaps.reduce((sum, value) => sum + value.durationHours, 0);
-    windows[`${hours}h`] = { ...external(target), uiScannedHours: hours - unscannedHours, unscannedHours, gaps,
+    // Sum exact millisecond intervals before conversion; fractional-hour sums can drift outside the window.
+    const unscannedMs = gaps.reduce((sum, value) => sum + (milliseconds(value.end) - milliseconds(value.start)), 0);
+    const unscannedHours = unscannedMs / HOUR;
+    windows[`${hours}h`] = { ...external(target), uiScannedHours: (hours * HOUR - unscannedMs) / HOUR, unscannedHours, gaps,
       assurance: 'best_effort_ui_not_all_posts' };
   }
   const candidates = new Map(state.deepLinkAudit.map(link => [link.href, link]));

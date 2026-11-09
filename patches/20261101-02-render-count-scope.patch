@@ -1,0 +1,95 @@
+diff --git a/digest.mjs b/digest.mjs
+index 5fc96ce..8eda1df 100644
+--- a/digest.mjs
++++ b/digest.mjs
+@@ -50,9 +50,9 @@ export function coverageStatusLine(collection) {
+   if (collection.provenance?.transport === 'gos-supported-browser' && recent === 24 && full === 48) {
+     if (!Number.isSafeInteger(known.observedPosts) || known.observedPosts < 0) throw new Error('Invalid coverage observed post count');
+     const screenshots = (Array.isArray(collection.provenance.evidence) ? collection.provenance.evidence : []).filter(entry => entry?.kind === 'screenshot').length;
+-    return `采集完整性：本期为浏览器截图抽样（观察 ${known.observedPosts} 条帖子、${screenshots} 张截图），未做区间遍历，近24小时与近48小时覆盖均未验证；已观察链接 ${known.observedLinks} 个，规则过滤 ${known.filterDrops} 个，待深读 ${known.deepReadBacklog} 个（其中失败 ${known.deepReadFailures} 个）。未看到的帖子数未知。`;
++    return `采集完整性：本期为浏览器截图抽样（${screenshots} 张截图），未做区间遍历，近24小时与近48小时覆盖均未验证；滚动覆盖账本累计观察 ${known.observedPosts} 条帖子、链接 ${known.observedLinks} 个，规则过滤 ${known.filterDrops} 个，待深读 ${known.deepReadBacklog} 个（其中失败 ${known.deepReadFailures} 个）。未看到的帖子数未知。`;
+   }
+-  return `采集完整性：近24小时有 ${recent.toFixed(2)} 小时、近48小时有 ${full.toFixed(2)} 小时未验证扫描；已观察链接 ${known.observedLinks} 个，规则过滤 ${known.filterDrops} 个，待深读 ${known.deepReadBacklog} 个（其中失败 ${known.deepReadFailures} 个）。未看到的帖子数未知，已扫描也不保证全量。`;
++  return `采集完整性：近24小时有 ${recent.toFixed(2)} 小时、近48小时有 ${full.toFixed(2)} 小时未验证扫描；滚动覆盖账本累计观察链接 ${known.observedLinks} 个，规则过滤 ${known.filterDrops} 个，待深读 ${known.deepReadBacklog} 个（其中失败 ${known.deepReadFailures} 个）。未看到的帖子数未知，已扫描也不保证全量。`;
+ }
+ 
+ export function dispositionStatusLine(dispositions) {
+diff --git a/docs/COVERAGE.md b/docs/COVERAGE.md
+index 9c7d455..fd5c062 100644
+--- a/docs/COVERAGE.md
++++ b/docs/COVERAGE.md
+@@ -17,10 +17,13 @@ history or promise exhaustive X recall.
+ - Keep 24-hour and 48-hour unscanned hours separate from known queue counts.
+   Unseen-post count remains unknown. Do not sum overlapping thread/feed counts.
+ - The rendered coverage line for a supported-browser capture whose 24h and 48h
+-  windows are both entirely unscanned says so plainly: `本期为浏览器截图抽样（观察 N
+-  条帖子、M 张截图），未做区间遍历，近24小时与近48小时覆盖均未验证`, followed by the
+-  link/filter/deep-read counts. N is `knownCandidates.observedPosts` and M the number
+-  of screenshot evidence entries. Any other case reports unscanned hours per window.
++  windows are both entirely unscanned says so plainly: `本期为浏览器截图抽样（M 张截图），
++  未做区间遍历，近24小时与近48小时覆盖均未验证`. M counts screenshot evidence entries
++  in the current collection. The following `滚动覆盖账本累计观察 N 条帖子、链接 L 个`
++  and filter/deep-read counts come from `knownCandidates`, which can retain prior
++  observations in the rolling horizon; they are not this capture's item counts.
++  Any other case reports unscanned hours per window and likewise labels the
++  link/filter/deep-read counts as cumulative rolling-ledger observations.
+ - Preserve partial results and exact failure reasons, actual timestamps, source
+   dates and quote context. No missing receipt or history implies novelty.
+ 
+diff --git a/test/adversarial-recovery.test.mjs b/test/adversarial-recovery.test.mjs
+index 40177f3..056870e 100644
+--- a/test/adversarial-recovery.test.mjs
++++ b/test/adversarial-recovery.test.mjs
+@@ -57,7 +57,7 @@ test('browser sampling wording applies only to a fully unscanned supported-brows
+     coverage: { accounting: { windows: { '24h': { unscannedHours: recent }, '48h': { unscannedHours: full } },
+       knownCandidates: { observedPosts: 7, observedLinks: 10, filterDrops: 2, deepReadBacklog: 4, deepReadFailures: 1 } } } });
+   assert.equal(coverageStatusLine(sampled('gos-supported-browser', 24, 48)),
+-    '采集完整性：本期为浏览器截图抽样（观察 7 条帖子、2 张截图），未做区间遍历，近24小时与近48小时覆盖均未验证；已观察链接 10 个，规则过滤 2 个，待深读 4 个（其中失败 1 个）。未看到的帖子数未知。');
++    '采集完整性：本期为浏览器截图抽样（2 张截图），未做区间遍历，近24小时与近48小时覆盖均未验证；滚动覆盖账本累计观察 7 条帖子、链接 10 个，规则过滤 2 个，待深读 4 个（其中失败 1 个）。未看到的帖子数未知。');
+   for (const [transport, recent, full] of [['gos-supported-browser', 23, 48], ['gos-supported-browser', 24, 47], ['cdp', 24, 48], [undefined, 24, 48]]) {
+     assert.match(coverageStatusLine(sampled(transport, recent, full)), /小时未验证扫描/);
+   }
+diff --git a/test/coverage.test.mjs b/test/coverage.test.mjs
+index 1904cd6..37e5c07 100644
+--- a/test/coverage.test.mjs
++++ b/test/coverage.test.mjs
+@@ -80,6 +80,26 @@ test('rounding down fractional failed slices cannot invent near-zero scanned cov
+   assert.match(coverageStatusLine({ provenance: { transport: 'gos-supported-browser' }, coverage: { accounting: report } }), /未做区间遍历/);
+ });
+ 
++test('rendering distinguishes current screenshot evidence from cumulative rolling candidates', () => {
++  const state = createCoverageState(before(1));
++  const post = id => ({ url: `https://x.com/synthetic/status/${id}`, text: `Synthetic ${id}` });
++  const link = id => ({ href: `https://example.org/${id}`, eligible: true, readStatus: 'read' });
++  recordCollectionCoverage(state, { collectionId: 'synthetic-prior', collectedAt: before(1),
++    sources: { xFollowing: [post(1), post(2)] }, deepLinkAudit: [link(1), link(2), link(3)] });
++  const current = { collectionId: 'synthetic-current', collectedAt: now,
++    provenance: { transport: 'gos-supported-browser', evidence: Array.from({ length: 4 }, () => ({ kind: 'screenshot' })) },
++    sources: { xFollowing: [post(3)] }, deepLinkAudit: [link(4), link(5)], coverage: {} };
++  current.coverage.accounting = recordCollectionCoverage(state, current);
++  assert.equal(current.sources.xFollowing.length, 1);
++  assert.equal(current.coverage.accounting.knownCandidates.observedPosts, 3);
++  assert.equal(current.coverage.accounting.knownCandidates.observedLinks, 5);
++  const line = coverageStatusLine(current);
++  assert.match(line, /本期为浏览器截图抽样（4 张截图）/);
++  assert.match(line, /滚动覆盖账本累计观察 3 条帖子、链接 5 个/);
++  assert.doesNotMatch(line, /本期[^；]*3 条帖子/);
++  assert.match(coverageStatusLine({ ...current, provenance: { transport: 'cdp' } }), /滚动覆盖账本累计观察链接 5 个/);
++});
++
+ test('six-hour cap failure splits into exact halves without losing observations', () => {
+   const state = createCoverageState(now), window = interval(6, 0);
+   state.pending = [window];
+diff --git a/test/forward-run-integration.test.mjs b/test/forward-run-integration.test.mjs
+index db8f677..d436f72 100644
+--- a/test/forward-run-integration.test.mjs
++++ b/test/forward-run-integration.test.mjs
+@@ -73,7 +73,7 @@ test('complete forward run: synthetic browser import, prompt, supplemental mater
+   const rendered = JSON.parse(fs.readFileSync(path.join(root, 'delivery.json'))).args[7];
+   assert.ok(!rendered.includes('Breakthrough Research') && !rendered.includes('No synthetic item.'));
+   const known = sources.coverage.accounting.knownCandidates;
+-  assert.ok(rendered.endsWith(`\n\n采集完整性：本期为浏览器截图抽样（观察 ${known.observedPosts} 条帖子、3 张截图），未做区间遍历，近24小时与近48小时覆盖均未验证；已观察链接 ${known.observedLinks} 个，规则过滤 ${known.filterDrops} 个，待深读 ${known.deepReadBacklog} 个（其中失败 ${known.deepReadFailures} 个）。未看到的帖子数未知。\n候选处置：共 1 条候选，收录 1 条，合并 0 条，跳过 0 条。\n`), rendered);
++  assert.ok(rendered.endsWith(`\n\n采集完整性：本期为浏览器截图抽样（3 张截图），未做区间遍历，近24小时与近48小时覆盖均未验证；滚动覆盖账本累计观察 ${known.observedPosts} 条帖子、链接 ${known.observedLinks} 个，规则过滤 ${known.filterDrops} 个，待深读 ${known.deepReadBacklog} 个（其中失败 ${known.deepReadFailures} 个）。未看到的帖子数未知。\n候选处置：共 1 条候选，收录 1 条，合并 0 条，跳过 0 条。\n`), rendered);
+   assert.deepEqual(prepared.validation.repeatedUrls, []);
+   assert.deepEqual(fs.readdirSync(ledgerDir), ['ledger.json']);
+ });

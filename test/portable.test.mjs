@@ -35,7 +35,8 @@ test('runtime separates port, run path and public profile URLs', () => {
   assert.equal(runtime.cdpPort, 9449);
   assert.ok(runtime.runDir.endsWith('/runs/offline-fixture'));
   assert.throws(() => makeRuntime({ cdpPort: 9339 }), /dedicated/);
-  assert.throws(() => makeRuntime({ dataDir: '/Users/example/PersonalWorkspace/reading/.local' }), /excluded/);
+  assert.equal(makeRuntime({ dataDir: '/Users/example/PersonalWorkspace/reading/gos-x-daily/data' }).stateDir,
+    '/Users/example/PersonalWorkspace/reading/gos-x-daily/data/state');
   assert.throws(() => makeRuntime({ sources: { xiaohongshuProfiles: [{ url: 'https://www.xiaohongshu.com/user/profile/example?query=not-copied' }] } }), /canonical/);
 });
 

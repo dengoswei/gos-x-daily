@@ -138,8 +138,8 @@ export function collectionFromBrowserArtifacts(runtime, bundle) {
     if (group === 'substack') reports.substack.push(report);
   }
   // digest.mjs and the prompts read the karpathy group by name; mirror that profile here.
-  const karpathy = watchProfiles.find(profile => profile.handle === 'karpathy');
-  checks.karpathy = karpathy ? checks.watch.karpathy : { attempted: false };
+  const karpathy = watchProfiles.find(profile => profile.handle.toLowerCase() === 'karpathy');
+  checks.karpathy = karpathy ? checks.watch[karpathy.handle] : { attempted: false };
   if (!parsed.xFollowing.length) throw new Error('X Following produced 0 usable items; no digest may be composed');
   const blogs = [];
   for (const blog of runtime.sources.blogs ?? []) {

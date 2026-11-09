@@ -1,0 +1,141 @@
+{
+  "schemaVersion": 1,
+  "kind": "ordered-local-source-patch-lineage",
+  "recordedAt": "2026-11-01T03:17:38Z",
+  "base": {
+    "upstream": "https://github.com/dengoswei/gos-x-daily",
+    "upstreamCommit": "da6a647e7ec0c942948f66a41180b4d3046b97e3",
+    "priorLocalFidelityPatchSha256": "91019bbd86ba59f8e076ea0e49175cfeec4a6d2e9a42e9e9d2b404b32e686aaa",
+    "priorVerificationOfflineTests": 145,
+    "deploymentVersionFile": "production/deployment-version.json",
+    "deploymentVersionFileSha256": "df30574e4a9d182fe8972f197b24c145df021f68a6f88947d185986fdc8af4ec",
+    "deploymentVersionFilePreservedUnchanged": true
+  },
+  "patches": [
+    {
+      "order": 1,
+      "id": "20261101-01-coverage-roundoff",
+      "description": "Accumulate exact millisecond gap durations before converting to hours; strict validator unchanged.",
+      "patchSha256": "a586d5e2292415d474b11ab2ef1134b44009d7354ff94913cf6148e73d73d264",
+      "applied": true,
+      "verification": {
+        "newRegressionFailuresBeforeFix": 3,
+        "offlineTestsPassedAfter": 148,
+        "syntheticPassed": 1,
+        "portableSourceFilesChecked": 51
+      },
+      "affectedFiles": [
+        {
+          "path": "coverage.mjs",
+          "beforeSha256": "dd0bffcfe39accc4b76a0ffc5ae23cff18b63e39376453cd4e0aed07a3f739b8",
+          "afterSha256": "09875ab2d19089f5e2e67db247f56100a0d26af887774d583aea0c9375fb17b4"
+        },
+        {
+          "path": "test/coverage.test.mjs",
+          "beforeSha256": "93465c28a939e1b0eb741e3189c17e35c902977b98eba0baa286f52917dca2f8",
+          "afterSha256": "d239177e5d93e0445225c2a97277e32fa9fbdea66f5cd0ee39aaea5c3d02a618"
+        },
+        {
+          "path": "test/adversarial-recovery.test.mjs",
+          "beforeSha256": "ee8c4a1bd096d77025bff0fd058010637ef2007cbd09ab4704b2e145c5eb170c",
+          "afterSha256": "0314dd0ce935455c057e2ea09dafa7780cd5f63507d966587c6d1241190980ca"
+        }
+      ],
+      "portablePackagePatchPath": "patches/20261101-01-coverage-roundoff.patch"
+    },
+    {
+      "order": 2,
+      "id": "20261101-02-render-count-scope",
+      "description": "Label current screenshots separately from rolling cumulative post/link/filter/backlog counts; raw counts and validation gates unchanged.",
+      "patchSha256": "7d1e6a51b9e498a09e2617911994a1f7b2e0e8e1ca23c0c2cd4b56863b970df8",
+      "applied": true,
+      "verification": {
+        "offlineTestsPassedAfter": 149,
+        "syntheticPassed": 1,
+        "portableSourceFilesChecked": 51,
+        "currentVsRollingCountRegression": true
+      },
+      "affectedFiles": [
+        {
+          "path": "digest.mjs",
+          "beforeSha256": "b16865c50b4c218d5f1ac87d82fca5426a6b6b4d3b3df6a8cc2c05785b06db63",
+          "afterSha256": "52fc165a5b37ca4979b293578ae3c1b27c137cb3b23787bc3c33fcff73d9bfd2"
+        },
+        {
+          "path": "docs/COVERAGE.md",
+          "beforeSha256": "ed557b3b15bed86726adb820005d7709bab89d71b71c5350ef17cca017836d56",
+          "afterSha256": "61022b13e3e79eb7b06f9ce15481e2451d058e1aa0390327258eac8eeee88596"
+        },
+        {
+          "path": "test/coverage.test.mjs",
+          "beforeSha256": "d239177e5d93e0445225c2a97277e32fa9fbdea66f5cd0ee39aaea5c3d02a618",
+          "afterSha256": "6266ea29d7cfd99fed1a2b61ee124241976a550425b3be1bfb5269855208577f"
+        },
+        {
+          "path": "test/adversarial-recovery.test.mjs",
+          "beforeSha256": "0314dd0ce935455c057e2ea09dafa7780cd5f63507d966587c6d1241190980ca",
+          "afterSha256": "25ef509ac55da1ba63df79a69b3b99d530b6c96dd114bd255e3823236151279e"
+        },
+        {
+          "path": "test/forward-run-integration.test.mjs",
+          "beforeSha256": "99497cc7f6cd8d93d15df9b4dfe99a4407dc177d05ae14504e2064b6b62d058c",
+          "afterSha256": "71e6aeffe7f4989b1555590940a808f44dd5b135683a021e065bf8d2d4a1b2ea"
+        }
+      ],
+      "portablePackagePatchPath": "patches/20261101-02-render-count-scope.patch"
+    }
+  ],
+  "currentAffectedFiles": [
+    {
+      "path": "coverage.mjs",
+      "sha256": "09875ab2d19089f5e2e67db247f56100a0d26af887774d583aea0c9375fb17b4"
+    },
+    {
+      "path": "digest.mjs",
+      "sha256": "52fc165a5b37ca4979b293578ae3c1b27c137cb3b23787bc3c33fcff73d9bfd2"
+    },
+    {
+      "path": "docs/COVERAGE.md",
+      "sha256": "61022b13e3e79eb7b06f9ce15481e2451d058e1aa0390327258eac8eeee88596"
+    },
+    {
+      "path": "test/adversarial-recovery.test.mjs",
+      "sha256": "25ef509ac55da1ba63df79a69b3b99d530b6c96dd114bd255e3823236151279e"
+    },
+    {
+      "path": "test/coverage.test.mjs",
+      "sha256": "6266ea29d7cfd99fed1a2b61ee124241976a550425b3be1bfb5269855208577f"
+    },
+    {
+      "path": "test/forward-run-integration.test.mjs",
+      "sha256": "71e6aeffe7f4989b1555590940a808f44dd5b135683a021e065bf8d2d4a1b2ea"
+    }
+  ],
+  "verification": {
+    "verifiedAt": "2026-11-01T03:17:38Z",
+    "actualInstalledSourceMatchesTestedPortableManifest": true,
+    "portableSourceFileCount": 51,
+    "offlineTests": {
+      "passed": 149,
+      "failed": 0
+    },
+    "syntheticTests": {
+      "passed": 1,
+      "failed": 0
+    },
+    "portableSourceCheckPassed": true,
+    "diffWhitespaceCheckPassed": true,
+    "activeDeploymentBroadSourceCheckPassed": false,
+    "activeDeploymentBroadSourceCheckCaveat": "Pre-existing deployment-only handoffs and metadata trigger machine-path/recipient patterns; unchanged from baseline. Portable source check passes."
+  },
+  "boundaries": {
+    "sourceOnly": true,
+    "noRawEvidenceChanges": true,
+    "noCredentialChanges": true,
+    "noLedgerChanges": true,
+    "noScheduleChanges": true,
+    "noPublicPush": true,
+    "doesNotEstablishSemanticApprovalOrDelivery": true
+  },
+  "readingOrder": "Read the preserved deployment-version base, then apply these additional patches in ascending order. Latest currentAffectedFiles hashes are authoritative for the installed overlay."
+}

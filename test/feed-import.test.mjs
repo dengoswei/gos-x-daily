@@ -103,7 +103,11 @@ test('document hashing rejects tampering, missing files and path/symlink escapes
   assert.throws(() => verifyDocumentFiles(bundle, dir), /inside the artifact/);
   bundle.documents[0].path = 'feeds/missing.xml';
   assert.throws(() => verifyDocumentFiles(bundle, dir), /ENOENT/);
-  fs.symlinkSync('/etc/hostname', path.join(dir, 'feeds/escape.xml'));
+  const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'xdaily-outside-'));
+  t.after(() => fs.rmSync(outside, { recursive: true, force: true }));
+  const outsideFile = path.join(outside, 'target.txt');
+  fs.writeFileSync(outsideFile, 'synthetic outside-root evidence');
+  fs.symlinkSync(outsideFile, path.join(dir, 'feeds/escape.xml'));
   bundle.documents[0].path = 'feeds/escape.xml';
   assert.throws(() => verifyDocumentFiles(bundle, dir), /escaped/);
 });

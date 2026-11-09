@@ -9,6 +9,7 @@ import { collectionFromBrowserArtifacts, verifyEvidenceFiles } from './browser-a
 import { composePrompt, prepareDelivery, sendDelivery, publicationGates, readPublicationFile } from './digest.mjs';
 import { createReviewInput, validateReview } from './review.mjs';
 import { initializeDeliveryLedger, recentPublishedUrls } from './delivery-ledger.mjs';
+import { writeWorkerPackets } from './worker-packets.mjs';
 
 const root = path.dirname(fileURLToPath(import.meta.url));
 const readJson = file => JSON.parse(fs.readFileSync(file, 'utf8'));
@@ -37,6 +38,7 @@ export async function main(argv = process.argv.slice(2)) {
       'import-browser --artifacts browser-capture.json --out sources.json [--config runtime.json]',
       'import-feed --artifacts feed-capture.json --sources sources.json --out sources.merged.json [--config runtime.json]',
       'compose-input --sources sources.json --out prompt.md [--published-history LEDGER_DIRECTORY] [--full]',
+      'worker-input --sources sources.json --out NEW_DIRECTORY [--published-history LEDGER_DIRECTORY]',
       'prepare-delivery --sources sources.json --digest digest.md --publication publication.json --out delivery.json --config VERIFIED_RUNTIME.json',
       'review-input --publication publication.json --out review.pending.json',
       'validate-publication --publication publication.json',
@@ -50,6 +52,12 @@ export async function main(argv = process.argv.slice(2)) {
     const publishedHistory = argv.includes('--published-history') ? recentPublishedUrls(required('--published-history'), { before: collection.date }) : [];
     write(output, composePrompt(collection, { publishedHistory, full: argv.includes('--full') }));
     return { status: 'prompt_written', output };
+  }
+  if (command === 'worker-input') {
+    const sourcesFile = required('--sources');
+    const collection = readJson(sourcesFile);
+    const publishedHistory = argv.includes('--published-history') ? recentPublishedUrls(required('--published-history'), { before: collection.date }) : [];
+    return writeWorkerPackets({ sourcesFile, outputDir: required('--out'), publishedHistory });
   }
   if (command === 'init-delivery-ledger') {
     return initializeDeliveryLedger(required('--directory'), { notBeforeDate: required('--not-before-date'), createdBy: required('--created-by') });
@@ -69,7 +77,7 @@ export async function main(argv = process.argv.slice(2)) {
     if (command === 'review-input') {
       const output = required('--out');
       write(output, JSON.stringify(createReviewInput(inputs), null, 2) + '\n');
-      return { status: 'pending_independent_review', output, notApproval: true, digest: gates.validation };
+      return { status: inputs.reviewMode === 'self' ? 'pending_author_self_review' : 'pending_independent_review', output, notApproval: true, digest: gates.validation };
     }
     return { status: 'structural_review_binding_passed_not_semantic_proof', digest: gates.validation, ...validateReview(JSON.parse(readPublicationFile(p.rootDir, p.reviewPath)), inputs) };
   }

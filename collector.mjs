@@ -1921,8 +1921,9 @@ async function navigateExistingTarget(target, url) {
         watchChecks[profile.handle] = { attempted: true, available: Boolean(pages[key]), items: items.length };
       }
       // digest.mjs and the prompts read the karpathy group by name; mirror that profile here.
-      const karpathyItems = watchProfiles.find(profile => profile.handle === 'karpathy')?.items ?? [];
-      const karpathyCheck = watchChecks.karpathy ?? { attempted: false };
+      const karpathy = watchProfiles.find(profile => profile.handle.toLowerCase() === 'karpathy');
+      const karpathyItems = karpathy?.items ?? [];
+      const karpathyCheck = karpathy ? watchChecks[karpathy.handle] : { attempted: false };
       for (const [source, values] of Object.entries(reports)) {
         for (const report of values) if (!report.scanned) warnings.push(`${source} fresh-window scan incomplete: ${report.reason}`);
       }

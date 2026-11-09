@@ -24,9 +24,14 @@ test('independent audit: absent coverage cannot silently remove the rendered unc
 test('independent audit: impossible or nonnumeric reported coverage is rejected', () => {
   const cases = [
     a => { a.windows['24h'].unscannedHours = -1; },
+    a => { a.windows['24h'].unscannedHours = -Number.EPSILON; },
     a => { a.windows['24h'].unscannedHours = 25; },
+    a => { a.windows['24h'].unscannedHours = 24 + 1 / 3600000; },
     a => { a.windows['48h'].unscannedHours = 49; },
+    a => { a.windows['48h'].unscannedHours = 48.00000000000001; },
+    a => { a.windows['48h'].unscannedHours = 48 + 1 / 3600000; },
     a => { a.windows['48h'].unscannedHours = 2; },
+    a => { a.windows['48h'].unscannedHours = 12 - 1 / 3600000; },
     a => { a.windows['24h'].unscannedHours = '12'; },
     a => { a.knownCandidates.observedLinks = -1; },
     a => { a.knownCandidates.filterDrops = 'all'; },
@@ -52,7 +57,7 @@ test('browser sampling wording applies only to a fully unscanned supported-brows
     coverage: { accounting: { windows: { '24h': { unscannedHours: recent }, '48h': { unscannedHours: full } },
       knownCandidates: { observedPosts: 7, observedLinks: 10, filterDrops: 2, deepReadBacklog: 4, deepReadFailures: 1 } } } });
   assert.equal(coverageStatusLine(sampled('gos-supported-browser', 24, 48)),
-    '采集完整性：本期为浏览器截图抽样（观察 7 条帖子、2 张截图），未做区间遍历，近24小时与近48小时覆盖均未验证；已观察链接 10 个，规则过滤 2 个，待深读 4 个（其中失败 1 个）。未看到的帖子数未知。');
+    '采集完整性：本期为浏览器截图抽样（2 张截图），未做区间遍历，近24小时与近48小时覆盖均未验证；滚动覆盖账本累计观察 7 条帖子、链接 10 个，规则过滤 2 个，待深读 4 个（其中失败 1 个）。未看到的帖子数未知。');
   for (const [transport, recent, full] of [['gos-supported-browser', 23, 48], ['gos-supported-browser', 24, 47], ['cdp', 24, 48], [undefined, 24, 48]]) {
     assert.match(coverageStatusLine(sampled(transport, recent, full)), /小时未验证扫描/);
   }

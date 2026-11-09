@@ -7,6 +7,7 @@ import { validateReview } from './review.mjs';
 import { inspectDeliveryLedger, recentPublishedUrls, recordDeliveryAttempt, recordDeliveryReceipt, recordDeliveryUncertain, recordPublishedUrls } from './delivery-ledger.mjs';
 import { candidateKeys, canonicalUrl, digestUrls, observedUrls, readPublicationFile, validateDispositions, validateUrlBinding } from './binding.mjs';
 import { compactPromptText } from './compose.mjs';
+import { larkPostJson } from './lark-post.mjs';
 
 export { readPublicationFile };
 
@@ -50,9 +51,9 @@ export function coverageStatusLine(collection) {
   if (collection.provenance?.transport === 'gos-supported-browser' && recent === 24 && full === 48) {
     if (!Number.isSafeInteger(known.observedPosts) || known.observedPosts < 0) throw new Error('Invalid coverage observed post count');
     const screenshots = (Array.isArray(collection.provenance.evidence) ? collection.provenance.evidence : []).filter(entry => entry?.kind === 'screenshot').length;
-    return `采集完整性：本期为浏览器截图抽样（观察 ${known.observedPosts} 条帖子、${screenshots} 张截图），未做区间遍历，近24小时与近48小时覆盖均未验证；已观察链接 ${known.observedLinks} 个，规则过滤 ${known.filterDrops} 个，待深读 ${known.deepReadBacklog} 个（其中失败 ${known.deepReadFailures} 个）。未看到的帖子数未知。`;
+    return `采集完整性：本期为浏览器截图抽样（${screenshots} 张截图），未做区间遍历，近24小时与近48小时覆盖均未验证；滚动覆盖账本累计观察 ${known.observedPosts} 条帖子、链接 ${known.observedLinks} 个，规则过滤 ${known.filterDrops} 个，待深读 ${known.deepReadBacklog} 个（其中失败 ${known.deepReadFailures} 个）。未看到的帖子数未知。`;
   }
-  return `采集完整性：近24小时有 ${recent.toFixed(2)} 小时、近48小时有 ${full.toFixed(2)} 小时未验证扫描；已观察链接 ${known.observedLinks} 个，规则过滤 ${known.filterDrops} 个，待深读 ${known.deepReadBacklog} 个（其中失败 ${known.deepReadFailures} 个）。未看到的帖子数未知，已扫描也不保证全量。`;
+  return `采集完整性：近24小时有 ${recent.toFixed(2)} 小时、近48小时有 ${full.toFixed(2)} 小时未验证扫描；滚动覆盖账本累计观察链接 ${known.observedLinks} 个，规则过滤 ${known.filterDrops} 个，待深读 ${known.deepReadBacklog} 个（其中失败 ${known.deepReadFailures} 个）。未看到的帖子数未知，已扫描也不保证全量。`;
 }
 
 export function dispositionStatusLine(dispositions) {
@@ -84,11 +85,17 @@ function sections(lines) {
 }
 
 /** Exact delivery payload: main body without URL-free `## ` sections, then the coverage and disposition lines. */
-export function larkMarkdown(markdown, collection, { dispositions } = {}) {
+export function larkMarkdown(markdown, collection, { dispositions, renderStyle } = {}) {
   const kept = sections(mainBodyLines(markdown))
     .filter(part => !/^##\s/.test(part.heading ?? '') || part.lines.some(line => urlPattern.test(line)));
-  const summary = coverageStatusLine(collection);
-  const ledger = dispositions === undefined ? '' : `\n${dispositionStatusLine(dispositions)}`;
+  if (renderStyle !== undefined && renderStyle !== 'concise') throw new Error('Unsupported render style');
+  // Validate the complete accounting even when detailed figures stay in the audit.
+  const detailedCoverage = coverageStatusLine(collection);
+  const windows = collection?.coverage?.accounting?.windows;
+  const summary = renderStyle === 'concise'
+    ? `采集范围说明：近24小时仍有 ${windows?.['24h']?.unscannedHours ?? '未知'} 小时、近48小时仍有 ${windows?.['48h']?.unscannedHours ?? '未知'} 小时未验证完整遍历，未看到的帖子数未知。`
+    : detailedCoverage;
+  const ledger = dispositions === undefined || renderStyle === 'concise' ? '' : `\n${dispositionStatusLine(dispositions)}`;
   return `${kept.flatMap(part => part.lines).join('\n').trim()}${summary ? `\n\n${summary}` : ''}${ledger}\n`;
 }
 
@@ -130,7 +137,7 @@ export function publicationGates(rootDir, snapshotInputs, markdown, collection, 
   const dispositions = JSON.parse(readPublicationFile(rootDir, snapshotInputs.dispositionsPath));
   const observed = observedUrls({ collection, rootDir, materialsPaths: snapshotInputs.materialsPaths ?? [], evidencePaths: snapshotInputs.evidencePaths ?? [] });
   const validation = validateDigest(markdown, collection, { observed, dispositions, publishedHistory });
-  return { validation, renderedMarkdown: larkMarkdown(markdown, collection, { dispositions }) };
+  return { validation, renderedMarkdown: larkMarkdown(markdown, collection, { dispositions, renderStyle: snapshotInputs.renderStyle }) };
 }
 
 const sha256 = value => createHash('sha256').update(value).digest('hex');
@@ -147,14 +154,21 @@ export function prepareDelivery(markdown, collection, target, publication) {
   const publishedHistory = recentPublishedUrls(publication.ledgerDir, { before: collection.date });
   const gates = publicationGates(rootDir, publication.snapshotInputs, markdown, collection, { publishedHistory });
   const inputs = { ...publication.snapshotInputs, rootDir, renderedMarkdown: gates.renderedMarkdown };
+  if ((inputs.reviewMode ?? 'independent') !== (target.reviewMode ?? 'independent')) throw new Error('Publication review mode must match the deployment target');
+  if (inputs.transport !== target.transport) throw new Error('Publication transport must match the deployment target');
   if (readPublicationFile(inputs.rootDir, inputs.digestPath) !== markdown ||
       JSON.stringify(JSON.parse(readPublicationFile(inputs.rootDir, inputs.sourcesPath))) !== JSON.stringify(collection)) throw new Error('Publication draft/source inputs do not match their actual files');
   const reviewText = readPublicationFile(inputs.rootDir, publication.reviewPath);
   const reviewValidation = validateReview(JSON.parse(reviewText), inputs);
+  const transport = inputs.transport === undefined ? undefined : {
+    kind: inputs.transport, content: larkPostJson(inputs.renderedMarkdown),
+  };
+  if (transport) transport.sha256 = sha256(transport.content);
   const idempotencyKey = `xdaily-${deploymentId}-${collection.date}`;
   const ledger = inspectDeliveryLedger(publication.ledgerDir, { date: collection.date, idempotencyKey });
   const plan = {
     schemaVersion: 2, executable: target.executable,
+    ...(transport ? { transport } : {}),
     args: ['im', '+messages-send', '--as', 'bot', '--user-id', target.userId,
       '--markdown', inputs.renderedMarkdown, '--idempotency-key', idempotencyKey],
     target: { userId: target.userId, deploymentId, executable: target.executable },

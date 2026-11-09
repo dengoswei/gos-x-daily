@@ -42,6 +42,15 @@ These are offline commands. Import verifies evidence bytes, writes sources and
 updates this deployment's coverage state. Outputs use exclusive creation.
 `collect` is a different, conditional direct-CDP route, not a CUA driver.
 
+## 2a. Record current-run coverage
+
+Follow [the required coverage disclosure](COVERAGE.md#required-per-run-collection-disclosure)
+and fill `examples/collection-coverage.template.md` with actual observations in
+this run's private `collection-coverage.md`. Freeze the known planned-source
+roster before collection; retain failed and unattempted entries. Keep source reach,
+current-run observation/reading counts, 24h/48h certified traversal and cumulative
+ledger statistics separate. Unknown counts must remain unknown.
+
 ## 2b. Fetch and import feeds
 
 `tools/fetch-feeds.mjs` is a network tool; the CLI is not. It downloads only the
@@ -114,6 +123,12 @@ The prompt then lists `date  url` for reports dated in the seven days before thi
 one. Cite such a URL again only as an item labelled `跟进` that states a new fact;
 otherwise skip the candidate as `duplicate_topic`. A repeat is a warning
 (`validation.repeatedUrls` in `prepare-delivery`), never a rejection.
+
+Read `collection-coverage.md` explicitly during composition and independent review,
+include it in `snapshotInputs.materialsPaths`, and include its supporting evidence
+in the manifest. Put the concise 本次采集范围 paragraph inside a retained sourced
+main section, before 差异补充, following docs/COVERAGE.md. Confirm it survives
+exact rendering; audit-only coverage details do not reach the recipient.
 
 Next to it write `dispositions.json`: one row per candidate key listed at the end
 of the `compose-input` prompt (`schemaVersion: 1`, the collection's `collectionId`):
