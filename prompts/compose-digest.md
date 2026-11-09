@@ -182,7 +182,7 @@ new fact absent from the earlier report; otherwise skip its candidate as
 Besides the Markdown draft, return `dispositions.json` with `schemaVersion: 1`, the
 collection's `collectionId`, and `items` holding exactly one row for every key in
 `<candidate_keys>` (no other keys):
-`{"key", "disposition": "included", "section": "<## heading>", "url": "<URL cited in the main body>"}`,
+`{"key", "disposition": "included", "section": "<main-body heading text, e.g. Frameworks / Infra, without the leading ## marker>", "url": "<URL cited in the main body>"}`,
 `{"key", "disposition": "merged", "mergedInto": "<included key>"}`, or
 `{"key" | "keys": [...], "disposition": "skipped", "reason": "off_topic|promotion|duplicate_topic|outside_window|low_signal|unreadable|other", "note"?}`.
 If the digest cites a candidate's own URL, that candidate must be `included`. Other
