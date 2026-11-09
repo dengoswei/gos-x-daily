@@ -1,0 +1,33 @@
+{
+  "comment": "Example only. Copy to a models.local.json (gitignored) and adjust. Only environment-variable NAMES belong here; never an API key.",
+  "roles": {
+    "screen": {
+      "kind": "openai",
+      "baseUrl": "https://api.deepseek.com/v1",
+      "model": "deepseek-chat",
+      "apiKeyEnv": "DEEPSEEK_API_KEY",
+      "maxTokens": 4096
+    },
+    "story": {
+      "kind": "anthropic",
+      "baseUrl": "https://api.anthropic.com",
+      "model": "claude-sonnet-5-5",
+      "apiKeyEnv": "ANTHROPIC_API_KEY",
+      "maxTokens": 8192
+    },
+    "compose": {
+      "kind": "exec",
+      "command": [
+        "claude",
+        "-p",
+        "--model",
+        "opus",
+        "--output-format",
+        "json",
+        "--disallowed-tools",
+        "*"
+      ],
+      "parse": "claude-json"
+    }
+  }
+}
