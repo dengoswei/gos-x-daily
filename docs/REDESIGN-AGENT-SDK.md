@@ -117,11 +117,16 @@ where an episode is a candidate. Neither requires new downstream machinery.
 
 ## Phasing (implementation deliberately deferred)
 
-- P1: orchestrator prototype driving stages 5–7 only, against an existing
-  captured run; compare cost and judge scores with a host-agent run of the
-  same collection.
-- P2: add capture and review agents; the Mac deployment stays authoritative
-  until the prototype reaches parity on the golden set.
+- P1 **done** (2026-11-09): orchestrator prototype driving stages 5–7 against an
+  existing captured run, validated by an offline scripted test plus a live
+  synthetic run on an Opus stage model.
+- P2 **review + eval implemented** (`prototype/orchestrate.mjs` advisory stage 8,
+  `prototype/eval.mjs`): per-unit blind comprehension then source fidelity, and the
+  judge rubric below. Advisory and measurement only — no gate reads either.
+- P2 **capture agent: environment-bound, pending** a browser-equipped authorized
+  host; the orchestrator consumes `browser-capture.json` and ships no capture code.
+- Golden-set parity **pending** real collections on the production host; the Mac
+  deployment stays authoritative until then.
 - Non-goals now: porting the contract layer to Python, edition UI, scheduler
   framework, multi-edition config migration.
 
