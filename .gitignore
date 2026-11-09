@@ -8,6 +8,7 @@ private/
 .env.*
 !.env.example
 config/*.local.json
+prototype/*.local.json
 runtime.json
 runs/
 evidence/
