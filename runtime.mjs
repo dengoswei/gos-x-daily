@@ -53,7 +53,6 @@ export function makeRuntime(config, { runId = randomUUID() } = {}) {
       !Number.isFinite(minWindowMinutes) || minWindowMinutes < 5 || minWindowMinutes > initialWindowHours * 60 ||
       !Number.isInteger(deepReadLimit) || deepReadLimit < 1 || deepReadLimit > 100) throw new Error('Invalid total/concurrency/coverage/deep-read budgets');
   const dataDir = path.resolve(root, config.dataDir ?? './data');
-  if (dataDir.includes('/PersonalWorkspace/reading')) throw new Error('The original reading workspace is excluded');
   const sources = structuredClone(config.sources ?? { blogs: [], xiaohongshuProfiles: [] });
   for (const profile of sources.xiaohongshuProfiles ?? []) {
     const url = new URL(profile.url);

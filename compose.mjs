@@ -9,6 +9,13 @@ const promptFile = new URL('./prompts/compose-digest.md', import.meta.url);
 const list = value => Array.isArray(value) ? value : [];
 const canonical = href => { try { return canonicalUrl(href); } catch { return null; } };
 const linkHref = href => { try { return canonicalLink(href).href; } catch { return null; } };
+// Browser imports use text; the conditional collector uses content for blogs and
+// bodyText for notes. Keep their source content, not merely the discovery title.
+const sourceText = item => [item?.text, item?.content, item?.bodyText].find(value => typeof value === 'string' && value.trim()) ?? null;
+// Compact does not mean semantically lossy: dates and reading limits affect what
+// a writer may claim. Unknown flags stay absent, never inferred to mean complete.
+const sourceLimits = item => Object.fromEntries(['paperPublishedAt', 'dateStatus', 'truncated', 'error']
+  .filter(key => item?.[key] !== undefined).map(key => [key, item[key]]));
 const handle = url => {
   try {
     const parsed = new URL(url);
@@ -27,20 +34,47 @@ function assertHistory(history) {
   return history.map(({ date, urls }) => ({ date, urls: [...urls] }));
 }
 
-// Mirrors binding.mjs candidate order and keys; the first occurrence of a key wins.
+// Mirrors binding.mjs candidate order and keys. The first occurrence remains the
+// primary view, but later observations remain separate rather than losing text,
+// dates or reading limits (or silently choosing between conflicting claims).
 function rawCandidates(sources) {
   const entries = [];
-  const add = (kind, items, author = null) => { for (const item of items) entries.push({ key: itemKey(item), kind, item, fallbackAuthor: null, author }); };
+  const add = (kind, items, watchedHandle = null) => { for (const item of items) entries.push({ key: itemKey(item), kind, item, fallbackAuthor: null, watchedHandle }); };
   add('x', list(sources.xFollowing));
   add('substack', list(sources.substack));
   for (const { handle, items } of watchGroups(sources)) add('watch', items, handle ?? null);
   add('feed', list(sources.feeds));
-  for (const item of list(sources.blogs)) entries.push({ key: `blog:${item?.url}`, kind: 'blog', item, fallbackAuthor: item?.blog ?? null });
+  for (const item of list(sources.blogs)) entries.push({ key: `blog:${item?.url}`, kind: 'blog', item, fallbackAuthor: item?.blog ?? item?.name ?? null });
   for (const item of list(sources.deepArticles)) entries.push({ key: `deep:${item?.url}`, kind: 'deep', item, fallbackAuthor: null });
   for (const profile of list(sources.xiaohongshu)) for (const item of list(profile?.notes)) entries.push({ key: `xhs:${item?.url}`, kind: 'xhs', item, fallbackAuthor: profile?.name ?? null });
-  const seen = new Set();
-  return entries.filter(entry => !seen.has(entry.key) && seen.add(entry.key));
+  const grouped = new Map();
+  for (const entry of entries) {
+    const prior = grouped.get(entry.key);
+    if (prior) prior.alternateEntries.push(entry);
+    else grouped.set(entry.key, { ...entry, alternateEntries: [] });
+  }
+  return [...grouped.values()];
 }
+
+// Worker handoffs retain original records (including evidence IDs and capture
+// limits), rather than asking a coordinator to load the whole collection.
+export function candidateObservations(collection) {
+  return rawCandidates(collection?.sources ?? {}).map(entry => ({
+    key: entry.key,
+    observations: [entry, ...entry.alternateEntries].map(({ kind, item, watchedHandle }) => ({
+      kind, ...(watchedHandle ? { watchedHandle } : {}), item,
+    })),
+  }));
+}
+
+const allLinks = entry => [entry, ...entry.alternateEntries].flatMap(observation => list(observation.item?.links));
+const observationView = ({ kind, item, fallbackAuthor, watchedHandle }, { deferDeepText = false } = {}) => ({
+  kind, author: handle(item?.url) ?? item?.author ?? item?.feedName ?? fallbackAuthor ?? null,
+  ...(watchedHandle ? { watchedHandle } : {}),
+  url: item?.url ?? null, title: item?.title ?? null, publishedAt: item?.publishedAt ?? null,
+  text: deferDeepText && kind === 'deep' ? null : sourceText(item), ...sourceLimits(item),
+  links: list(item?.links).map(link => ({ href: link?.href, text: link?.text ?? '' })),
+});
 
 export function compactCollection(collection, { publishedHistory = [] } = {}) {
   const sources = collection?.sources ?? {};
@@ -48,7 +82,7 @@ export function compactCollection(collection, { publishedHistory = [] } = {}) {
   const raw = rawCandidates(sources);
   const expected = candidateKeys(collection);
   if (raw.length !== expected.length || raw.some((entry, index) => entry.key !== expected[index])) throw new Error('Compact candidates diverge from binding candidate keys');
-  const clusters = clusterByLink(raw.map(entry => ({ key: entry.key, links: list(entry.item?.links) })), { keyOf: entry => entry.key })
+  const clusters = clusterByLink(raw.map(entry => ({ key: entry.key, links: allLinks(entry) })), { keyOf: entry => entry.key })
     .map((cluster, index) => ({ index, ...cluster }));
   const clusterOf = new Map(clusters.map(cluster => [cluster.url, cluster.index]));
   const readStatus = new Map();
@@ -58,13 +92,12 @@ export function compactCollection(collection, { publishedHistory = [] } = {}) {
       if (key && !readStatus.has(key)) readStatus.set(key, record.readStatus ?? null);
     }
   }
-  const candidates = raw.map(({ key, kind, item, fallbackAuthor, author }) => {
-    const links = list(item?.links).map(link => ({ href: link?.href, text: link?.text ?? '' }));
-    const indices = links.map(link => clusterOf.get(linkHref(link.href))).filter(index => index !== undefined);
-    return { key, kind, author: author ?? handle(item?.url) ?? item?.author ?? item?.feedName ?? fallbackAuthor ?? null,
-      url: item?.url ?? null, title: item?.title ?? null, publishedAt: item?.publishedAt ?? null,
-      // Deep-read text is carried once, in deepArticles under the same key.
-      text: kind === 'deep' ? null : item?.text ?? null, links,
+  const candidates = raw.map(entry => {
+    const { key, item, alternateEntries } = entry;
+    const indices = allLinks(entry).map(link => clusterOf.get(linkHref(link.href))).filter(index => index !== undefined);
+    // Primary deep-read text is carried in deepArticles under the same key.
+    return { key, ...observationView(entry, { deferDeepText: true }),
+      ...(alternateEntries.length ? { alternateObservations: alternateEntries.map(alternate => observationView(alternate)) } : {}),
       deepRead: typeof item?.url === 'string' ? readStatus.get(canonical(item.url)) ?? null : null,
       cluster: indices.length ? Math.min(...indices) : null };
   });
@@ -75,7 +108,7 @@ export function compactCollection(collection, { publishedHistory = [] } = {}) {
     window: collection?.coverage?.digestWindow ?? collection?.coverage?.window,
     candidates, clusters,
     deepArticles: list(sources.deepArticles).map(article => ({ key: `deep:${article.url}`, url: article.url,
-      sourceHref: article.sourceHref ?? null, title: article.title ?? null, text: article.text ?? null })),
+      sourceHref: article.sourceHref ?? null, title: article.title ?? null, text: sourceText(article), ...sourceLimits(article) })),
     threadContexts: list(sources.threadContexts).map(context => ({ url: context.url, text: context.text,
       publishedAt: context.publishedAt ?? null, dateStatus: context.dateStatus ?? null,
       links: list(context.links).map(link => ({ href: link?.href, text: link?.text ?? '' })),

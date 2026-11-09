@@ -2,7 +2,15 @@
 
 Compose a Chinese `X AI 日报 YYYY-MM-DD` using this collection's Shanghai date.
 Copy its `digestMarker` unchanged immediately below the title. Follow EDITORIAL.md.
-This is a draft for independent review, not authority to prepare or send a report.
+This is a draft for the deployment-configured semantic review. The provisioned Mac controller uses author self-review under deployment/mac/RUNBOOK.md; default deployments use independent review. Publication still requires exact bindings and the configured delivery controller.
+
+For a delegated run follow docs/AGENT-WORKFLOW.md. This full composition input is
+an on-disk evidence index, not a requirement to load the whole collection into
+the coordinator's context. Assign all candidate keys to source/story workers;
+merge their complete dispositions and source-backed story packets. Workers read
+the assigned evidence, not just another worker's summary. The coordinator reads
+every selected final story and all unresolved findings, then checks global
+coverage, deduplication, consistency and final presentation.
 
 ## General rules
 
@@ -20,9 +28,23 @@ generic promotion, personal chatter and engagement bait. No item or company-blog
 
 Write for a Chinese technical reader who has not read the source. Lead with its actual
 central claim, capability, finding or engineering lesson. Each main item needs a direct
-original URL (no URL means no main item) and a coherent explanation, normally two or
-three connected sentences; use longer narrative for substantial essays. Separate
+original URL (no URL means no main item) and a coherent explanation. Use as many
+sentences as the idea needs, without an arbitrary length target. Separate
 unrelated papers rather than compressing them into a list of names or metrics.
+
+Start with a bold, idea-led opening: what is the actual insight or change? Explain
+the obstacle, the concrete mechanism that addresses it, and the supported result
+in a connected sequence. Spend words on the causal step a reader would otherwise
+have to guess. Resolve apparent contradictions instead of stating both sides in
+one sentence. Use an explicitly illustrative example when useful. Do not lead
+with a release name and then rush through mechanism, benchmark settings, numbers
+and caveats as unrelated facts. Keep necessary comparison conditions with results;
+retain secondary details in the evidence packet. Sentence count is not quality.
+
+Keep one story per bullet and source links together at the end. Do not add blank
+spacer blocks or one link/separator per line. Compact appearance and sufficient
+explanation are separate requirements. Review the actual delivery representation,
+not only the Markdown source or a flattened count of words and links.
 
 Make the reader able to reconstruct the problem/baseline, actual method or
 mechanism, conclusion or fair comparison, and innovation type from the item alone,
@@ -60,6 +82,24 @@ Do not add overlapping feed/thread counts as unique posts. Put process detail in
 差异补充, but preserve material source/coverage limitations in the exact final
 render even if the audit section is omitted by delivery formatting. Keep unresolved
 discoveries in the audit rather than promoting them to verified conclusions.
+
+Required per-run disclosure: explicitly read the controller's declared
+`collection-coverage.md` material and docs/COVERAGE.md. Do not assume the compact
+JSON includes that file. If absent, ask the controller for measurements; never
+invent them. Report actual attempted/planned known sources and usable/planned
+separately, source statuses (normal/partial/unavailable/unattempted), major gaps,
+this-run pages and distinct candidate keys, and mail-body/Xiaohongshu note/image
+reading progress where measured. Missing measurements stay unknown. Reconcile normalized importer counts with
+separately evidenced manual reads: zero imported blogs or a missing-source warning
+is not proof the site was unavailable. Preserve and explain the discrepancy. Report
+24h/48h certified interval traversal separately from source reach; true all-post
+coverage remains unknown. Rolling ledger counts are cumulative, not this run.
+Use qualitative labels only with the explicit known-usable-source criteria in
+COVERAGE.md and the underlying fraction. Include a concise 本次采集范围 plain
+paragraph at the end of a sourced main section before 差异补充; a `###` subheading
+is allowed, but a URL-free `##` section is omitted by rendering. Do not invent
+URLs or put required limitations only in the omitted audit. Keep the full record
+as declared material for independent review of the exact rendered message.
 
 An independent reviewer must first read each item without source/brief, record
 reader reconstruction and missing links, then check it and every claim against
@@ -104,11 +144,21 @@ Use these sections in order, omitting a main section that has no item:
 
 `<collection_json>` is a compact view: `candidates` (one entry per candidate key, with
 `kind`, `author`, `url`, `title`, `publishedAt`, `text`, `links`, `deepRead` and
-`cluster`), `clusters`, `deepArticles` (full text of deep reads; a `deep` candidate's
+`cluster`), `clusters`, `deepArticles` (preserved text of deep reads; a `deep` candidate's
 text lives there under the same `key`), `threadContexts`
 (discovery leads, not candidates), `zeroYieldSources`, `warnings` and `coverage`.
 `deepRead` is the read status of the candidate's own URL; `not_read` or null means no
-deep read exists. A cluster means the same link was shared by `fanIn` distinct posts:
+recorded deep-read status is available; preserved article text must still be inspected.
+Retained `truncated`, `error` and `dateStatus` fields are material limits; absence of a truncation flag does not establish a full read.
+For Daily Papers, `publishedAt` is the listing date, not the paper's original publication date;
+keep `paperPublishedAt` separate and label old work appropriately.
+`watchedHandle` identifies the account page where a post was seen, not its author:
+reposts may have another `author`. `alternateObservations` preserves later observations
+of the same candidate without silently merging their dates, text or limits.
+Read every alternate observation; disclose and resolve differences against evidence,
+never assume the first or longest observation is correct. Cluster links include all
+observations, but `fanIn` counts distinct candidate keys, not repeated observations.
+A cluster means the same link was shared by `fanIn` distinct posts:
 pick one representative candidate to include and record the rest as `merged` rows
 pointing at it, unless they make genuinely independent points. Fan-in is a sharing
 signal, not evidence of importance or accuracy. `zeroYieldSources` produced no items

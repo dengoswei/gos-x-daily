@@ -1,10 +1,48 @@
 # Gos X Daily
 
+## Provisioned Mac policy
+
+The installed Mac controller follows [the Mac runbook](deployment/mac/RUNBOOK.md)
+and [the daily controller prompt](prompts/run-daily.md). With explicit
+`reviewMode: "self"`, the author records a real self-check using the same identity
+and `sourceBlind: false`. Default callers retain independent review. Both modes
+require every review unit, preserved evidence, exact byte binding and no unresolved
+material issues. The Mac controller owns production delivery after the authorized
+remote retirement.
+
 可移植、可审阅的中文 AI 日报工作流：来源证据 → 草稿 → **独立理解度 / 忠实度审阅** → 精确版本绑定 → 防重复投递。
 
 This repository contains source code, editorial rules, schemas and synthetic tests.
 It does **not** contain a logged-in browser, private email, live evidence, delivery
-history, credentials, a model client, or a scheduled production deployment.
+history, credentials, a model client, or an enabled schedule. The reusable Mac
+bootstrap, controller, sender, installer and complete task/worker prompts **are
+versioned here**; deployment-specific identity/configuration and history stay local.
+
+## Mac source of truth
+
+| Responsibility | Versioned source |
+|---|---|
+| Daily controller instructions | `prompts/run-daily.md` |
+| Source, story and reader worker instructions | `prompts/workers/`, `docs/AGENT-WORKFLOW.md` |
+| Editorial depth and coherence | `EDITORIAL.md`, `prompts/compose-digest.md` |
+| Small coordinator inputs and complete worker packets | `worker-packets.mjs`, `cli.mjs worker-input` |
+| Compact Feishu post and exact review binding | `lark-post.mjs`, `review.mjs`, `digest.mjs` |
+| Mac entry/controller/sole sender | `deployment/mac/` |
+| Deliberate code promotion | `tools/install-mac.mjs` |
+
+The private installation's `run.mjs` is a small checked bootstrap; `inspect`
+returns its actual source checkout and revision. Its `MAC-RUNBOOK.md` is a pointer
+to this repository, not another editable copy of the procedure. The scheduler
+retains only authorization, installation paths and a reference to the tracked
+daily prompt. It does not duplicate the complete workflow.
+
+For an already provisioned installation, after review/tests and committing the
+source, run `node tools/install-mac.mjs --deployment-dir /ABSOLUTE/PRIVATE/INSTALL`.
+This backs up code pointers, pins tracked file hashes and points the existing
+bootstrap at this checkout. It does not create credentials, change the schedule,
+send messages or copy/reset the ledger. Then verify `run.mjs inspect` and
+`run.mjs local doctor` in the provisioned host context. Future working changes
+invalidate the release until explicitly reviewed and promoted again.
 
 ## Start on another machine / agent
 
@@ -35,7 +73,8 @@ Next read [AGENTS.md](AGENTS.md), [EDITORIAL.md](EDITORIAL.md), the
 | Browser capture | Offline `import-browser` adapter with evidence/hash checks | Authorized browser tools, actual selected X Following, screenshots/transcription, genuine attempt at each configured watch account |
 | Sources | Thread/quote context, ranking, rolling coverage accounting | Relevant Gmail/primary article reads, canonical materials and provenance |
 | Writing | `compose-input`, editorial prompts, structural digest validation | Authorized writer/model; it must explicitly read supplemental materials |
-| Review | Pending review generation and exact artifact/render binding | Genuinely independent reviewer: blind comprehension first, source fidelity second |
+| Worker routing | `worker-input` writes bounded indexes and lossless per-story files | Host coordinator spawns fresh-context subagents and assigns every candidate |
+| Review | Pending review generation and exact artifact/native-payload binding | Deployment-configured author self-review or actual independent review; advisory workers cannot fabricate approval |
 | Delivery | Offline plan, explicit send gates, durable attempt/receipt ledger | Verified Lark runtime, bot/recipient, credentials and authority to send |
 | Scheduling | None | A separately configured controller/scheduler; clone does not activate it |
 

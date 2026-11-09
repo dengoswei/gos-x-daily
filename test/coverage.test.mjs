@@ -6,7 +6,7 @@ import path from 'node:path';
 import { createCoverageState, planCoverage, recordCoverageAttempt, recordCollectionCoverage, coverageReport,
   openCoverageStore, loadCoverageState, runCoveragePlan, executionPolicy } from '../coverage.mjs';
 import { makeRuntime } from '../runtime.mjs';
-import { larkMarkdown } from '../digest.mjs';
+import { coverageStatusLine, larkMarkdown } from '../digest.mjs';
 import { main } from '../cli.mjs';
 
 const now = '2026-10-18T08:00:00.000Z';
@@ -27,6 +27,77 @@ test('fresh Gos-only planner covers recent 48h in adjacent six-hour windows newe
   assert.equal(plan.filter(value => value.priority === 'recent_24h').length, 4);
   assert.equal(coverageReport(state, now).windows['48h'].unscannedHours, 48);
   assert.throws(() => planCoverage({ ...state, origin: 'legacy-mac' }, { now }), /no legacy/);
+});
+
+test('fractional-hour failed slices retain exactly 48 unscanned hours and zero scanned time', () => {
+  const state = createCoverageState(now), start = Date.parse(before(48));
+  // These adjacent millisecond slices used to sum to 48.00000000000001 hours.
+  const boundaries = [0, 86136768, 172555249, 48 * HOUR];
+  for (let i = 0; i < boundaries.length - 1; i++) {
+    const window = { start: new Date(start + boundaries[i]).toISOString(), end: new Date(start + boundaries[i + 1]).toISOString() };
+    recordCoverageAttempt(state, window, result(window, 'bounded_browser_capture', { scanned: false }), { now });
+  }
+  const beforeReport = structuredClone(state), report = coverageReport(state, now);
+  assert.deepEqual(state, beforeReport, 'reporting must not rewrite timestamps, evidence or attempts');
+  assert.equal(report.asOf, now);
+  for (const hours of [24, 48]) {
+    const window = report.windows[`${hours}h`];
+    assert.equal(window.unscannedHours, hours);
+    assert.equal(window.uiScannedHours, 0);
+    assert.equal(window.start, before(hours));
+    assert.equal(window.end, now);
+    assert.equal(window.gaps.reduce((sum, gap) => sum + Date.parse(gap.end) - Date.parse(gap.start), 0), hours * HOUR);
+    assert.ok(window.gaps.every(gap => gap.reasons.includes('bounded_browser_capture')));
+  }
+  assert.equal(report.unknownMissingPostCount, null);
+  assert.match(coverageStatusLine({ provenance: { transport: 'gos-supported-browser' }, coverage: { accounting: report } }), /未做区间遍历/);
+});
+
+test('coverage accounting preserves a genuine one-millisecond scan or gap without rounding it to zero', () => {
+  const newestMillisecond = { start: new Date(Date.parse(now) - 1).toISOString(), end: now };
+  const almostFullHorizon = { start: before(48), end: newestMillisecond.start };
+  for (const [confirmedWindow, scannedMs] of [[newestMillisecond, 1], [almostFullHorizon, 48 * HOUR - 1]]) {
+    const state = createCoverageState(now);
+    recordCoverageAttempt(state, confirmedWindow, result(confirmedWindow), { now });
+    const report = coverageReport(state, now).windows['48h'];
+    assert.equal(report.uiScannedHours, scannedMs / HOUR);
+    assert.equal(report.unscannedHours, (48 * HOUR - scannedMs) / HOUR);
+    assert.ok(report.uiScannedHours > 0 && report.unscannedHours > 0);
+  }
+});
+
+test('rounding down fractional failed slices cannot invent near-zero scanned coverage', () => {
+  const state = createCoverageState(now), start = Date.parse(before(48));
+  // The old sum was 47.99999999999999 hours, inventing a tiny positive scan.
+  const boundaries = [0, 15892, 86409628, 172555249, 48 * HOUR];
+  for (let i = 0; i < boundaries.length - 1; i++) {
+    const window = { start: new Date(start + boundaries[i]).toISOString(), end: new Date(start + boundaries[i + 1]).toISOString() };
+    recordCoverageAttempt(state, window, result(window, 'bounded_browser_capture', { scanned: false }), { now });
+  }
+  const report = coverageReport(state, now);
+  assert.equal(report.windows['48h'].unscannedHours, 48);
+  assert.equal(report.windows['48h'].uiScannedHours, 0);
+  assert.match(coverageStatusLine({ provenance: { transport: 'gos-supported-browser' }, coverage: { accounting: report } }), /未做区间遍历/);
+});
+
+test('rendering distinguishes current screenshot evidence from cumulative rolling candidates', () => {
+  const state = createCoverageState(before(1));
+  const post = id => ({ url: `https://x.com/synthetic/status/${id}`, text: `Synthetic ${id}` });
+  const link = id => ({ href: `https://example.org/${id}`, eligible: true, readStatus: 'read' });
+  recordCollectionCoverage(state, { collectionId: 'synthetic-prior', collectedAt: before(1),
+    sources: { xFollowing: [post(1), post(2)] }, deepLinkAudit: [link(1), link(2), link(3)] });
+  const current = { collectionId: 'synthetic-current', collectedAt: now,
+    provenance: { transport: 'gos-supported-browser', evidence: Array.from({ length: 4 }, () => ({ kind: 'screenshot' })) },
+    sources: { xFollowing: [post(3)] }, deepLinkAudit: [link(4), link(5)], coverage: {} };
+  current.coverage.accounting = recordCollectionCoverage(state, current);
+  assert.equal(current.sources.xFollowing.length, 1);
+  assert.equal(current.coverage.accounting.knownCandidates.observedPosts, 3);
+  assert.equal(current.coverage.accounting.knownCandidates.observedLinks, 5);
+  const line = coverageStatusLine(current);
+  assert.match(line, /本期为浏览器截图抽样（4 张截图）/);
+  assert.match(line, /滚动覆盖账本累计观察 3 条帖子、链接 5 个/);
+  assert.doesNotMatch(line, /本期[^；]*3 条帖子/);
+  assert.match(coverageStatusLine({ ...current, provenance: { transport: 'cdp' } }), /滚动覆盖账本累计观察链接 5 个/);
 });
 
 test('six-hour cap failure splits into exact halves without losing observations', () => {

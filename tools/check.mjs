@@ -5,14 +5,14 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 const root = fileURLToPath(new URL('../', import.meta.url));
-const listed = spawnSync('git', ['ls-files', '-z'], { cwd: root, encoding: 'utf8' });
+const listed = spawnSync('git', ['ls-files', '--cached', '--others', '--exclude-standard', '-z'], { cwd: root, encoding: 'utf8' });
 const skip = new Set(['.git', 'node_modules', 'data', 'production', 'private', '.local', 'runs', 'evidence', 'mail', 'primary']);
 const walk = (dir, prefix = '') => fs.readdirSync(dir, { withFileTypes: true }).flatMap(e => {
   if (skip.has(e.name) || e.name.endsWith('.local.json')) return [];
   const name = path.posix.join(prefix, e.name);
   return e.isDirectory() ? walk(path.join(dir, e.name), name) : [name];
 });
-const files = listed.status === 0 && listed.stdout ? listed.stdout.split('\0').filter(Boolean) : walk(root);
+const files = listed.status === 0 && listed.stdout ? [...new Set(listed.stdout.split('\0').filter(Boolean))] : walk(root);
 const errors = [];
 for (const file of files) {
   const absolute = path.join(root, file);

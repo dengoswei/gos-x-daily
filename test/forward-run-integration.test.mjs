@@ -73,7 +73,25 @@ test('complete forward run: synthetic browser import, prompt, supplemental mater
   const rendered = JSON.parse(fs.readFileSync(path.join(root, 'delivery.json'))).args[7];
   assert.ok(!rendered.includes('Breakthrough Research') && !rendered.includes('No synthetic item.'));
   const known = sources.coverage.accounting.knownCandidates;
-  assert.ok(rendered.endsWith(`\n\n采集完整性：本期为浏览器截图抽样（观察 ${known.observedPosts} 条帖子、3 张截图），未做区间遍历，近24小时与近48小时覆盖均未验证；已观察链接 ${known.observedLinks} 个，规则过滤 ${known.filterDrops} 个，待深读 ${known.deepReadBacklog} 个（其中失败 ${known.deepReadFailures} 个）。未看到的帖子数未知。\n候选处置：共 1 条候选，收录 1 条，合并 0 条，跳过 0 条。\n`), rendered);
+  assert.ok(rendered.endsWith(`\n\n采集完整性：本期为浏览器截图抽样（3 张截图），未做区间遍历，近24小时与近48小时覆盖均未验证；滚动覆盖账本累计观察 ${known.observedPosts} 条帖子、链接 ${known.observedLinks} 个，规则过滤 ${known.filterDrops} 个，待深读 ${known.deepReadBacklog} 个（其中失败 ${known.deepReadFailures} 个）。未看到的帖子数未知。\n候选处置：共 1 条候选，收录 1 条，合并 0 条，跳过 0 条。\n`), rendered);
   assert.deepEqual(prepared.validation.repeatedUrls, []);
+  // Exercise the real CLI under the explicit author-self-review deployment contract.
+  snapshotInputs.reviewMode = 'self';
+  snapshotInputs.renderStyle = 'concise';
+  writeJson('publication.json', publication);
+  const concise = larkMarkdown(markdown, sources, { renderStyle: 'concise' });
+  assert.ok(concise.includes('近24小时仍有 24 小时'));
+  assert.ok(!concise.includes('候选处置') && !concise.includes('滚动覆盖账本累计'));
+  const selfReview = approveSyntheticReview({ ...snapshotInputs, rootDir: root, renderedMarkdown: concise });
+  selfReview.reviewerId = snapshotInputs.authorId;
+  for (const unit of selfReview.units) unit.comprehension.sourceBlind = false;
+  writeJson('review.approved.json', selfReview);
+  const prepareArgs = ['prepare-delivery', '--publication', path.join(root, 'publication.json'), '--sources', path.join(root, 'sources.json'), '--digest', path.join(root, 'digest.md'), '--config', path.join(root, 'runtime.json'), '--out', path.join(root, 'self-delivery.json')];
+  await assert.rejects(main(prepareArgs), /review mode must match/);
+  target.reviewMode = 'self';
+  writeJson('runtime.json', { dataDir: path.join(root, 'data'), lookbackHours: 48, collectionEnabled: false, lark: target });
+  const selfPrepared = await main(prepareArgs);
+  assert.equal(selfPrepared.status, 'prepared_not_sent');
+  assert.equal(JSON.parse(fs.readFileSync(path.join(root, 'self-delivery.json'))).args[7], concise);
   assert.deepEqual(fs.readdirSync(ledgerDir), ['ledger.json']);
 });

@@ -7,8 +7,8 @@
     "node": ">=22"
   },
   "scripts": {
-    "test": "node --test test/*.test.mjs",
-    "test:synthetic": "node --test test/forward-run-integration.test.mjs",
+    "test": "node tools/test.mjs",
+    "test:synthetic": "node tools/test.mjs test/forward-run-integration.test.mjs",
     "check": "node tools/check.mjs",
     "inspect": "node cli.mjs inspect-config"
   }

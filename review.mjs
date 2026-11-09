@@ -6,8 +6,15 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
+import { larkPostJson } from './lark-post.mjs';
 
 const KIND = 'x-daily-recovery-review-v1';
+const SELF_KIND = 'x-daily-self-review-v1';
+function reviewKind(options) {
+  if (options.reviewMode === undefined || options.reviewMode === 'independent') return KIND;
+  if (options.reviewMode === 'self') return SELF_KIND;
+  throw new Error('Unsupported review mode');
+}
 export const sha256 = value => createHash('sha256').update(value).digest('hex');
 const hash = sha256;
 const meaningful = value => typeof value === 'string' && value.trim().length > 0;
@@ -69,9 +76,11 @@ export function deriveReviewUnits(markdown, renderedMarkdown) {
 /**
  * All paths are relative to rootDir. A fresh material file and at least one
  * preserved evidence file are required: history notes are not original evidence.
- * renderedMarkdown must be the exact delivery payload; an optional dispositionsPath is bound like the digest.
+ * renderedMarkdown is the reviewed reader text. With feishu-post-v1, the exact
+ * native post JSON receives its own mandatory review unit and hash binding too.
+ * An optional dispositionsPath is bound like the digest.
  */
-export function buildReviewSnapshot({ rootDir, digestPath, sourcesPath, dispositionsPath, materialsPaths, evidencePaths, renderedMarkdown, authorId }) {
+export function buildReviewSnapshot({ rootDir, digestPath, sourcesPath, dispositionsPath, materialsPaths, evidencePaths, renderedMarkdown, authorId, transport }) {
   if (!meaningful(rootDir) || !meaningful(authorId)) throw new Error('Review root and author identity are required');
   if (!Array.isArray(materialsPaths) || !materialsPaths.length || !Array.isArray(evidencePaths) || !evidencePaths.length) {
     throw new Error('Review requires material and evidence files');
@@ -109,17 +118,26 @@ export function buildReviewSnapshot({ rootDir, digestPath, sourcesPath, disposit
     }
   }
   const units = deriveReviewUnits(markdown, renderedMarkdown);
-  const bindings = { authorId, files, renderedSha256: hash(renderedMarkdown), units: units.map(({ text, ...unit }) => unit) };
+  let transportBinding;
+  if (transport !== undefined) {
+    if (transport !== 'feishu-post-v1') throw new Error('Unsupported delivery transport');
+    const text = larkPostJson(renderedMarkdown), sha256 = hash(text);
+    transportBinding = { kind: transport, sha256 };
+    units.push({ id: `transport-${sha256.slice(0, 12)}`, kind: 'transport', sha256, text });
+  }
+  const bindings = { authorId, files, renderedSha256: hash(renderedMarkdown), units: units.map(({ text, ...unit }) => unit),
+    ...(transportBinding ? { transport: transportBinding } : {}) };
   return { bindings, snapshotSha256: hash(JSON.stringify(bindings)), units };
 }
 
 /** Creates pending records only. An independent reviewer must supply findings. */
 export function createReviewInput(options) {
+  const kind = reviewKind(options);
   const snapshot = buildReviewSnapshot(options);
   const createdAt = options.now ?? new Date().toISOString();
   instant(createdAt, 'review creation');
   return {
-    schemaVersion: 1, kind: KIND, status: 'pending', createdAt,
+    schemaVersion: 1, kind, status: 'pending', createdAt,
     authorId: options.authorId, reviewerId: null, reviewedAt: null,
     snapshotSha256: snapshot.snapshotSha256, bindings: snapshot.bindings,
     unresolvedIssues: [],
@@ -133,9 +151,11 @@ export function createReviewInput(options) {
 
 /** Throws unless the complete approved record matches the exact current bytes. */
 export function validateReview(review, options) {
-  if (review?.schemaVersion !== 1 || review?.kind !== KIND || review?.status !== 'approved') throw new Error('Independent approved recovery review is required');
-  if (!meaningful(review.authorId) || !meaningful(review.reviewerId) || review.authorId.trim() === review.reviewerId.trim() || review.authorId !== options.authorId) {
-    throw new Error('Review requires a distinct independent reviewer and matching author identity');
+  const kind = reviewKind(options);
+  const selfReview = kind === SELF_KIND;
+  if (review?.schemaVersion !== 1 || review?.kind !== kind || review?.status !== 'approved') throw new Error('An approved record matching the configured review mode is required');
+  if (!meaningful(review.authorId) || !meaningful(review.reviewerId) || (selfReview ? review.authorId.trim() !== review.reviewerId.trim() : review.authorId.trim() === review.reviewerId.trim()) || review.authorId !== options.authorId) {
+    throw new Error(selfReview ? 'Self-review must retain the actual author identity' : 'Review requires a distinct independent reviewer and matching author identity');
   }
   const created = instant(review.createdAt, 'review creation');
   const reviewed = instant(review.reviewedAt, 'review completion');
@@ -154,9 +174,9 @@ export function validateReview(review, options) {
     }
     if (!Array.isArray(unit.unresolvedIssues) || unit.unresolvedIssues.length) throw new Error(`Review unit ${expected.id} has unresolved issues`);
     const comprehension = unit.comprehension, fidelity = unit.fidelity;
-    if (comprehension?.status !== 'pass' || comprehension.sourceBlind !== true || !meaningful(comprehension.notes) ||
+    if (comprehension?.status !== 'pass' || comprehension.sourceBlind !== !selfReview || !meaningful(comprehension.notes) ||
         !['problem', 'method', 'result', 'innovation'].every(key => meaningful(comprehension.reconstruction?.[key]))) {
-      throw new Error(`Review unit ${expected.id} lacks independent comprehension reconstruction`);
+      throw new Error(`Review unit ${expected.id} lacks the required comprehension reconstruction`);
     }
     if (fidelity?.status !== 'pass' || !meaningful(fidelity.notes) || !Array.isArray(fidelity.sourcePaths) || !fidelity.sourcePaths.length ||
         new Set(fidelity.sourcePaths).size !== fidelity.sourcePaths.length || fidelity.sourcePaths.some(file => !permittedSources.has(file))) {

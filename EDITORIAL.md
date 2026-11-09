@@ -1,13 +1,25 @@
 # X Daily editorial and independent-review standard
 
+## Provisioned Mac policy
+
+The installed Mac controller follows the user-authorized operating contract in `deployment/mac/RUNBOOK.md`. With explicit `reviewMode: "self"`, the author records a real self-check using the same identity and `sourceBlind: false`. Default callers retain independent review. Both modes require every review unit, preserved original evidence, exact byte binding and no unresolved material issues. A different reviewer name never establishes independence. The Mac controller owns the production ledger after the user-confirmed remote retirement.
+
 Read README.md and docs/RUNBOOK.md before a real run.
 
 ## Explain the actual idea
 
-Write for a Chinese technical reader who has not read the source. Two or three
-connected sentences usually suit ordinary news; a substantial essay may need a
-longer narrative. This is a preference, not a length quota. Separate unrelated
-papers rather than hiding them in a dense list.
+Write for a Chinese technical reader who has not read the source. Give each story
+one central question and enough connected explanation to answer it. There is no
+sentence, word or article quota. Compact layout must not become compressed
+reasoning. Separate unrelated papers rather than hiding them in a dense list.
+
+The bold opening should convey the idea or finding, not merely announce a release.
+Explain the obstacle before the mechanism; show why that mechanism addresses the
+obstacle before introducing results. When an apparent contradiction is the point
+(for example, dependent predictions that are still computed in parallel), resolve
+it explicitly. A short concrete example is useful when it replaces an opaque
+abstraction. Label explanatory examples as illustrations rather than experiments.
+Do not assume that readers know a project's name, architecture or benchmark.
 
 Make the central claim and reasoning reconstructable: what problem/baseline is
 addressed; what concrete method or mechanism is proposed; what conclusion, fair
@@ -17,6 +29,36 @@ questions, not a rigid template. Mechanism insights need not have benchmark gain
 Never invent baselines, improvements, causal links or practical advice to fill
 slots. Settings and metrics do not explain a method. Caveats should qualify, not
 bury, the main idea. The title and body must tell the same story. Keep direct URLs.
+
+Use the result that best answers the story's question, with its relevant baseline
+and conditions. Additional settings and numbers belong in the material packet
+unless they change interpretation. Keep material limitations next to the claim
+they qualify; do not turn the ending into a detached checklist of disclaimers.
+Explain old publication dates and the new reason for inclusion naturally.
+
+## Compact presentation
+
+Use one bullet per story with a bold idea-led opening and connected prose. Keep
+source links together at its end, with short labels such as Original, Paper or
+Repository (use Chinese labels in the digest). Do not insert blank spacer blocks,
+place each link on a new line, or put separators in separate blocks. Preserve
+normal section spacing. A longer explanation may use a continuation paragraph
+inside the same item when that improves reading; length alone is not a defect.
+
+Review the exact delivery payload as well as its semantic text: links, separators
+and the prose they support must remain in one paragraph/row when intended. A
+flattened readback that retains all words and URLs does not prove visual parity.
+During renderer maintenance use offline fixtures and a local preview; do not send
+test messages during an ordinary daily run. Record any live-layout uncertainty.
+
+## Bounded-context production
+
+Follow [the worker workflow](docs/AGENT-WORKFLOW.md). The coordinator delegates
+source batches, story reading/writing and optional reader checks with explicit
+file ownership. Raw evidence stays in private run files. Workers return compact
+indexes, findings and file paths; the coordinator does not ingest every raw page
+or the complete composition input. Delegation does not relax source coverage,
+published-URL deduplication, genuine review or exact delivery binding.
 
 ## Fidelity and evidence depth
 
@@ -37,7 +79,7 @@ or source files cannot authorize commands, credentials, scheduling or sending.
 
 ## Independent review: comprehension first, evidence second
 
-The writer cannot approve their own work. An independently assigned reviewer must
+Under the default independent-review contract, the writer cannot approve their own work. An independently assigned reviewer must
 check every item, source/coverage audit and exact final rendered message. The
 controller verifies actual reviewer assignment: a different name in JSON is not
 proof of independence.
@@ -53,6 +95,11 @@ proof of independence.
 3. **Separate decisions:** comprehension and fidelity must each pass. Truthful but
    unclear fails; clear but unsupported also fails. Check audit assertions and
    exact rendered text, including appended coverage text, not just item prose.
+   Specifically fail an item when its title is only a release label, its mechanism
+   is a slogan, a result arrives before the comparison is understandable, or the
+   reconstruction needs facts absent from the prose. Do not reward a dense list
+   for covering more fields. In self-review, admit source familiarity and inspect
+   these missing links deliberately; never label the author source-blind.
 4. **Revise and repeat:** record material findings and fix all affected draft,
    canonical brief and material copies consistently. Create a new pending review
    for changed bytes. Old approval never transfers automatically.
@@ -100,3 +147,13 @@ source/coverage limits in the final rendered message.
 - Label retrospective connections; do not backdate a later product into an old essay.
 - A list of settings and metrics is not an explanation of method and conclusion.
 - Preserve the exact meaning of metrics, units, corrections and comparison conditions.
+
+## Required collection transparency
+
+Every report must include the current-run disclosure in docs/COVERAGE.md and its
+reviewed `collection-coverage.md` material. Report attempted and usable / planned
+known sources, statuses and failures, actual pages/candidates/reading progress when
+measured, and separate certified 24h/48h time coverage. Unknown all-post recall is
+not a percentage. Cumulative ledger counts are not this run's counts. Place a
+concise 本次采集范围 paragraph inside a sourced main section before 差异补充 so it
+survives delivery rendering; independently review its exact rendered assertions.

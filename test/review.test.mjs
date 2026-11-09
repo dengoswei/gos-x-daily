@@ -149,3 +149,19 @@ test('source provenance cannot omit, duplicate, or falsify declared evidence byt
   fs.writeFileSync(sourcesFile, 'invalid JSON');
   assert.throws(() => createReviewInput(options), /JSON/);
 });
+
+// Explicit Mac self-review is a different contract; the default remains independent.
+test('self-review mode is explicit, honest and still bound to source bytes', t => {
+  const options = { ...setup(t), reviewMode: 'self' };
+  const review = syntheticApproval(options);
+  review.reviewerId = options.authorId;
+  for (const unit of review.units) unit.comprehension.sourceBlind = false;
+  assert.equal(review.kind, 'x-daily-self-review-v1');
+  assert.equal(validateReview(review, options).ok, true);
+  assert.throws(() => validateReview(review, { ...options, reviewMode: undefined }), /configured review mode/);
+  const dishonest = structuredClone(review);
+  dishonest.units[0].comprehension.sourceBlind = true;
+  assert.throws(() => validateReview(dishonest, options), /reconstruction/);
+  fs.appendFileSync(path.join(options.rootDir, 'evidence/source.txt'), 'Changed source');
+  assert.throws(() => validateReview(review, options), /stale or tampered/);
+});

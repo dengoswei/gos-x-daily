@@ -147,7 +147,11 @@ test('evidence hashing rejects tampering, missing files and path/symlink escapes
   assert.throws(() => verifyEvidenceFiles(bundle, dir), /inside the artifact/);
   bundle.evidence[0].path = 'evidence/missing.png';
   assert.throws(() => verifyEvidenceFiles(bundle, dir), /ENOENT/);
-  fs.symlinkSync('/etc/hostname', path.join(dir, 'evidence/escape.png'));
+  const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'xdaily-outside-'));
+  t.after(() => fs.rmSync(outside, { recursive: true, force: true }));
+  const outsideFile = path.join(outside, 'target.txt');
+  fs.writeFileSync(outsideFile, 'synthetic outside-root evidence');
+  fs.symlinkSync(outsideFile, path.join(dir, 'evidence/escape.png'));
   bundle.evidence[0].path = 'evidence/escape.png';
   assert.throws(() => verifyEvidenceFiles(bundle, dir), /escaped/);
 });
@@ -211,6 +215,17 @@ test('default watch configuration mirrors the karpathy compatibility fields', ()
   assert.equal(collection.stats.watchProfiles, 1);
   assert.equal(collection.stats.karpathy, 1);
   assert.deepEqual(collection.checks.watch.karpathy, collection.checks.karpathy);
+});
+
+test('mixed-case Karpathy handle retains lowercase compatibility fields', () => {
+  const bundle = fixture();
+  bundle.feeds.Karpathy = bundle.feeds.karpathy;
+  delete bundle.feeds.karpathy;
+  const collection = collectionFromBrowserArtifacts(watchRuntime([{ ...karpathyProfile, handle: 'Karpathy' }]), bundle);
+  assert.equal(collection.sources.watchProfiles[0].handle, 'Karpathy');
+  assert.deepEqual(collection.sources.karpathy, collection.sources.watchProfiles[0].items);
+  assert.equal(collection.stats.karpathy, 1);
+  assert.deepEqual(collection.checks.karpathy, collection.checks.watch.Karpathy);
 });
 
 test('an optional watch profile missing from the bundle warns; a required one throws', () => {
