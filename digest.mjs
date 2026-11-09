@@ -142,7 +142,7 @@ export function publicationGates(rootDir, snapshotInputs, markdown, collection, 
 
 const sha256 = value => createHash('sha256').update(value).digest('hex');
 
-export function prepareDelivery(markdown, collection, target, publication) {
+export function prepareDelivery(markdown, collection, target, publication, { revisionOf } = {}) {
   validateDigest(markdown, collection);
   if (target?.enabled !== true) throw new Error('Lark delivery is disabled until the app, target, and authentication are separately verified');
   if (!/^ou_[a-f0-9]{32}$/i.test(target?.userId ?? '')) throw new Error('Expected a verified Lark open user ID');
@@ -164,14 +164,18 @@ export function prepareDelivery(markdown, collection, target, publication) {
     kind: inputs.transport, content: larkPostJson(inputs.renderedMarkdown),
   };
   if (transport) transport.sha256 = sha256(transport.content);
-  const idempotencyKey = `xdaily-${deploymentId}-${collection.date}`;
+  if (revisionOf !== undefined && (!/^om_[a-z0-9]+$/.test(revisionOf) || !transport ||
+      !inputs.renderedMarkdown.startsWith(`# X AI 日报 ${collection.date}\n${Number(collection.date.slice(5,7))} 月 ${Number(collection.date.slice(-2))} 日修订版。`))) {
+    throw new Error('A revision needs a native post, an original message ID and a visible revision label');
+  }
+  const idempotencyKey = `xdaily-${deploymentId}-${collection.date}${revisionOf ? '-revision' : ''}`;
   const ledger = inspectDeliveryLedger(publication.ledgerDir, { date: collection.date, idempotencyKey });
   const plan = {
     schemaVersion: 2, executable: target.executable,
     ...(transport ? { transport } : {}),
     args: ['im', '+messages-send', '--as', 'bot', '--user-id', target.userId,
       '--markdown', inputs.renderedMarkdown, '--idempotency-key', idempotencyKey],
-    target: { userId: target.userId, deploymentId, executable: target.executable },
+    target: { userId: target.userId, deploymentId, executable: target.executable, ...(revisionOf ? { revisionOf } : {}) },
     validation: { ...gates.validation, review: reviewValidation }, ledgerBoundary: ledger.metadata, status: 'prepared_not_sent',
     publishedUrls: [...new Set(digestUrls(markdown).map(canonicalUrl))],
     publication: { rootDir: inputs.rootDir, snapshotInputs: publication.snapshotInputs, reviewPath: publication.reviewPath,

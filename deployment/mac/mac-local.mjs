@@ -4,10 +4,10 @@ import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { prepareDelivery, sendDelivery, readPublicationFile } from '../../digest.mjs';
-import { recordPublishedUrls, inspectDeliveryLedger } from '../../delivery-ledger.mjs';
+import { recordPublishedUrls, inspectDeliveryLedger, recordDeliveryAttempt, recordDeliveryReceipt, recordDeliveryUncertain } from '../../delivery-ledger.mjs';
 
 import { deploymentHome, sourceRepo } from './paths.mjs';
-import { expectedReadback, normalizedReadback } from './transport.mjs';
+import { expectedReadback, nativeSenderArgs, normalizedReadback } from './transport.mjs';
 const base = deploymentHome();
 const hash = bytes => createHash('sha256').update(bytes).digest('hex');
 const read = file => JSON.parse(fs.readFileSync(file, 'utf8'));
@@ -80,7 +80,7 @@ function sameDayMessages(config, date) {
   } while (token);
   return messages;
 }
-function readBack(config, date, accepted, plan) {
+function readBack(config, date, accepted, plan, prefix = prefixFor(config,date)) {
   const response = cli(config, ['im', '+messages-mget', '--as', 'bot', '--message-ids', accepted.messageId]);
   if (response.ok !== true) throw new Error('Accepted message could not be read back');
   const messages = response.data?.messages;
@@ -99,7 +99,7 @@ function readBack(config, date, accepted, plan) {
     renderedSha256:hash(plan.args[7]), readbackVerified:true, exactVisibleText:true, layoutVerified:false,
     ...(plan.transport ? {transportSha256:plan.transport.sha256} : {}),
     messageUrl:message.message_app_link, verifiedAt:new Date().toISOString(), verifiedSourceLinks:urls.length };
-  const file=prefixFor(config,date)+'.readback.json';
+  const file=prefix+'.readback.json';
   if (!fs.existsSync(file)) write(file, { ...result, response });
   return result;
 }
@@ -113,6 +113,70 @@ function publicationAt(file, config) {
   }
   return p;
 }
+
+function targetFor(config) {
+  return {enabled:true,deploymentId:config.namespace,userId:config.userId,reviewMode:config.reviewMode,
+    transport:'feishu-post-v1',executable:path.join(sourceRepo,'deployment/mac/mac-sender.mjs')};
+}
+
+function finishRevision(config, date, accepted, plan, prefix) {
+  try {
+    const history = path.join(config.ledgerDir,'published-urls.jsonl');
+    if (!fs.existsSync(history) || !fs.readFileSync(history,'utf8').split('\n').filter(Boolean)
+      .some(line => JSON.parse(line).idempotencyKey === plan.args[9])) {
+      recordPublishedUrls(config.ledgerDir, {date,idempotencyKey:plan.args[9],urls:plan.publishedUrls});
+    }
+    return {...readBack(config,date,accepted,plan,prefix),revisionOf:plan.target.revisionOf};
+  } catch(error) {
+    return {status:'accepted_readback_pending',date,messageId:accepted.messageId,
+      readbackError:error.message,next:'reconcile-revision only; do not resend'};
+  }
+}
+
+function revise(config, date, originalId, publication) {
+  authority(config,date);
+  const original = receipt(config,date);
+  if (!original || original.messageId !== originalId) throw new Error('Revision must reference the canonical accepted receipt');
+  const key = keyFor(date)+'-revision';
+  const prefix = path.join(config.ledgerDir,hash(key));
+  if (fs.existsSync(prefix+'.receipt.json')) {
+    verifyIdentity(config);
+    return finishRevision(config,date,read(prefix+'.receipt.json'),read(prefix+'.plan.json'),prefix);
+  }
+  inspectDeliveryLedger(config.ledgerDir,{date,idempotencyKey:key});
+  if (!publication) return {status:'no_revision_attempt',date};
+  const today = new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Shanghai'}).format(new Date());
+  if (date !== today) throw new Error('This command permits only an explicit same-day revision');
+  verifyIdentity(config);
+  const originalPlan = read(prefixFor(config,date)+'.plan.json');
+  readBack(config,date,original,originalPlan);
+  const messages = sameDayMessages(config,date);
+  if (messages.some(m => m.message_id !== originalId && !m.deleted && m.sender?.id === config.profile &&
+    String(m.content).includes(`X AI 日报 ${date}`))) throw new Error('A second report already exists in the recipient chat; reconcile before revising');
+  const {markdown,sources,p} = publication;
+  const plan = prepareDelivery(markdown,sources,targetFor(config),p,{revisionOf:originalId});
+  if (plan.args[9] !== key) throw new Error('Revision date/key mismatch');
+  const nativeArgs = nativeSenderArgs(plan);
+  const replyArgs = ['im','+messages-reply','--as','bot','--message-id',originalId,...nativeArgs.slice(6)];
+  const planFile = prefix+'.plan.json';
+  if (fs.existsSync(planFile)) {
+    if (JSON.stringify(read(planFile)) !== JSON.stringify(plan)) throw new Error('Existing revision plan differs');
+  } else write(planFile,plan);
+  const attempt = recordDeliveryAttempt(config.ledgerDir,{date,idempotencyKey:key,planSha256:plan.planSha256,target:plan.target});
+  let accepted;
+  try {
+    const sent = cli(config,replyArgs);
+    if (sent.ok !== true || !/^om_[a-z0-9]+$/.test(sent.data?.message_id ?? '') || sent.data.message_id === originalId) {
+      throw new Error('Revision API acceptance unconfirmed');
+    }
+    accepted = recordDeliveryReceipt(attempt,{messageId:sent.data.message_id});
+  } catch(error) {
+    try { recordDeliveryUncertain(attempt,'revision_send_or_receipt_outcome_unconfirmed'); } catch { /* Durable attempt blocks retries. */ }
+    throw new Error('Revision outcome uncertain; preserve the attempt and reconcile against recipient history.',{cause:error});
+  }
+  return finishRevision(config,date,accepted,plan,prefix);
+}
+
 export async function main(args) {
   const config=loadLocalConfig();
   const command=args[0];
@@ -162,6 +226,18 @@ export async function main(args) {
     }
     return result;
   }
+  if (command === 'reconcile-revision') {
+    const date = value('--date');
+    if (!validDate(date)) throw new Error('A valid --date is required');
+    return revise(config,date,receipt(config,date)?.messageId);
+  }
+  if (command === 'publish-revision') {
+    if (!args.includes('--publication') || !args.includes('--reply-to')) throw new Error('Supply --publication and explicit --reply-to for an authorized revision');
+    const p = publicationAt(value('--publication'),config);
+    const sources = JSON.parse(readPublicationFile(p.rootDir,p.snapshotInputs.sourcesPath));
+    const markdown = readPublicationFile(p.rootDir,p.snapshotInputs.digestPath);
+    return revise(config,sources.date,value('--reply-to'),{p,sources,markdown});
+  }
   if(command !== 'publish' || !args.includes('--publication')) throw new Error('Use doctor, start-run, status --date, reconcile --date or publish --publication');
   const p=publicationAt(value('--publication'),config);
   const sources=JSON.parse(readPublicationFile(p.rootDir,p.snapshotInputs.sourcesPath));
@@ -174,7 +250,7 @@ export async function main(args) {
   verifyIdentity(config);
   const existing=sameDayMessages(config,date).filter(m=>String(m.content).includes(`X AI 日报 ${date}`));
   if(existing.length) return {status:'already_present_requires_reconciliation',messageIds:existing.map(m=>m.message_id),date};
-  const target={enabled:true,deploymentId:config.namespace,userId:config.userId,reviewMode:config.reviewMode,transport:'feishu-post-v1',executable:path.join(sourceRepo,'deployment/mac/mac-sender.mjs')};
+  const target=targetFor(config);
   const markdown=readPublicationFile(p.rootDir,p.snapshotInputs.digestPath);
   const plan=prepareDelivery(markdown,sources,target,p);
   const planFile=prefixFor(config,date)+'.plan.json';

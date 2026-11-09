@@ -72,6 +72,19 @@ node $DEPLOYMENT_HOME/run.mjs local reconcile --date YYYY-MM-DD
 
 An uncertain attempt is a real delivery incident. Keep its record, inspect recipient history and reconcile evidence; never reset the ledger, alter the key or switch bots to retry. An accepted report is returned by `local status --date YYYY-MM-DD` and subsequent `publish` invocations without another send.
 
+### Explicit same-day revision
+
+An explicit user request to regenerate and deliver an already accepted same-day
+report permits one reviewed native-post reply to the canonical message. Confirm
+the original receipt and successful readback first. Keep the original delivery
+records and coverage history. Give the revised digest a visible opening beginning
+`M 月 D 日修订版。` and review it as a new publication. Use
+`local publish-revision --publication RUN/publication.json --reply-to ORIGINAL_ID`.
+The separate revision record binds that original ID and uses one fixed revision
+key per date. This is a separate delivery, never recovery of an uncertain attempt.
+The schedule does not call this command. If API acceptance was recorded, use
+`local reconcile-revision --date YYYY-MM-DD` for history and readback only.
+
 ## Dependencies and maintenance
 
 Node 22+ is the source requirement. This installed release pins Node 26.8.1 and Lark CLI 1.0.36 to their actual executable hashes. The core has no npm dependencies. Existing macOS Keychain credentials and the fixed profile supply bot authentication. Production requires the Mac awake, Codex running with the scheduled task available, the authorized browser session usable and network access. Optional-source access can fail with disclosure; failure of the required Following session needs an operational error.
