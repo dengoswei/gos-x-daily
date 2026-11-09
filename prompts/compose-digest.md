@@ -131,6 +131,12 @@ Return the complete Markdown draft; the controller owns review and gated deliver
 
 ## Sections
 
+Within each section, order items by reader impact: lead with the day's most
+consequential development, so the first item of the first non-empty section
+carries the strongest story. Fan-in, post recency and author prominence are
+signals, not the ranking; an explained mechanism outranks an unexplained
+headline.
+
 Use these sections in order, omitting a main section that has no item:
 1. `## Frameworks / Infra`
 2. `## Breakthrough Research`
