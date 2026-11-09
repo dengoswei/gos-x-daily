@@ -321,11 +321,12 @@ export async function orchestrate({ runDir, modelsFile, outDir }) {
   ].join('\n\n');
 
   let composed = await runStage({ stage: 'compose', label: 'compose', prompt: composeBase, parse: parseComposed });
-  let validation = null, failure = null, repaired = false;
+  let validation = null, failure = null, repaired = false, repairedFrom = null;
   try { validation = validateComposed(composed.markdown, collection, composed.dispositions); }
   catch (error) { failure = error.message; }
   if (failure) {
     repaired = true;
+    repairedFrom = failure;
     composed = await runStage({ stage: 'compose', label: 'compose.repair', parse: parseComposed,
       prompt: `${composeBase}\n\n${tagged('validation_error', `The offline validator rejected your previous draft: ${failure}\nReturn the complete corrected digest and ledger in exactly the required format.`)}\n` });
     try { validation = validateComposed(composed.markdown, collection, composed.dispositions); failure = null; }
@@ -346,7 +347,7 @@ export async function orchestrate({ runDir, modelsFile, outDir }) {
     decisions: decisions.map(decision => ({ key: decision.key, action: decision.action, ...(decision.action === 'skip' ? { reason: decision.reason } : {}) })),
     stories: stories.map(story => ({ primaryKey: story.primaryKey, keys: story.keys, section: story.section, citedUrls: story.citedUrls, file: story.file })),
     stages: usage.report(),
-    validation: { passed, repaired, ...(passed ? { digest: validation } : { error: failure }) },
+    validation: { passed, repaired, ...(repaired ? { repairedFrom } : {}), ...(passed ? { digest: validation } : { error: failure }) },
     warnings, notApproval: true,
   };
   put('report.json', jsonText(report));

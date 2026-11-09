@@ -46,6 +46,9 @@ a new fact absent from the earlier report; otherwise skip it as `duplicate_topic
 known. `truncated`, `error` and `dateStatus` are material reading limits: a missing
 flag does not establish a full read. Undated candidates are uncertain, not fresh.
 Use `outside_window` only when a date actually places the item outside the window.
+A `deep` candidate carries its preserved article text in `text`: when usable text
+is present the item is readable, so `unreadable` applies only when no usable text
+or evidence was supplied at all.
 
 ## Output
 
