@@ -181,6 +181,15 @@ export async function main(args) {
   const config=loadLocalConfig();
   const command=args[0];
   const value=flag=>args[args.indexOf(flag)+1];
+  if (command === 'draft') {
+    if (!args.includes('--run')) throw new Error('Use local draft --run RUN [--resume]');
+    const { draftOpenAI } = await import('./openai-draft.mjs');
+    const deployment = read(path.join(base, 'deployment.local.json'));
+    return draftOpenAI({
+      runsDir: config.runsDir, runDir: value('--run'),
+      keyFile: deployment.model?.apiDraft?.keyFile, resume: args.includes('--resume'),
+    });
+  }
   if (command === 'doctor') {
     fs.accessSync(path.join(sourceRepo,'deployment/mac/mac-sender.mjs'), fs.constants.X_OK);
     const identity=verifyIdentity(config);

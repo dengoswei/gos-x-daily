@@ -58,6 +58,17 @@ attempts, invoke a retired workspace workflow or change sending identity.
 
 ## Write and review
 
+If `inspect` reports a configured `model.apiDraft`, write worker packets to
+`RUN/packets` and run `local draft --run RUN` through the provisioned wrapper.
+It uses GPT-6.1 Sol with high reasoning for screening, story drafts and
+composition. A provider failure is a run failure unless the unchanged partial
+output can be completed with `--resume`. A structurally rejected draft requires
+diagnosis before a new attempt. Use the API draft and disposition suggestions
+as authoring inputs, then verify originals and add any source-backed supplemental
+stories. Gmail bodies and manual supplemental files remain local to the
+controller. Record the API draft result and preserve its artifacts separately
+from the final reviewed publication.
+
 Produce a substantive Chinese report without an arbitrary story or sentence
 quota. Every item has one clear main idea; explain the concrete problem,
 mechanism and supported conclusion with the connective reasoning a reader needs.

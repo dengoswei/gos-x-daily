@@ -57,7 +57,7 @@ export async function main(argv = process.argv.slice(2)) {
     }
     return { status: 'offline_checks_passed', filesVerified, semanticReview: 'not performed', reportSent: false };
   }
-  if (command !== 'cli' || !offline.has(args[0])) throw new Error('Use inspect, test, or cli with an offline command. Use local doctor/start-run/publish/status/reconcile for Mac production. Direct CDP collection remains disabled.');
+  if (command !== 'cli' || !offline.has(args[0])) throw new Error('Use inspect, test, or cli with an offline command. Use local doctor/start-run/draft/publish/status/reconcile for Mac production. Direct CDP collection remains disabled.');
   const needsConfig = new Set(['inspect-config', 'coverage-plan', 'coverage-report', 'import-browser', 'import-feed', 'prepare-delivery']);
   if (needsConfig.has(args[0]) && !args.includes('--config')) args.push('--config', path.join(base, 'runtime.local.json'));
   const cli = await import(pathToFileURL(path.join(repo, 'cli.mjs')).href);

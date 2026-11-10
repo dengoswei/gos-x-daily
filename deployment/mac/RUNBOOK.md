@@ -38,6 +38,17 @@ node $DEPLOYMENT_HOME/run.mjs cli compose-input --sources "$RUN/sources.json" --
 
 If configured feeds are used, import them with `cli import-feed` and use the merged sources consistently. Unsupported optional page shapes can remain declared supplemental materials with direct URLs and preserved originals. Do not falsify URLs to satisfy the importer.
 
+When `model.apiDraft.keyFile` is configured in the private, pinned
+`deployment.local.json`, generate worker packets at `RUN/packets`, then invoke
+`node $DEPLOYMENT_HOME/run.mjs local draft --run "$RUN"`. The key file must
+contain one `CODEX_API_KEY` entry. The API draft sends the normalized
+collection prompts and worker packets to the official OpenAI API using
+`gpt-6.1-sol` at high reasoning effort and writes its results under
+`RUN/api-draft`. Supplemental Gmail bodies and other manual files remain
+controller materials. Add the verified supplemental findings before the
+required author review. A partial provider failure can continue via
+`local draft --run "$RUN" --resume` with the same input and configuration.
+
 Write `digest.md`, `canonical-materials.json`, `collection-coverage.md` and one disposition per imported candidate key. Explain the problem, mechanism and supported result in plain Chinese. Keep old publication dates, author claims and material limitations visible. Select substantive supported stories without an item quota. Review all observed candidates and relevant mail/Substack leads. Use recently published URLs for deduplication and identify a real new fact in any follow-up.
 
 The reader-facing message contains the articles and a short coverage paragraph. Detailed page counts, failed reads, cumulative coverage and candidate dispositions belong in the audit. Imported `included` keys are not the final article count because supplemental articles may be outside that set. Previous reports are historical evidence only, not a style or semantic approval baseline. Use the editorial and worker contracts in this checkout.
