@@ -187,7 +187,8 @@ export async function main(args) {
     const deployment = read(path.join(base, 'deployment.local.json'));
     return draftOpenAI({
       runsDir: config.runsDir, runDir: value('--run'),
-      keyFile: deployment.model?.apiDraft?.keyFile, resume: args.includes('--resume'),
+      keyFile: deployment.model?.apiDraft?.keyFile, models: deployment.model?.apiDraft?.models,
+      resume: args.includes('--resume'),
     });
   }
   if (command === 'doctor') {

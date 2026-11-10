@@ -42,9 +42,10 @@ When `model.apiDraft.keyFile` is configured in the private, pinned
 `deployment.local.json`, generate worker packets at `RUN/packets`, then invoke
 `node $DEPLOYMENT_HOME/run.mjs local draft --run "$RUN"`. The key file must
 contain one `CODEX_API_KEY` entry. The API draft sends the normalized
-collection prompts and worker packets to the official OpenAI API using
-`gpt-6.1-sol` at high reasoning effort and writes its results under
-`RUN/api-draft`. Supplemental Gmail bodies and other manual files remain
+collection prompts and worker packets to the official OpenAI API using the
+configured `model.apiDraft.models.screen` (Sol or Terra) for screening and
+Sol for story and compose, with high reasoning on each call. It writes its
+results and token usage under `RUN/api-draft`. Supplemental Gmail bodies and other manual files remain
 controller materials. Add the verified supplemental findings before the
 required author review. A partial provider failure can continue via
 `local draft --run "$RUN" --resume` with the same input and configuration.

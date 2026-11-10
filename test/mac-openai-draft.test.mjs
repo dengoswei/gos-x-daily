@@ -20,29 +20,35 @@ test('Mac API draft uses only bounded synthetic packets and pins Sol high', asyn
   fs.writeFileSync(keyFile, `UNRELATED: omitted\nCODEX_API_KEY: "${key}"\n`, { mode: 0o600 });
 
   const seen = new Set();
+  const models = { screen: 'gpt-6.1-terra', story: 'gpt-6.1-sol', compose: 'gpt-6.1-sol' };
   const fetchImpl = async (url, init) => {
     const body = JSON.parse(init.body);
     assert.equal(url, 'https://api.openai.com/v1/chat/completions');
     assert.equal(init.redirect, 'error');
     assert.equal(init.headers.authorization, `Bearer ${key}`);
-    assert.equal(body.model, 'gpt-6.1-sol');
     assert.equal(body.reasoning_effort, 'high');
     assert.equal(body.store, false);
+    assert.equal(body.service_tier, 'default');
     assert.equal(body.tools, undefined);
     const prompt = body.messages.map(message => message.content).join('\n\n');
     assert.ok(!prompt.includes(key) && !prompt.includes('local-only mail body'));
-    seen.add(stageOf(prompt));
-    return Response.json({ model: 'gpt-6.1-sol',
+    const stage = stageOf(prompt);
+    seen.add(stage);
+    assert.equal(body.model, models[stage]);
+    return Response.json({ model: models[stage], service_tier: 'default',
       choices: [{ message: { content: scriptedReply(prompt) }, finish_reason: 'stop' }],
       usage: { prompt_tokens: 100, completion_tokens: 10 } });
   };
-  const draft = await draftOpenAI({ runsDir, runDir, keyFile, fetchImpl });
+  const draft = await draftOpenAI({ runsDir, runDir, keyFile, models, fetchImpl });
   assert.equal(draft.status, 'api_draft_validated');
   assert.equal(draft.notApproval, true);
   assert.deepEqual(seen, new Set(['screen', 'story', 'compose']));
+  const usage = fs.readFileSync(draft.usagePath, 'utf8').trim().split('\n').map(line => JSON.parse(line));
+  assert.ok(usage.length >= 3);
+  assert.ok(usage.every(row => row.model === models[row.stage] && row.inputTokens === 100 && row.outputTokens === 10));
   assert.equal(process.env.CODEX_API_KEY, previous);
   assert.ok(!fs.readFileSync(path.join(runDir, 'api-draft-models.json'), 'utf8').includes(key));
   assert.ok(!fs.existsSync(path.join(runDir, 'api-draft.lock')));
-  await assert.rejects(draftOpenAI({ runsDir, runDir, keyFile, fetchImpl, resume: true }), /output is already complete/);
+  await assert.rejects(draftOpenAI({ runsDir, runDir, keyFile, models, fetchImpl, resume: true }), /output is already complete/);
   await assert.rejects(draftOpenAI({ runsDir: runDir, runDir, keyFile, fetchImpl }), /directly inside/);
 });
