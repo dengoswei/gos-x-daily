@@ -6,6 +6,7 @@ import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { validateFeedConfig, parseFeedDocument } from '../feed-import.mjs';
+import { publicUrlRefusal } from '../feed.mjs';
 
 const USER_AGENT = 'gos-x-daily-feed-fetch/0.1';
 const PER_FEED_MS = 20000;
@@ -33,6 +34,9 @@ export async function fetchFeed(feed, { fetchImpl = globalThis.fetch } = {}) {
     let url = new URL(feed.url);
     for (let hop = 0; ; hop++) {
       if (url.protocol !== 'https:' || url.username || url.password) throw new Error(`Refusing non-HTTPS or credentialed URL: ${url.origin}`);
+      // A redirect must not steer the fetch to loopback, link-local or LAN hosts.
+      const refusal = publicUrlRefusal(url);
+      if (refusal) throw new Error(`Refusing ${refusal} URL: ${url.origin}`);
       const response = await fetchImpl(url.href, { redirect: 'manual', signal: controller.signal, headers: {
         'User-Agent': USER_AGENT, Accept: 'application/rss+xml, application/atom+xml, application/xml, text/xml, application/json;q=0.9, */*;q=0.5' } });
       if ([301, 302, 303, 307, 308].includes(response.status)) {

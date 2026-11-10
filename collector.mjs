@@ -3,7 +3,8 @@
 // connect to CDP, collect content, invoke a model, or send messages.
 import fs from 'node:fs';
 import path from 'node:path';
-import { mergeItems, scanWindow, auditDeepLinks, readFeedDom } from './feed.mjs';
+import { mergeItems, scanWindow, auditDeepLinks, readFeedDom, publicUrlRefusal } from './feed.mjs';
+import { htmlToText, htmlElements, decodeEntities } from './feed-import.mjs';
 import { runOcr } from './ocr.mjs';
 import { assertCollectionAllowed, freshWindow, validateWatchProfiles, defaultWatchProfiles } from './runtime.mjs';
 import { openCoverageStore, recordCollectionCoverage, runCoveragePlan, coverageReport } from './coverage.mjs';
@@ -35,6 +36,108 @@ export function filterIndexLinks(links, blog) {
 // rendered path, so <link rel="alternate"> feeds and stylesheets never become articles.
 export function indexLinksFromHtml(html) {
   return [...String(html).matchAll(/<a\b[^>]*?\shref=["']([^"']+)["']/gi)].map(match => ({ href: match[1].replace(/&amp;/g, '&'), text: '' }));
+}
+
+// Bounded body read: a declared or streamed size above maxBytes aborts the read.
+export async function readBounded(response, maxBytes) {
+  const declared = Number(response.headers?.get?.('content-length'));
+  if (Number.isFinite(declared) && declared > maxBytes) { await response.body?.cancel?.().catch(() => {}); throw new Error(`Body exceeds ${maxBytes} bytes`); }
+  if (!response.body) return Buffer.alloc(0);
+  const reader = response.body.getReader(), chunks = [];
+  for (let size = 0; ;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    size += value.byteLength;
+    if (size > maxBytes) { await reader.cancel().catch(() => {}); throw new Error(`Body exceeds ${maxBytes} bytes`); }
+    chunks.push(value);
+  }
+  return Buffer.concat(chunks);
+}
+
+// Public HTTPS fetch for page-derived URLs: refuses loopback, IP-literal and LAN
+// hosts before every hop (redirects are followed manually), and bounds the body.
+export async function fetchPublicResource(fetchFn, url, options = {}, { timeoutMs = 20000, maxBytes = 4 * 1024 * 1024, maxRedirects = 3 } = {}) {
+  const signal = AbortSignal.timeout(timeoutMs);
+  let current;
+  try { current = new URL(url); } catch { throw new Error(`Invalid URL: ${String(url).slice(0, 200)}`); }
+  for (let hop = 0; ; hop++) {
+    const refusal = publicUrlRefusal(current);
+    if (refusal) throw new Error(`Refusing ${refusal} URL: ${current.origin}`);
+    const res = await fetchFn(current.href, { ...options, redirect: 'manual', signal: options.signal ? AbortSignal.any([options.signal, signal]) : signal });
+    if ([301, 302, 303, 307, 308].includes(res.status)) {
+      await res.body?.cancel?.().catch(() => {});
+      if (hop >= maxRedirects) throw new Error(`More than ${maxRedirects} redirects from ${current.origin}`);
+      const location = res.headers?.get?.('location');
+      if (!location) throw new Error(`Redirect ${res.status} without Location from ${current.origin}`);
+      current = new URL(location, current);
+      continue;
+    }
+    return { res, bytes: await readBounded(res, maxBytes), url: current.href };
+  }
+}
+
+// A browser deep read keeps text only if the page it finally landed on (after
+// redirects or client-side navigation) is still a public HTTPS URL.
+export function deepReadResult(link, page) {
+  const refusal = publicUrlRefusal(page?.url ?? '');
+  if (!refusal) return page;
+  return { title: link.text || link.href, url: link.href, error: `Deep read landed on a refused URL (${refusal})` };
+}
+
+// readFeedDom output for a watch profile: blocked pages contribute nothing, and
+// only URL-keyed, non-promoted posts count toward the profile's latest limit.
+export function profileItemsFromFeedPage(page, limit, label, warnings = []) {
+  if (!page || typeof page !== 'object' || !Array.isArray(page.items)) { warnings.push(`${label} profile read returned no page`); return []; }
+  if (page.blocked) { warnings.push(`${label} profile unavailable: ${page.blocked}`); return []; }
+  const items = page.items.filter(item => typeof item?.url === 'string' && item.url && item.text).slice(0, limit);
+  if (items.some(item => item.truncated)) warnings.push(`${label}: ${items.filter(item => item.truncated).length} post(s) truncated in the profile view`);
+  if (items.some(item => !item.publishedAt)) warnings.push(`${label}: ${items.filter(item => !item.publishedAt).length} post(s) lack an observed date`);
+  return items;
+}
+
+// Pure blog-page extraction. Page HTML is untrusted evidence; the helpers shared
+// with feed import strip tags first, decode entities once and scan linearly.
+const stripHtml = (html = '') => htmlToText(html, { drop: ['nav', 'footer', 'header'] });
+
+function extractTagText(html, tagName) {
+  const element = htmlElements(html, tagName)[0];
+  return element ? stripHtml(element.raw) : '';
+}
+
+function parseJsonLdArticle(html) {
+  for (const script of htmlElements(html, 'script')) {
+    if (String(script.attrs.type).toLowerCase() !== 'application/ld+json') continue;
+    try {
+      let value;
+      try { value = JSON.parse(script.raw); } catch { value = JSON.parse(decodeEntities(script.raw)); }
+      const entries = Array.isArray(value) ? value : [value];
+      for (const entry of entries) {
+        if (entry?.['@type'] === 'BlogPosting' || entry?.['@type'] === 'Article') {
+          return {
+            title: entry.headline || entry.name || '',
+            author: typeof entry.author === 'string' ? entry.author : entry.author?.name || '',
+            publishedAt: entry.datePublished || entry.dateModified || null,
+          };
+        }
+      }
+    } catch {}
+  }
+  return {};
+}
+
+export function extractBlogArticle(html, article) {
+  const jsonLd = parseJsonLdArticle(html);
+  const title = jsonLd.title || extractTagText(html, 'h1') || article.title || 'Untitled';
+  const bodyHtml = htmlElements(html, 'article')[0]?.raw || htmlElements(html, 'main')[0]?.raw || html;
+  const content = stripHtml(bodyHtml);
+  return {
+    ...article,
+    title,
+    author: jsonLd.author || '',
+    publishedAt: jsonLd.publishedAt || null,
+    content: content.slice(0, 12000),
+    ...(content.length > 12000 ? { truncated: true } : {}),
+  };
 }
 
 export function createCollector(runtime, { fetchImpl = globalThis.fetch, WebSocketImpl = globalThis.WebSocket, clock = () => new Date() } = {}) {
@@ -167,9 +270,10 @@ async function fetchJson(url, options = {}, timeoutMs = 10000) {
   return json;
 }
 
+// Every non-CDP fetch goes to a public HTTPS host, re-checked per redirect, with a bounded body.
 async function fetchText(url, options = {}, timeoutMs = 20000) {
-  const res = await fetch(url, { ...options, signal: AbortSignal.timeout(timeoutMs) });
-  const text = await res.text();
+  const { res, bytes } = await fetchPublicResource(fetch, url, options, { timeoutMs });
+  const text = bytes.toString('utf8');
   if (!res.ok) {
     throw new Error(`HTTP ${res.status} from ${url}: ${text.slice(0, 300)}`);
   }
@@ -190,11 +294,14 @@ async function createTarget(url) {
   }
 }
 
+// Cleanup bypasses the global budget (the budgeted wrapper throws once it is
+// spent), so a finished or interrupted scan never leaks its tab. Loopback CDP only.
 async function closeTarget(targetId) {
-  if (!targetId) return false;
+  if (!targetId || !active) return false;
   try {
-    await fetchJson(`http://${CDP_HOST}:${CDP_PORT}/json/close/${targetId}`, {}, 5000);
-    return true;
+    const res = await fetchImpl(`http://${CDP_HOST}:${CDP_PORT}/json/close/${encodeURIComponent(targetId)}`, { signal: AbortSignal.timeout(5000) });
+    await res.text?.().catch(() => {});
+    return res.ok !== false;
   } catch {
     return false;
   }
@@ -338,21 +445,18 @@ function uniqueBy(items, keyFn) {
   return out;
 }
 
-async function extractArticles(target, selector, limit = 12) {
+// Watch profiles use the same extraction as feed scans: expanded "show more",
+// 16000 chars with a truncated flag, publishedAt and the status URL as key.
+async function readXProfilePage(target, label, warnings, limit) {
   const client = new TargetClient(target);
   try {
     await client.waitForReady();
-    const value = await client.eval(`(() => JSON.stringify([...document.querySelectorAll(${JSON.stringify(selector)})]
-      .slice(0, ${limit})
-      .map((node, i) => ({
-        i,
-        text: (node.innerText || node.textContent || '').trim().slice(0, 1600),
-        links: [...node.querySelectorAll('a[href]')]
-          .map(a => ({ text: (a.innerText || a.getAttribute('aria-label') || '').trim().slice(0, 160), href: a.href }))
-          .filter(x => x.href)
-          .slice(0, 16)
-      }))))()`);
-    return JSON.parse(value || '[]');
+    await client.eval(`(async () => {
+      for (const b of document.querySelectorAll('article [data-testid="tweet-text-show-more-link"]')) b.click();
+      await new Promise(r => setTimeout(r, 250));
+    })()`, 5000);
+    const page = JSON.parse(await client.eval(`JSON.stringify((${readFeedDom.toString()})('x'))`, 10000));
+    return profileItemsFromFeedPage(page, limit, label, warnings);
   } finally {
     client.close();
   }
@@ -477,7 +581,7 @@ async function extractHydratedXTimeline(target, label, warnings, limit = 10, tim
     warnings.push(`${label} timeline not hydrated: title="${state?.title || ''}", readyState="${state?.readyState || ''}", text="${(state?.bodyText || '').slice(0, 160).replace(/\s+/g, ' ')}"`);
     return [];
   }
-  return extractArticles(target, 'article', limit);
+  return readXProfilePage(target, label, warnings, limit);
 }
 
 function extractInterestingLinks(items) {
@@ -485,6 +589,8 @@ function extractInterestingLinks(items) {
 }
 
 async function extractArticleBody(link) {
+  const refused = publicUrlRefusal(link.href);
+  if (refused) return { title: link.text || link.href, url: link.href, error: `Deep read refused: ${refused}` };
   const { target, created } = await getOrCreateExactUrlTarget(link.href);
   const client = new TargetClient(target);
   try {
@@ -495,62 +601,13 @@ async function extractArticleBody(link) {
       text: (document.querySelector('article')?.innerText || document.body.innerText || '').trim().slice(0, 5000),
       truncated: (document.querySelector('article')?.innerText || document.body.innerText || '').trim().length > 5000
     }))()`, 30000);
-    return JSON.parse(raw);
+    return deepReadResult(link, JSON.parse(raw));
   } catch (error) {
     return { title: link.text || link.href, url: link.href, error: error.message };
   } finally {
     client.close();
     if (created) await closeTarget(target.id);
   }
-}
-
-function decodeHtml(text = '') {
-  return text
-    .replace(/&amp;/g, '&')
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;/g, "'")
-    .replace(/&#x27;/g, "'")
-    .replace(/&nbsp;/g, ' ');
-}
-
-function stripHtml(html = '') {
-  return decodeHtml(html)
-    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
-    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
-    .replace(/<nav[\s\S]*?<\/nav>/gi, ' ')
-    .replace(/<footer[\s\S]*?<\/footer>/gi, ' ')
-    .replace(/<header[\s\S]*?<\/header>/gi, ' ')
-    .replace(/<[^>]+>/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
-}
-
-function extractTagText(html, tagName) {
-  const match = html.match(new RegExp(`<${tagName}[^>]*>([\\s\\S]*?)<\\/${tagName}>`, 'i'));
-  return match ? stripHtml(match[1]) : '';
-}
-
-function parseJsonLdArticle(html) {
-  const jsonLdRegex = /<script[^>]*type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi;
-  let match;
-  while ((match = jsonLdRegex.exec(html)) !== null) {
-    try {
-      const value = JSON.parse(decodeHtml(match[1]));
-      const entries = Array.isArray(value) ? value : [value];
-      for (const entry of entries) {
-        if (entry?.['@type'] === 'BlogPosting' || entry?.['@type'] === 'Article') {
-          return {
-            title: entry.headline || entry.name || '',
-            author: typeof entry.author === 'string' ? entry.author : entry.author?.name || '',
-            publishedAt: entry.datePublished || entry.dateModified || null,
-          };
-        }
-      }
-    } catch {}
-  }
-  return {};
 }
 
 const BLOG_INDEX_TYPES = ['html-index', 'anthropic_engineering', 'claude_blog'];
@@ -570,21 +627,6 @@ async function renderedIndexLinks(blog) {
     client.close();
     if (created) await closeTarget(target.id);
   }
-}
-
-function extractBlogArticle(html, article) {
-  const jsonLd = parseJsonLdArticle(html);
-  const title = jsonLd.title || extractTagText(html, 'h1') || article.title || 'Untitled';
-  const articleMatch = html.match(/<article[^>]*>([\s\S]*?)<\/article>/i);
-  const mainMatch = html.match(/<main[^>]*>([\s\S]*?)<\/main>/i);
-  const bodyHtml = articleMatch?.[1] || mainMatch?.[1] || html;
-  return {
-    ...article,
-    title,
-    author: jsonLd.author || '',
-    publishedAt: jsonLd.publishedAt || null,
-    content: stripHtml(bodyHtml).slice(0, 12000),
-  };
 }
 
 async function collectBlogs(warnings) {
@@ -647,7 +689,7 @@ async function waitForText(target, pattern, timeoutMs = 15000) {
     let lastText = '';
     while (Date.now() - start < timeoutMs) {
       lastText = await client.eval(`(document.body?.innerText || '').slice(0, 5000)`, 10000);
-      if (pattern.test(lastText || '')) return lastText;
+      if (typeof pattern === 'function' ? pattern(lastText || '') : pattern.test(lastText || '')) return lastText;
       await sleep(700);
     }
     return lastText;
@@ -874,7 +916,9 @@ async function collectXiaohongshuRelatedFile(note, warnings) {
   const { target, created } = await getOrCreateExactUrlTarget(previewUrl);
   try {
     await navigateExistingTarget(target, previewUrl);
-    await waitForText(target, new RegExp(relatedFile.name || relatedFile.docId, 'i'), 15000);
+    // Page-supplied names are text, never a regular expression.
+    const needle = String(relatedFile.name || relatedFile.docId).toLowerCase();
+    await waitForText(target, text => text.toLowerCase().includes(needle), 15000);
     const client = new TargetClient(target);
     try {
       let snapshot = {};
@@ -1019,15 +1063,14 @@ async function downloadXiaohongshuImages(note, images, warnings) {
       continue;
     }
     try {
-      const res = await fetch(image.url, {
+      // Page-supplied image URLs: upgraded to HTTPS, public hosts only, bounded size.
+      const { res, bytes: buffer } = await fetchPublicResource(fetch, String(image.url).replace(/^http:\/\//i, 'https://'), {
         headers: {
           'user-agent': BLOG_USER_AGENT,
           referer: note.detailUrl || note.url || 'https://www.xiaohongshu.com/',
         },
-        signal: AbortSignal.timeout(20000),
-      });
+      }, { timeoutMs: 20000, maxBytes: 15 * 1024 * 1024 });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const buffer = Buffer.from(await res.arrayBuffer());
       fs.writeFileSync(file, buffer);
       downloaded.push({ ...image, localPath: file, bytes: buffer.length });
     } catch (error) {
@@ -1473,7 +1516,7 @@ async function searchSemanticScholarPaper(query) {
   const url = `https://api.semanticscholar.org/graph/v1/paper/search?query=${encodeURIComponent(query)}&limit=3&fields=title,url,year,authors,externalIds,abstract`;
   let json;
   try {
-    json = await fetchJson(url, { headers: { 'user-agent': BLOG_USER_AGENT } }, 15000);
+    json = JSON.parse(await fetchText(url, { headers: { 'user-agent': BLOG_USER_AGENT } }, 15000));
   } catch (error) {
     if (/HTTP 429/.test(error.message)) {
       semanticScholarRateLimited = true;
@@ -1488,7 +1531,7 @@ async function searchSemanticScholarPaper(query) {
       title: paper.title || '',
       url: paper.url || (paper.externalIds?.ArXiv ? `https://arxiv.org/abs/${paper.externalIds.ArXiv}` : ''),
       year: paper.year,
-      summary: (paper.abstract || '').replace(/\\s+/g, ' ').slice(0, 500),
+      summary: (paper.abstract || '').replace(/\s+/g, ' ').slice(0, 500),
       confidence: queryScore(query, paper.title || ''),
     }))
     .filter((item) => item.title && item.url)

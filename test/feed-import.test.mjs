@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { parseFeedDocument, verifyDocumentFiles, mergeFeedDocuments, validateFeedConfig } from '../feed-import.mjs';
-import { fetchFeeds } from '../tools/fetch-feeds.mjs';
+import { fetchFeeds, fetchFeed } from '../tools/fetch-feeds.mjs';
 import { collectionFromBrowserArtifacts } from '../browser-artifacts.mjs';
 import { makeRuntime } from '../runtime.mjs';
 import { composePrompt } from '../digest.mjs';
@@ -72,11 +72,56 @@ test('RSS, Atom and daily-papers documents parse to plain text with explicit dat
   assert.equal(release.text, 'Faster kernels');
   const [paper] = parseFeedDocument(papers, 'hf-daily-papers');
   assert.equal(paper.url, 'https://huggingface.co/papers/2610.00001');
-  assert.equal(paper.text, 'Summary A');
+  // JSON summaries are plain text; markup-looking characters are content, not tags.
+  assert.equal(paper.text, 'Summary <i>A</i>');
   assert.equal(paper.publishedAt, '2026-10-16T00:00:00.000Z');
   assert.equal(paper.paperPublishedAt, '2026-10-10T04:00:00.000Z');
   const long = parseFeedDocument(`<rss><item><title>t</title><link>https://a.example/x</link><description>${'x'.repeat(9000)}</description></item></rss>`, 'rss');
   assert.equal(long[0].text.length, 4000);
+  assert.equal(long[0].truncated, true);
+  assert.equal(items[0].truncated, undefined);
+});
+
+test('angle brackets in plain text and escaped HTML survive as evidence', () => {
+  const claim = 'Tiny models score <10% on X while humans score >90%';
+  const [entry] = parseFeedDocument(`<rss><item><title>Latency &lt;5 ms at batch &gt;64</title><link>https://a.example/x</link>
+    <description>&lt;p&gt;Tiny models score &amp;lt;10% on X while humans score &amp;gt;90%&lt;/p&gt;</description></item></rss>`, 'rss');
+  assert.equal(entry.title, 'Latency <5 ms at batch >64');
+  assert.equal(entry.text, claim);
+  // Sloppy publishers escape only once; a '<' that cannot open a tag is still text.
+  const [sloppy] = parseFeedDocument(`<rss><item><title><![CDATA[Score <10% & <b>bold</b> <T> generics]]></title><link>https://a.example/y</link>
+    <description><![CDATA[<p>Tiny models score <10% on X while humans score >90%</p><script>bad()</script><!-- hidden -->]]></description></item></rss>`, 'rss');
+  assert.equal(sloppy.title, 'Score <10% & bold <T> generics');
+  assert.equal(sloppy.text, claim);
+  const [atomText] = parseFeedDocument(`<feed><entry><title>a &lt;b&gt; c</title><link href="https://a.example/z"/>
+    <summary>Use &lt;div&gt; &amp;amp; friends</summary></entry></feed>`, 'atom');
+  assert.equal(atomText.title, 'a <b> c');
+  assert.equal(atomText.text, 'Use <div> &amp; friends');
+  const [atomHtml] = parseFeedDocument(`<feed><entry><title type="html">x &amp;lt;y</title><link href="https://a.example/w"/>
+    <content type="xhtml"><div xmlns="http://www.w3.org/1999/xhtml"><p>Up &gt;2x</p></div></content></entry></feed>`, 'atom');
+  assert.equal(atomHtml.title, 'x <y');
+  assert.equal(atomHtml.text, 'Up >2x');
+  const [paper] = parseFeedDocument(JSON.stringify([{ paper: { id: '2610.00002', title: 'a<b>c', summary: `${claim} &amp; $x<y$` } }]), 'hf-daily-papers');
+  assert.equal(paper.title, 'a<b>c');
+  assert.equal(paper.text, `${claim} &amp; $x<y$`);
+});
+
+test('pathological unclosed markup parses linearly and fails closed', () => {
+  const head = '<rss><item><title>t</title><link>https://a.example/x</link><description>';
+  for (const filler of ['<script ', '&lt;script ', '<!--', '&lt;!--', '<a ', '&lt;b \'', '&amp;aaaaaaaa', '<x <y ']) {
+    const body = filler.repeat(Math.ceil(320 * 1024 / filler.length));
+    const started = performance.now();
+    try { parseFeedDocument(`${head}${body}</description></item></rss>`, 'rss'); } catch {}
+    try { parseFeedDocument(`<rss>${`<item>${filler}`.repeat(20000)}</rss>`, 'rss'); } catch {}
+    assert.ok(performance.now() - started < 1000, `${filler} took ${performance.now() - started} ms`);
+  }
+  assert.throws(() => parseFeedDocument(`<rss>${'<item '.repeat(60000)}</rss>`, 'rss'), /Unclosed <item>/);
+  assert.throws(() => parseFeedDocument(`<rss><item><title>x</title><link>https://a.example/x</link>`, 'rss'), /Unclosed <item>/);
+  assert.throws(() => parseFeedDocument(`<rss>${' '.repeat(8 * 1024 * 1024)}</rss>`, 'rss'), /exceeds/);
+  // CDATA and comments cannot smuggle extra entries; HTML-style void <link> stays accepted.
+  const entries = parseFeedDocument(`<rss><!-- <item><link>https://evil.example/</link></item> --><item><title>t</title>
+    <link href="https://a.example/void"><description><![CDATA[</item><item><link>https://evil.example/</link>]]></description></item></rss>`, 'rss');
+  assert.deepEqual(entries.map(entry => entry.url), ['https://a.example/void']);
 });
 
 test('malformed feed documents and unsafe entry URLs are rejected', () => {
@@ -222,6 +267,15 @@ test('fetch tool follows bounded HTTPS redirects, records failures and its bundl
   fs.rmSync(path.join(out, 'sources.merged.json'));
   await assert.rejects(main(args), /hash mismatch/);
   assert.equal(fs.existsSync(path.join(out, 'sources.merged.json')), false);
+});
+
+test('fetch tool refuses redirects to loopback, link-local and LAN hosts without requesting them', async () => {
+  const requested = [];
+  for (const location of ['https://169.254.169.254/latest/meta-data', 'https://127.0.0.1:9449/json/list', 'https://[::1]/feed', 'https://router.local/feed']) {
+    const fetchImpl = async url => { requested.push(url); return new Response(null, { status: 302, headers: { location } }); };
+    await assert.rejects(fetchFeed(feeds[0], { fetchImpl }), /Refusing (ip_literal_host|non_public_host)/);
+  }
+  assert.deepEqual([...new Set(requested)], [feeds[0].url]);
 });
 
 test('feed fetch started after the browser capture is accepted within two hours', t => {
