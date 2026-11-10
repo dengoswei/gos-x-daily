@@ -111,6 +111,17 @@ preserved as untrusted context. A source discovery is not semantic verification.
 
 Optional article deep reads: `deepArticles: [{url, text, publishedAt, evidenceId}]`.
 Each requires a screenshot from that exact article. Import never fetches links.
+Observed post links are audited into `deepLinkAudit`; only public HTTPS hosts
+can become eligible. Plain HTTP, IP-literal, loopback and LAN/`.local`/`.internal`
+links stay recorded with reasons `insecure_protocol`, `ip_literal_host` or
+`non_public_host`, and a controller must not deep-read them.
+
+Text is evidence. Copy displayed characters exactly, including `<`, `>` and `&`
+(for example "<10%"); the importers never strip markup from plain-text fields.
+RSS/Atom feed import strips HTML tags before decoding entities once, keeps a
+literal `<` that cannot open a tag, and marks text cut at its limit
+`truncated: true`. Item keys keep identifying query strings; see
+docs/COVERAGE.md for key compatibility.
 
 ## Versioned thread, quote and cross-author discovery
 
