@@ -79,8 +79,47 @@ function compose(prompt) {
   }, null, 2))].join('\n');
 }
 
+// Review A: a fixed reconstruction of whatever prose it was handed. It reads no
+// source, fills no gap and reaches no verdict of its own.
+function reviewA(prompt) {
+  const unit = JSON.parse(block(prompt, 'review_unit'));
+  block(prompt, 'unit_prose');
+  return fenced('json', JSON.stringify({
+    reconstruction: {
+      problem: `SYNTHETIC fixture reconstruction of ${unit.unit} (${unit.kind}); nothing was read.`,
+      mechanism: 'SYNTHETIC fixture: no mechanism was reconstructed.',
+      conclusion: 'SYNTHETIC fixture: no conclusion was reconstructed.',
+      innovationType: 'SYNTHETIC fixture: not classified.',
+    },
+    missingLinks: [], confusions: [], verdictA: 'clear',
+  }, null, 2));
+}
+
+// Review B: exactly one minor finding per item unit, none for the audit unit, and
+// never a material one. The fixture compares no evidence.
+function reviewB(prompt) {
+  const unit = JSON.parse(block(prompt, 'review_unit'));
+  const prose = block(prompt, 'unit_prose').trim();
+  const findings = unit.kind === 'item' ? [{
+    severity: 'minor', kind: 'clarity', quote: prose.slice(0, 24),
+    problem: 'SYNTHETIC fixture finding; no evidence was compared.',
+    suggestion: 'SYNTHETIC fixture finding; no correction is implied.',
+  }] : [];
+  return fenced('json', JSON.stringify({ findings, verdictB: findings.length ? 'issues' : 'faithful' }, null, 2));
+}
+
+// Judge: fixed mid scores on whichever rubric the scope names; this measures nothing.
+function judge(prompt) {
+  const scope = JSON.parse(block(prompt, 'judge_scope')).scope;
+  const fields = scope === 'digest' ? ['ordering', 'structure', 'coverageDisclosure'] : ['reconstructability', 'fidelity', 'disclosure'];
+  return fenced('json', JSON.stringify({
+    scores: Object.fromEntries(fields.map(field => [field, 4])),
+    notes: [`SYNTHETIC fixture score for scope ${scope}; nothing was measured.`],
+  }, null, 2));
+}
+
 const prompt = await readStdin();
-const stage = prompt.match(/<!-- stage: (screen|story|compose) -->/)?.[1];
-const handler = { screen, story, compose }[stage];
+const stage = prompt.match(/<!-- stage: (screen|story|compose|review-a|review-b|judge) -->/)?.[1];
+const handler = { screen, story, compose, 'review-a': reviewA, 'review-b': reviewB, judge }[stage];
 if (!handler) { process.stderr.write(`Scripted model: unknown stage marker\n`); process.exit(1); }
 process.stdout.write(handler(prompt) + '\n');

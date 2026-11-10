@@ -1,12 +1,14 @@
-# P1 orchestrator prototype (not production)
+# Orchestrator prototype (not production)
 
 A provider-agnostic driver for pipeline stages 5–7 — **screen → story → compose** —
-over a run that has already been captured and imported. It is the first phase of
+over a run that has already been captured and imported, plus an **optional advisory
+review** (stage 8) and an offline **eval harness**. It is the first two phases of
 `docs/REDESIGN-AGENT-SDK.md`: enough to compare cost and output quality against a
 host-agent session following `prompts/run-daily.md`, and nothing more.
 
 Nothing here is wired into the Mac deployment, `cli.mjs`, an npm script or any
-delivery path. Its output is a **draft plus a report**, never an approval.
+delivery path. Its output is a **draft, advisory feedback and measurements**, never
+an approval.
 
 ## Scope
 
@@ -19,13 +21,16 @@ In scope:
   plus its referenced deep-material and thread packets;
 - one compose call over the run's own `prompt.md`, the screening decisions and the
   drafted items, validated with the repository's `validateDigest` and candidate
-  ledger gates.
+  ledger gates;
+- when a `review` role is configured, two advisory calls per review unit of the
+  validated draft (see below);
+- a separate `prototype/eval.mjs` measurement pass with a `judge` role.
 
 Out of scope, by design:
 
 - **No capture.** Stages 1–4 stay with the browser controller and `cli.mjs`.
-- **No review, no delivery, no ledger.** Stage 8–9 gates are untouched; this
-  prototype cannot approve a digest or send anything.
+- **No approval, no delivery, no ledger.** The stage 8–9 gates are untouched; the
+  advisory review below cannot approve a digest, and nothing here can send.
 - **No tool loop.** Every stage is a single-shot call with its packets inlined, so
   no agent fetches a URL, reads outside its packets or runs a command. A story
   agent with a fetch tool is a P2 question.
@@ -48,9 +53,13 @@ node prototype/make-synthetic-run.mjs --out /path/to/new/run
 # Or point --run at a real run directory holding sources.json, prompt.md and packets/
 # (node cli.mjs import-browser / compose-input / worker-input produce exactly these).
 node prototype/orchestrate.mjs --run /path/to/run --models prototype/models.local.json --out /path/to/new/out
+
+# Optional, after a passed run: development-time measurement into OUT/eval.json.
+node prototype/eval.mjs --run /path/to/run --out /path/to/new/out --models prototype/models.local.json
 ```
 
-`--out` must not exist; every artifact is written with the `wx` flag. Standard
+The orchestrator's `--out` must not exist (the eval harness's `--out` is that same
+finished directory); every artifact is written with the `wx` flag. Standard
 output is the compact report JSON only — keys, counts, sections, cited URLs and
 usage, never source or response text. Artifacts land in:
 
@@ -60,14 +69,81 @@ OUT/screen/     one decision file per source packet
 OUT/stories/    one bullet (.md) and its metadata (.json) per group
 OUT/digest.md   the validated draft  (digest.rejected.md when validation failed)
 OUT/dispositions.json
+OUT/review/     unit-NNN.a.json / unit-NNN.b.json, only with a `review` role
 OUT/report.json
+OUT/eval.json   only after prototype/eval.mjs
 ```
+
+## Advisory review stage (optional)
+
+Configure a `review` role and the orchestrator adds stage 8 **after** the draft
+passes validation — a rejected draft is never reviewed. It is **advisory feedback
+only**: `status` and `notApproval` are unchanged by it, `report.advisoryReview.note`
+says so in the artifact, and the deployment's required review under `EDITORIAL.md`
+is untouched and unsatisfied by anything here.
+
+The draft is cut deterministically into **review units**: one per top-level main-body
+bullet block, plus one final `audit` unit holding the `本次采集范围` block and the
+whole `## 差异补充` section. Both stages see the same cut, and so does the eval
+harness. Each unit is reviewed in the order `EDITORIAL.md` requires:
+
+- **Stage A (blind comprehension)** gets the unit prose and nothing else — no
+  packet, no collection record. It records `problem` / `mechanism` / `conclusion` /
+  `innovationType` reconstructable from the prose alone, what is *not*
+  reconstructable (`missingLinks`, `confusions`) and `verdictA`. Its record is
+  persisted to `OUT/review/unit-NNN.a.json` with `sourceBlind: true` and a
+  `persistedAt` timestamp **before** the Stage B prompt is built.
+- **Stage B (source fidelity)** gets those persisted bytes back, unchanged, plus
+  the unit's own evidence: the candidate packets of the included dispositions rows
+  whose URL the unit cites, with their deep-material and thread packets (every read
+  SHA-256- and size-checked). The audit unit gets the collection context packet and
+  the coverage/warnings accounting instead of candidate bodies. It returns `findings`
+  (`material` / `minor`, each quoting the fragment at fault) and `verdictB`.
+
+`report.advisoryReview` carries counts only — units, verdict and finding tallies,
+and the unit file paths. Both calls bill to one usage stage, `review`; raw responses
+land under `OUT/raw/` as `review-a-unit-NNN.txt` and `review-b-unit-NNN.txt`.
+
+## Eval harness
+
+```sh
+node prototype/eval.mjs --run /path/to/run --out /path/to/existing/out --models prototype/models.local.json
+```
+
+Development-time **measurement**, not review: no gate reads `eval.json`, it resolves
+no finding and it grants nothing. It needs a `judge` role, and an `OUT` whose
+`report.json` records a passed composition. `OUT/eval.json` is written with `wx`, so
+a second invocation refuses — before any model call, so the refusal is free.
+
+- `deterministic` — copied from `report.json` and the draft with no model involved:
+  candidate/included/merged/skipped counts and skip reasons, groups, stories,
+  repair state, warning count, advisory-review counts, main bullets and the
+  per-stage usage totals.
+- `items` — one judge call per item unit, scoring `reconstructability`, `fidelity`
+  and `disclosure` 1–5 against that unit's evidence packets.
+- `digest` — one call over the draft and the deterministic summary, no packets,
+  scoring `ordering`, `structure` and `coverageDisclosure` 1–5.
+
+The rubric in `prototype/prompts/judge.md` anchors each 1 / 3 / 5 to `EDITORIAL.md`.
+Scores are integers, validated; a non-integer or out-of-range score fails the stage.
+
+## Capture stage
+
+Capture is **not** in this prototype and will not be. A capture agent is
+environment-bound: it needs a browser-equipped authorized host (the Mac controller,
+or a computer-use session with a real browser surface), which an orchestrator
+process on an arbitrary machine does not have. This repository's capture contract
+stays `BROWSER-ARTIFACTS.md` plus `prompts/workers/collect-source.md`, and the
+orchestrator only ever consumes the resulting `browser-capture.json` after
+`cli.mjs import-browser`. No capture code ships here.
 
 ## Models configuration
 
-`prototype/models.example.json` maps the three roles to providers. Copy it to
-`prototype/models.local.json` (gitignored) and edit. Only environment-variable
-**names** belong in the file; a key value never does.
+`prototype/models.example.json` maps roles to providers. Copy it to
+`prototype/models.local.json` (gitignored) and edit. `screen`, `story` and `compose`
+are required; `review` is optional (absent ⇒ no review stage, exactly as before) and
+`judge` is read only by `prototype/eval.mjs`. Only environment-variable **names**
+belong in the file; a key value never does.
 
 ```json
 {"roles": {"screen": {
@@ -87,7 +163,10 @@ OUT/report.json
   `is_error` payload or an empty `result` as a failed call.
 
 Roles are independent, so cross-vendor configurations (cheap screening, mid-tier
-stories, a strong composer) are config, not code.
+stories, a strong composer, a reviewer from a different vendor than the composer)
+are config, not code. A different vendor on `review` is a cheap extra independence
+signal for development comparison; it is not, and never becomes, the deployment's
+review contract.
 
 ## Cost note
 

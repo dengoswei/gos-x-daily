@@ -55,7 +55,7 @@ candidate ledger.
 
 ```json
 {"schemaVersion": 1, "collectionId": "<this collection's id>", "items": [
-  {"key": "…", "disposition": "included", "section": "<## heading text>", "url": "<URL cited in the main body>"},
+  {"key": "…", "disposition": "included", "section": "Frameworks / Infra", "url": "<URL cited in the main body>"},
   {"key": "…", "disposition": "merged", "mergedInto": "<included key>"},
   {"key": "…", "disposition": "skipped", "reason": "off_topic|promotion|duplicate_topic|outside_window|low_signal|unreadable|other", "note": "<optional>"}
 ]}
@@ -64,6 +64,7 @@ candidate ledger.
 
 `items` needs exactly one row for every key in `<candidate_keys>` above and no other
 key; a batch `"keys": [...]` row is allowed for `skipped` only. If the digest cites a
-candidate's own URL, that candidate must be `included`. `section` must match a
-main-body heading exactly. A `merged` row must point at an `included` key.
+candidate's own URL, that candidate must be `included`. `section` is the heading
+TEXT exactly as it appears after the `## ` marker (e.g. `Frameworks / Infra`,
+never `## Frameworks / Infra`). A `merged` row must point at an `included` key.
 This is a draft for the deployment's configured semantic review; it is not approval.
