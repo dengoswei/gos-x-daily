@@ -2,6 +2,10 @@
 const iso = value => new Date(value).toISOString();
 const ms = value => Date.parse(value);
 
+// Non-X keys are the canonical link: tracking parameters and section anchors are
+// dropped, but an identifying query (?p=101, ?v=…, ?id=…) is kept, so distinct
+// posts never collapse into one key. Keys before this change dropped every query;
+// see docs/COVERAGE.md for the compatibility behaviour of persisted keys.
 export function itemKey(item) {
   const href = item.url || item.links?.find((l) => /\/status\/\d+|\/p\/|\/home\/post\//.test(l.href))?.href;
   if (href) {
@@ -10,10 +14,26 @@ export function itemKey(item) {
       const status = u.pathname.match(/\/status\/(\d+)(?:\/|$)/);
       if (/(^|\.)(x\.com|twitter\.com)$/.test(u.hostname) && status) return `x:${status[1]}`;
       if (item.id) return item.id;
-      u.hash = ''; u.search = ''; return u.href;
+      return canonicalLink(href).href;
     } catch {}
   }
   return item.id || item.text;
+}
+
+// Deep reads and collector fetches only go to public HTTPS hosts. Returns a
+// refusal reason or null. Names that are IP literals (any WHATWG-normalised
+// IPv4 form or IPv6), loopback/link-local/private suffixes or single labels are
+// never public article hosts; this is a name check, not DNS-rebinding proof.
+const nonPublicSuffix = /(?:^|\.)(?:localhost|local|internal|localdomain|intranet|lan|home\.arpa)$/;
+export function publicUrlRefusal(value) {
+  let url;
+  try { url = value instanceof URL ? value : new URL(value); } catch { return 'invalid_url'; }
+  if (url.protocol !== 'https:') return ['http:'].includes(url.protocol) ? 'insecure_protocol' : 'unsupported_protocol';
+  if (url.username || url.password) return 'embedded_credentials';
+  const host = url.hostname.toLowerCase().replace(/\.$/, '');
+  if (host.startsWith('[') || /^\d+\.\d+\.\d+\.\d+$/.test(host)) return 'ip_literal_host';
+  if (!host.includes('.') || nonPublicSuffix.test(host)) return 'non_public_host';
+  return null;
 }
 
 const stableKey = value => JSON.stringify(value, (_key, entry) =>
@@ -45,13 +65,17 @@ export function mergeItems(...groups) {
 }
 
 export async function scanWindow({ read, scroll, window, maxPages = 80, maxMs = 120000, clock = Date.now, allowExhausted = false,
-  orderedTimestamps = false, stallLimit = 8, recover, maxRecoveryMs = 5000 }) {
+  orderedTimestamps = false, stallLimit = 8, recover, maxRecoveryMs = 5000, endConfirmReads = 3 }) {
   if (!Number.isInteger(maxPages) || maxPages < 1 || !Number.isFinite(maxMs) || maxMs <= 0 ||
       !Number.isInteger(stallLimit) || stallLimit < 1 || !Number.isFinite(maxRecoveryMs) || maxRecoveryMs <= 0 ||
+      !Number.isInteger(endConfirmReads) || endConfirmReads < 1 ||
       (recover !== undefined && typeof recover !== 'function')) throw new Error('Invalid feed traversal budget');
   const started = clock();
   let items = [], stagnant = 0, oldPages = 0, reason = 'page_budget', pages = 0, reads = 0, readAttempts = 0;
   let boundary = false, boundaryEvidence = null, stallCause = null, loadingReads = 0;
+  // endStreak: consecutive settled bottom reads (atEnd, not loading, nothing new).
+  // endMark: the streak length when a completed recovery nudge began, if any.
+  let endStreak = 0, endMark = null;
   let failure = null;
   const recordFailure = (error, phase) => {
     failure = { phase, name: String(error?.name || 'Error'), code: error?.code == null ? null : String(error.code),
@@ -81,6 +105,8 @@ export async function scanWindow({ read, scroll, window, maxPages = 80, maxMs = 
       if (!Number.isFinite(ms(item.publishedAt))) unknown.add(itemKey(item));
     }
     stagnant = items.length === before ? stagnant + 1 : 0;
+    endStreak = page.atEnd === true && !page.loading && items.length === before ? endStreak + 1 : 0;
+    if (endStreak === 0) endMark = null;
     // One old pinned/reposted item must not terminate the scan.
     const tail = dated.slice(-4);
     const allOld = !page.loading && tail.length >= 2 && dated.length === (page.items || []).length && tail.every((i) => ms(i.publishedAt) < ms(window.start));
@@ -91,6 +117,14 @@ export async function scanWindow({ read, scroll, window, maxPages = 80, maxMs = 
     if (page.empty && !page.loading && items.length === 0) { boundary = true; boundaryEvidence = 'explicit_exhaustion'; reason = 'explicit_empty'; break; }
     // Scroll geometry alone cannot prove a virtualized feed is exhausted.
     if (page.exhausted === true && !page.loading && items.length > 0) { boundary = allowExhausted; boundaryEvidence = 'explicit_exhaustion'; reason = 'observed_end'; break; }
+    // readFeedDom reports atEnd, never exhausted. A bounded adapter may opt in to
+    // treat the bottom as the end only when it stayed settled for endConfirmReads
+    // reads before a completed recovery nudge and endConfirmReads reads after it,
+    // with no loading indicator and no new item. Any new item or non-bottom read
+    // voids it; without recovery, or with loading, the bottom remains a stall.
+    if (allowExhausted === true && endMark !== null && endStreak >= endMark + endConfirmReads && items.length > 0) {
+      boundary = true; boundaryEvidence = 'stable_scroll_end'; reason = 'observed_end'; break;
+    }
     if (stagnant >= stallLimit) {
       stallCause = page.loading ? 'delayed_loading' : 'unchanged_feed';
       if (recover && recovery.attempts === 0 && pages + 1 < maxPages && clock() - started < maxMs) {
@@ -109,6 +143,7 @@ export async function scanWindow({ read, scroll, window, maxPages = 80, maxMs = 
             }, remainingMs); }),
           ]);
           recovery.status = 'completed';
+          endMark = endStreak >= endConfirmReads ? endStreak : null;
           stagnant = 0;
           oldPages = 0;
           stallCause = null;
@@ -169,6 +204,9 @@ export function auditDeepLinks(items, limit = 12) {
       if (url.username || url.password) { record.reason = 'embedded_credentials'; continue; }
       record.href = url.href;
       if (link.href !== url.href) record.originalHref = link.href;
+      // Loopback, metadata, LAN and plain-HTTP targets never enter a deep-read queue.
+      const refusal = publicUrlRefusal(url);
+      if (refusal) { record.reason = refusal; continue; }
       const hostname = url.hostname.replace(/^www\./, '');
       const text = `${item.text || ''} ${link.text || ''} ${link.href}`;
       const technical = technicalTopic.test(text);

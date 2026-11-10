@@ -22,7 +22,9 @@ const external = value => ({ start: iso(value.start), end: iso(value.end) });
 const key = value => `${milliseconds(value.start)}:${milliseconds(value.end)}`;
 const confirmed = report => report.scanned === true && report.undatedItems === 0 &&
   ['time_boundary', 'explicit_empty', 'observed_end'].includes(report.reason) && report.assurance === 'best_effort_ui' &&
-  (report.reason === 'time_boundary' ? report.boundaryEvidence === 'ordered_timestamp_boundary' : report.boundaryEvidence === 'explicit_exhaustion');
+  (report.reason === 'time_boundary' ? report.boundaryEvidence === 'ordered_timestamp_boundary' :
+    report.reason === 'observed_end' ? ['explicit_exhaustion', 'stable_scroll_end'].includes(report.boundaryEvidence) :
+    report.boundaryEvidence === 'explicit_exhaustion');
 const pendingPriority = (a, b) => (a.attempts ?? 0) - (b.attempts ?? 0) || milliseconds(b.end) - milliseconds(a.end);
 const splitReasons = new Set(['page_budget', 'time_budget', 'stalled', 'search_time_filter_not_respected', 'bounded_browser_capture', 'interrupted']);
 

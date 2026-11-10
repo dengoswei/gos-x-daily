@@ -259,3 +259,21 @@ test('adaptive children never fall below minimum width and retry pass does not s
   assert.equal(attempted.at(-1).start, before(48));
   assert.ok(attempted.every(value => Date.parse(value.end) - Date.parse(value.start) === 6 * HOUR));
 });
+
+test('a stable scroll end certifies only observed_end; mismatched or invented evidence does not', () => {
+  const window = interval(6, 0);
+  const cases = [
+    [{ reason: 'observed_end', boundaryEvidence: 'stable_scroll_end' }, true],
+    [{ reason: 'observed_end', boundaryEvidence: 'explicit_exhaustion' }, true],
+    [{ reason: 'explicit_empty', boundaryEvidence: 'stable_scroll_end' }, false],
+    [{ reason: 'time_boundary', boundaryEvidence: 'stable_scroll_end' }, false],
+    [{ reason: 'observed_end', boundaryEvidence: 'scroll_geometry' }, false],
+    [{ reason: 'observed_end', boundaryEvidence: 'stable_scroll_end', undatedItems: 1 }, false],
+  ];
+  for (const [extra, scanned] of cases) {
+    const state = createCoverageState(now);
+    const attempt = recordCoverageAttempt(state, window, result(window, extra.reason, extra), { now, runId: 'synthetic' });
+    assert.equal(attempt.scanned, scanned, JSON.stringify(extra));
+    assert.equal(coverageReport(state, now).windows['24h'].uiScannedHours, scanned ? 6 : 0);
+  }
+});
