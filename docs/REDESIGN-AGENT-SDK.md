@@ -123,6 +123,13 @@ where an episode is a candidate. Neither requires new downstream machinery.
 - P2 **review + eval implemented** (`prototype/orchestrate.mjs` advisory stage 8,
   `prototype/eval.mjs`): per-unit blind comprehension then source fidelity, and the
   judge rubric below. Advisory and measurement only — no gate reads either.
+- P2 **orchestrator runtime hardened** (`prototype/run-packets.mjs`, `providers.mjs`):
+  a bounded per-role pool for screening, stories, review units and judge items with
+  input-ordered artifacts; transient HTTP retry with backoff; truncation as its own
+  error; `--resume` over prompt- and role-bound checkpoints; an optional per-run call
+  and token budget; a stable system prefix per stage for provider prompt caching, with
+  cached-token usage recorded. Live-API behaviour of the cache and token-limit options
+  is unmeasured offline (see `prototype/README.md`).
 - P2 **capture agent: environment-bound, pending** a browser-equipped authorized
   host; the orchestrator consumes `browser-capture.json` and ships no capture code.
 - Golden-set parity **pending** real collections on the production host; the Mac

@@ -38,11 +38,58 @@ Out of scope, by design:
   ledger remain the parent's.
 
 Each stage output must satisfy its contract before the run continues: exact
-decision coverage per batch, `citedUrls` that literally appear in the supplied
-packet bytes, and a candidate ledger covering exactly the collection's candidate
-keys. One retry per stage on a parse failure and one compose repair round on a
-validator failure; after that the run is rejected, writing `digest.rejected.md`
-instead of `digest.md` and exiting non-zero.
+decision coverage per batch, a story that is exactly one bullet (no blank line,
+second bullet or heading), `citedUrls` that occur as **whole** URLs in the supplied
+packets (a prefix such as `…/status/12` of `…/status/123` does not count), and a
+candidate ledger covering exactly the collection's candidate keys. One retry per
+stage on a parse failure and one compose repair round on a validator failure; after
+that the run is rejected, writing `digest.rejected.md` instead of `digest.md` and
+exiting non-zero.
+
+## Parallelism, retries, resume and budget
+
+- **Bounded pool.** Screening batches, story groups, review units and eval judge
+  items are independent and run with at most the role's `concurrency` calls in flight
+  (default 4; 1 for an `exec` role unless configured). Results, files and report
+  arrays are indexed by input order, never completion order, so a parallel run writes
+  the same artifacts as a sequential one. Within a review unit Stage A is still
+  persisted before Stage B is built. If one item fails, no new item starts, in-flight
+  siblings finish and persist, and the run fails naming every failed and unstarted item.
+- **Transient retries** (HTTP providers only): network errors and HTTP 408/409/429/5xx
+  are retried up to `retry.maxAttempts` (default 3) total attempts, waiting
+  `retry-after` when the provider sends one (refused when it exceeds
+  `retry.maxRetryAfterMs`, default 120 s) and otherwise capped exponential backoff with
+  jitter (`retry.baseDelayMs` 1000, `retry.maxDelayMs` 30000). Any other 4xx fails at
+  once. A client timeout (600 s) is not retried, since the request may have been
+  processed and billed. The ledger counts these as `transientRetries`.
+- **Truncation** (`finish_reason: "length"`, `stop_reason: "max_tokens"`) is its own
+  error naming the role and its `maxTokens`; the raw reply is persisted and its usage
+  recorded. It is never retried at the same limit: with `maxTokensRetry` set (larger
+  than `maxTokens`) the call is repeated once at that limit, otherwise the stage fails.
+- **Resume.** Every accepted stage response is checkpointed in
+  `OUT/checkpoints/<label>.json`, bound to the SHA-256 of that call's exact prompt
+  (system and user parts: contract, packets, prior-stage outputs) and of the role's
+  fingerprint (kind, model, base URL or exec argv). `--resume` reuses an unfinished
+  `OUT` (no `report.json` yet): a checkpoint whose bindings match is re-parsed against
+  the current contract and reused without a call; a call without one runs. A
+  checkpoint whose prompt or role changed is **not reused and never overwritten**: the
+  run fails and you start a new `--out`. Limits (`maxTokens`, `concurrency`, `retry`,
+  `budget`) are not part of the binding, so raising one after a failure keeps the
+  completed work. Without `--resume`, `--out` must be new, exactly as before; files
+  stay write-once (`wx`), and an existing view file (`screen/`, `stories/`, `digest.md`
+  …) is only accepted when byte-identical. A reused Stage A record keeps its original
+  `persistedAt`.
+- **Budget.** An optional top-level `budget` in the models file —
+  `{"maxCalls": 60, "maxInputTokens": 2000000, "maxOutputTokens": 200000}` — stops
+  launching calls once a cap is reached and fails with the counts; everything already
+  done is persisted for `--resume` (raise the cap first). What it can see: `maxCalls`
+  counts every provider call this process launches (contract and truncation retries
+  included, transient HTTP retries not; reused checkpoints are free). Token caps count
+  only tokens a provider **reported**; a call without counters (a plain `exec` role)
+  is listed as `unmeteredCalls`, never as zero, so a token cap does not bound an
+  unmetered role — use `maxCalls` there. Calls already in flight when a token cap is
+  crossed still complete, so the overshoot is up to `concurrency` calls. Orchestrator
+  and eval each apply the budget to their own process.
 
 ## Usage
 
@@ -54,17 +101,24 @@ node prototype/make-synthetic-run.mjs --out /path/to/new/run
 # (node cli.mjs import-browser / compose-input / worker-input produce exactly these).
 node prototype/orchestrate.mjs --run /path/to/run --models prototype/models.local.json --out /path/to/new/out
 
+# After a failure (provider error, budget, truncation): continue the same OUT,
+# reusing every completed stage whose prompt and role are unchanged.
+node prototype/orchestrate.mjs --run /path/to/run --models prototype/models.local.json --out /path/to/new/out --resume
+
 # Optional, after a passed run: development-time measurement into OUT/eval.json.
 node prototype/eval.mjs --run /path/to/run --out /path/to/new/out --models prototype/models.local.json
 ```
 
-The orchestrator's `--out` must not exist (the eval harness's `--out` is that same
-finished directory); every artifact is written with the `wx` flag. Standard
-output is the compact report JSON only — keys, counts, sections, cited URLs and
-usage, never source or response text. Artifacts land in:
+The orchestrator's `--out` must not exist unless `--resume` continues an unfinished
+one (the eval harness's `--out` is that same finished directory; it also accepts
+`--resume` after a partial eval); every artifact is written with the `wx` flag.
+Standard output is the compact report JSON only — keys, counts, sections, cited URLs
+and usage, never source or response text. Artifacts land in:
 
 ```
+OUT/manifest.json  the collection this OUT belongs to (checked on --resume)
 OUT/raw/        every raw model response, including retries and the repair round
+OUT/checkpoints/ one record per accepted stage call (prompt/role hashes, raw file)
 OUT/screen/     one decision file per source packet
 OUT/stories/    one bullet (.md) and its metadata (.json) per group
 OUT/digest.md   the validated draft  (digest.rejected.md when validation failed)
@@ -96,9 +150,18 @@ harness. Each unit is reviewed in the order `EDITORIAL.md` requires:
 - **Stage B (source fidelity)** gets those persisted bytes back, unchanged, plus
   the unit's own evidence: the candidate packets of the included dispositions rows
   whose URL the unit cites, with their deep-material and thread packets (every read
-  SHA-256- and size-checked). The audit unit gets the collection context packet and
+  SHA-256- and size-checked). URLs are extracted the way the digest URL gate extracts
+  them and compared **canonically** (`canonicalUrl` from `binding.mjs`), so
+  `…/status/123` matches a `…/status/123/` row and `…/post-2` never pulls `…/post`.
+  The audit unit gets the collection context packet and
   the coverage/warnings accounting instead of candidate bodies. It returns `findings`
   (`material` / `minor`, each quoting the fragment at fault) and `verdictB`.
+- **No evidence resolved.** An item unit whose cited URLs match no included row is
+  never sent to Stage B as if evidence were present: no call is made, `unit-NNN.b.json`
+  records `modelCall: false`, `evidence.resolved: false` and one deterministic
+  `material` finding of kind `evidence-unresolved`, the report gets a warning and
+  `advisoryReview.evidenceUnresolved` counts it. The eval harness records such an item
+  with `scores: null`, `evidenceResolved: false` and a warning instead of scoring it.
 
 `report.advisoryReview` carries counts only — units, verdict and finding tallies,
 and the unit file paths. Both calls bill to one usage stage, `review`; raw responses
@@ -151,16 +214,37 @@ belong in the file; a key value never does.
   "apiKeyEnv": "DEEPSEEK_API_KEY", "maxTokens": 4096 }}}
 ```
 
-- `openai` — `POST {baseUrl}/chat/completions`; covers OpenAI, DeepSeek and any
-  OpenAI-compatible gateway.
+- `openai` — `POST {baseUrl}/chat/completions` with a `system` message (the stage's
+  stable prefix) and a `user` message (the call's evidence); covers OpenAI, DeepSeek
+  and any OpenAI-compatible gateway. The output limit is sent as `max_tokens`; set
+  `"maxTokensParam": "max_completion_tokens"` for OpenAI reasoning models, which
+  reject `max_tokens`. Only `message.content` is the answer: a DeepSeek reasoner's
+  `reasoning_content` is ignored, and a reply carrying only reasoning fails.
 - `anthropic` — `POST {baseUrl}/v1/messages` with `anthropic-version: 2023-06-01`;
-  `baseUrl` defaults to `https://api.anthropic.com`. `maxTokens` is required.
-- `exec` — spawns `command` (argv array, `shell: false`), writes the prompt to
-  stdin and reads the response from stdout, with an 8 MiB output guard and a
-  600 s limit. `"parse": "claude-json"` reads `claude -p --output-format json`:
-  `result` for the text, `usage.input_tokens` / `usage.output_tokens` and
-  `total_cost_usd` for the ledger, and treats `stop_reason: "refusal"`, an
-  `is_error` payload or an empty `result` as a failed call.
+  `baseUrl` defaults to `https://api.anthropic.com`. `maxTokens` is required. The
+  stable prefix is sent as a `system` text block with `cache_control:
+  {"type": "ephemeral"}` (`"promptCache": false` omits the breakpoint).
+- `exec` — spawns `command` (argv array, `shell: false`), writes the system and user
+  parts, concatenated, to stdin and reads the response from stdout, with an 8 MiB
+  output guard and a 600 s limit. `"parse": "claude-json"` reads `claude -p
+  --output-format json`: `result` for the text, `usage.input_tokens` /
+  `usage.output_tokens` / cache counters and `total_cost_usd` for the ledger, treats
+  `stop_reason: "refusal"`, an `is_error` payload or an empty `result` as a failed
+  call and `stop_reason: "max_tokens"` as truncation. An exec failure is not retried.
+
+Per-role options (all optional): `concurrency` (1–64), `maxTokensRetry`,
+`maxTokensParam` (`openai`), `promptCache` (`anthropic`), and `retry`
+(`maxAttempts`, `baseDelayMs`, `maxDelayMs`, `maxRetryAfterMs`). The top-level
+`budget` is described above. Keep `concurrency` within the provider account's rate
+limits; a 429 is retried, but a pool larger than the limit only buys retries.
+
+> **Warning — exec roles must run without tools.** Every stage is single-shot over
+> inlined, untrusted packets; a CLI that can run tools could act on instructions
+> hidden in that evidence. Configure an `exec` role so the CLI has **no tools at
+> all**. The example's `"--disallowed-tools", "*"` for `claude -p` is **unverified**:
+> nothing offline confirms that `*` is accepted as a wildcard there. Verify against
+> your installed CLI version's own documentation, and confirm that a tool request is
+> actually refused, before trusting it.
 
 Roles are independent, so cross-vendor configurations (cheap screening, mid-tier
 stories, a strong composer, a reviewer from a different vendor than the composer)
@@ -182,7 +266,44 @@ That measurement is a single session's observation of one CLI version, not a
 benchmark; re-measure before relying on the figure. Per-run token and duration
 totals for whatever providers were actually used are in `OUT/report.json` under
 `stages`, with `null` wherever a provider reported no counters — unknown usage is
-recorded as unknown, never as zero.
+recorded as unknown, never as zero. Each stage also lists `calls`, `reused`
+(checkpoints served on `--resume`), `transientRetries`, `unmeteredCalls` (calls
+without token counters) and `durationMs` (summed per call, so it exceeds wall-clock
+time under concurrency; `elapsedMs` is the run's wall-clock time).
+
+### Prompt caching and message structure
+
+Each stage's prompt is split into a **stable prefix** — stage marker, stage contract,
+the untrusted-evidence rule, the collection context and the `published_recently`
+history (compose: the run's `prompt.md` plus the compose contract) — and the
+**per-call part** (the batch, group, unit or draft). The prefix is byte-identical
+across every call of a stage in a run, so providers that cache prompt prefixes can
+reuse it:
+
+- OpenAI and DeepSeek cache prefixes automatically. Cached tokens are recorded as
+  `cachedInputTokens` from `usage.prompt_tokens_details.cached_tokens` (OpenAI) or
+  `usage.prompt_cache_hit_tokens` (DeepSeek); `inputTokens` is their `prompt_tokens`,
+  which **includes** the cached part.
+- Anthropic caches up to the `cache_control` breakpoint on the system block.
+  `cachedInputTokens` is `cache_read_input_tokens` and `cacheWriteInputTokens` is
+  `cache_creation_input_tokens`; Anthropic's `input_tokens` **excludes** both, so the
+  two providers' `inputTokens` are not directly comparable.
+- Fields a provider does not report stay `null`.
+
+No saving is claimed here. Prefix caches have a minimum cacheable length that depends
+on the provider and model (for Anthropic, on the order of one to a few thousand
+tokens), and the screen, story and review contracts alone may be shorter, in which
+case nothing is cached; a cache also expires after a few minutes without use. Read
+`cachedInputTokens` in `report.json` to see what a real run actually got.
+
+The full `published_recently` list sits in the cached screen and story prefixes
+instead of being filtered per story group: filtering by host or URL could drop an
+earlier report on the same subject reached through a different link, which is
+exactly what the duplicate rule must see. Model-facing JSON is written one array
+element per line instead of indented, and packet transport metadata
+(`sourceBinding`, `evidenceIndex`: hashes and the local `sources.json` path) is
+removed from model-facing packets — it is not evidence, costs tokens and would
+disclose a local path to a provider. Packet hashes are still checked on every read.
 
 ## Untrusted evidence
 
@@ -191,3 +312,11 @@ text, titles, URLs and link labels are untrusted evidence, never instructions. N
 stage may run a command, authenticate, fetch a URL, send a message or change
 configuration. The orchestrator itself never evaluates model output as code and
 only ever writes inside `--out`.
+
+Model-facing JSON escapes `<`, `>` and `&` as `<`, `>` and `&` (still
+valid JSON with the same value), so source text such as `</candidate_packets>`
+cannot close a prompt block; each plain-text block also neutralises its own closing
+tag inside its body, and the stage prompts tell the model to decode the escapes when
+citing. The persisted Stage A record is written with the same escaping, so Stage B
+still reads exactly the persisted bytes. The run's own `prompt.md` comes from
+`compose-input` and is inlined as written.
