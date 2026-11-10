@@ -5,15 +5,16 @@ import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { validateReview } from './review.mjs';
 import { inspectDeliveryLedger, recentPublishedUrls, recordDeliveryAttempt, recordDeliveryReceipt, recordDeliveryUncertain, recordPublishedUrls } from './delivery-ledger.mjs';
-import { candidateKeys, canonicalUrl, digestUrls, observedUrls, readPublicationFile, validateDispositions, validateUrlBinding } from './binding.mjs';
+import { candidateKeys, canonicalUrl, citedUrls, digestUrls, observedUrls, readPublicationFile, splitDigest, validateDispositions, validateUrlBinding } from './binding.mjs';
 import { compactPromptText } from './compose.mjs';
-import { larkPostJson } from './lark-post.mjs';
+import { bulletLine, larkPostJson } from './lark-post.mjs';
 
 export { readPublicationFile };
 
 const promptDir = new URL('./prompts/', import.meta.url);
-const urlPattern = /https?:\/\/[^\s)<>]+/;
-const auditHeading = /^##\s+差异补充\s*$/;
+const hasUrl = text => citedUrls(text).length > 0;
+// The only executable that honours feishu-post-v1: it re-derives and sends the reviewed post JSON.
+const nativePostAdapter = fileURLToPath(new URL('./deployment/mac/mac-sender.mjs', import.meta.url));
 
 export function assertCollection(collection) {
   if (!collection?.collectionId || !/^[a-zA-Z0-9-]{1,100}$/.test(collection.collectionId)) throw new Error('Invalid collection ID');
@@ -67,12 +68,8 @@ export function dispositionStatusLine(dispositions) {
   return `候选处置：共 ${counts.included + counts.merged + counts.skipped} 条候选，收录 ${counts.included} 条，合并 ${counts.merged} 条，跳过 ${counts.skipped} 条。`;
 }
 
-// Main body: everything before the audit heading, with the collection marker removed.
-function mainBodyLines(markdown) {
-  const lines = markdown.replace(/<!-- x-daily-collection: [a-zA-Z0-9-]+ -->\s*/g, '').split(/\r?\n/);
-  const auditIndex = lines.findIndex(line => auditHeading.test(line.trim()));
-  return auditIndex >= 0 ? lines.slice(0, auditIndex) : lines;
-}
+// Main body: everything before the audit heading, with the collection marker removed (shared split).
+const mainBodyLines = markdown => splitDigest(markdown).main;
 
 // A `## ` section runs to the next `#`/`##` heading; deeper headings belong to it.
 function sections(lines) {
@@ -87,7 +84,7 @@ function sections(lines) {
 /** Exact delivery payload: main body without URL-free `## ` sections, then the coverage and disposition lines. */
 export function larkMarkdown(markdown, collection, { dispositions, renderStyle } = {}) {
   const kept = sections(mainBodyLines(markdown))
-    .filter(part => !/^##\s/.test(part.heading ?? '') || part.lines.some(line => urlPattern.test(line)));
+    .filter(part => !/^##\s/.test(part.heading ?? '') || hasUrl(part.lines.join('\n')));
   if (renderStyle !== undefined && renderStyle !== 'concise') throw new Error('Unsupported render style');
   // Validate the complete accounting even when detailed figures stay in the audit.
   const detailedCoverage = coverageStatusLine(collection);
@@ -99,7 +96,18 @@ export function larkMarkdown(markdown, collection, { dispositions, renderStyle }
   return `${kept.flatMap(part => part.lines).join('\n').trim()}${summary ? `\n\n${summary}` : ''}${ledger}\n`;
 }
 
-const bulletPattern = /^(?:[-*]|\d+[.)]) .*(?:\n(?!(?:[-*]|\d+[.)]) |#{1,6} ).*)*/gm;
+// Bullets as the renderer shows them: a bulletLine plus following lines up to a blank line, heading or next bullet.
+function bulletBlocks(lines) {
+  const blocks = [];
+  let current = null;
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed || /^#{1,6}\s/.test(trimmed)) current = null;
+    else if (bulletLine.test(trimmed)) blocks.push(current = [trimmed]);
+    else current?.push(trimmed);
+  }
+  return blocks.map(block => block.join('\n'));
+}
 
 /**
  * observed enforces URL binding; dispositions enforces the candidate ledger (supplements come from observed.materials).
@@ -109,11 +117,11 @@ export function validateDigest(markdown, collection, { observed, dispositions, p
   assertCollection(collection);
   if (!markdown.startsWith(`# X AI 日报 ${collection.date}\n`)) throw new Error('Digest title/date mismatch');
   if (!markdown.includes(collection.digestMarker)) throw new Error('Digest must match this collection marker');
-  if (!markdown.split(/\r?\n/).some(line => auditHeading.test(line.trim()))) throw new Error('Missing section: 差异补充');
+  if (splitDigest(markdown).auditIndex < 0) throw new Error('Missing section: 差异补充');
   const parts = sections(mainBodyLines(markdown));
-  const bullets = parts.flatMap(part => part.lines.join('\n').match(bulletPattern) ?? []);
-  if (bullets.some(bullet => !urlPattern.test(bullet))) throw new Error('Each main-body bullet needs a direct source URL');
-  if (!parts.some(part => /^##\s/.test(part.heading ?? '') && (part.lines.join('\n').match(bulletPattern) ?? []).length)) throw new Error('Digest main body has no `## ` section with a sourced bullet');
+  const bullets = parts.flatMap(part => bulletBlocks(part.lines));
+  if (bullets.some(bullet => !hasUrl(bullet))) throw new Error('Each main-body bullet needs a direct source URL');
+  if (!parts.some(part => /^##\s/.test(part.heading ?? '') && bulletBlocks(part.lines).length)) throw new Error('Digest main body has no `## ` section with a sourced bullet');
   const result = { ok: true, date: collection.date, collectionId: collection.collectionId, mainBullets: bullets.length };
   if (observed !== undefined) result.urlBinding = validateUrlBinding(markdown, observed);
   if (dispositions !== undefined) result.dispositions = validateDispositions(dispositions, collection, markdown, observed);
@@ -141,6 +149,18 @@ export function publicationGates(rootDir, snapshotInputs, markdown, collection, 
 }
 
 const sha256 = value => createHash('sha256').update(value).digest('hex');
+const realDirectory = (dir, label) => {
+  try { return fs.realpathSync(path.resolve(dir)); } catch (error) { throw new Error(`${label} must be an existing directory (${error.code})`); }
+};
+// A target that names its ledger refuses any publication whose ledgerDir resolves elsewhere.
+function assertPinnedLedger(target, ledgerDir) {
+  if (target.ledgerDir === undefined) return;
+  if (typeof target.ledgerDir !== 'string' || !path.isAbsolute(target.ledgerDir)) throw new Error('Target ledgerDir must be an absolute path');
+  if (realDirectory(target.ledgerDir, 'Target ledgerDir') !== realDirectory(ledgerDir, 'Publication ledgerDir')) {
+    throw new Error('Publication ledgerDir is not the configured delivery ledger of this deployment target');
+  }
+}
+const isNativePostAdapter = executable => path.resolve(executable) === nativePostAdapter;
 
 export function prepareDelivery(markdown, collection, target, publication, { revisionOf } = {}) {
   validateDigest(markdown, collection);
@@ -150,12 +170,17 @@ export function prepareDelivery(markdown, collection, target, publication, { rev
   if (!/^[a-zA-Z0-9-]{1,50}$/.test(deploymentId ?? '') || deploymentId === 'xdaily') throw new Error('Use an explicit independent deployment ID');
   if (typeof target.executable !== 'string' || !path.isAbsolute(target.executable)) throw new Error('An explicitly verified absolute Lark wrapper is required');
   if (!publication?.rootDir || !publication.snapshotInputs || !publication.reviewPath || !publication.ledgerDir) throw new Error('Independent approved review and explicit forward delivery ledger are required');
+  assertPinnedLedger(target, publication.ledgerDir);
   const rootDir = path.resolve(publication.rootDir);
   const publishedHistory = recentPublishedUrls(publication.ledgerDir, { before: collection.date });
   const gates = publicationGates(rootDir, publication.snapshotInputs, markdown, collection, { publishedHistory });
   const inputs = { ...publication.snapshotInputs, rootDir, renderedMarkdown: gates.renderedMarkdown };
   if ((inputs.reviewMode ?? 'independent') !== (target.reviewMode ?? 'independent')) throw new Error('Publication review mode must match the deployment target');
   if (inputs.transport !== target.transport) throw new Error('Publication transport must match the deployment target');
+  // sendDelivery passes Markdown args; only the native post adapter turns them into the reviewed post payload.
+  if (inputs.transport !== undefined && !isNativePostAdapter(target.executable)) {
+    throw new Error(`Transport ${inputs.transport} is only sent through the native post adapter (deployment/mac/mac-sender.mjs); refusing to send Markdown in place of the reviewed post`);
+  }
   if (readPublicationFile(inputs.rootDir, inputs.digestPath) !== markdown ||
       JSON.stringify(JSON.parse(readPublicationFile(inputs.rootDir, inputs.sourcesPath))) !== JSON.stringify(collection)) throw new Error('Publication draft/source inputs do not match their actual files');
   const reviewText = readPublicationFile(inputs.rootDir, publication.reviewPath);
@@ -188,6 +213,9 @@ export function sendDelivery(plan, { authorized = false, env = process.env, spaw
   if (!authorized || env.X_DAILY_ALLOW_SEND !== '1') throw new Error('Lark sending is not authorized');
   if (plan?.schemaVersion !== 2 || plan.status !== 'prepared_not_sent') throw new Error('A schema-2 reviewed delivery plan is required');
   if (target?.enabled !== true) throw new Error('A separately verified enabled target is required at send time');
+  // The native post adapter reads its reservation from its own pinned ledger; every other sender needs the target's.
+  if (target.ledgerDir === undefined && !isNativePostAdapter(String(target.executable))) throw new Error('A send target must name its pinned delivery ledgerDir');
+  if (plan.transport !== undefined && !isNativePostAdapter(String(plan.executable))) throw new Error('Reviewed native post transport requires the native post adapter; refusing to send Markdown');
   const p = plan.publication;
   const markdown = readPublicationFile(p.rootDir, p.snapshotInputs.digestPath);
   const collection = JSON.parse(readPublicationFile(p.rootDir, p.snapshotInputs.sourcesPath));

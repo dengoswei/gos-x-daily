@@ -4,8 +4,9 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { itemKey, canonicalLink } from './feed.mjs';
+import { linkSpan, safeHref } from './lark-post.mjs';
 
-const urlPattern = /https?:\/\/[^\s)<>]+/g;
+const urlPattern = /https?:\/\/[^\s)<>]+/gi;
 const materialUrlPattern = /https?:\/\/[^\s"'`<>)\]\\]+/g;
 const trailing = /[.,;:!?。，、)\]》」）】]+$/;
 const textExtensions = new Set(['.txt', '.md', '.json', '.jsonl', '.html', '.xml']);
@@ -40,15 +41,52 @@ export function canonicalUrl(href) {
   return `${url.protocol}//${host}${url.pathname.replace(/\/+$/, '')}${url.search}${url.hash}`;
 }
 
-const mainBody = markdown => {
-  const lines = markdown.split(/\r?\n/);
-  const audit = lines.findIndex(line => /^##\s+差异补充\s*$/.test(line.trim()));
-  return (audit >= 0 ? lines.slice(0, audit) : lines).join('\n');
-};
+const auditHeading = /^##\s+差异补充\s*$/;
+const collectionMarker = /<!-- x-daily-collection: [a-zA-Z0-9-]+ -->[ \t]*/g;
+
+/**
+ * The one main-body/audit split used by render, binding and review. Markers are
+ * removed within their line (never consuming a newline); a marker-only line is
+ * dropped with the blank lines after it. `auditIndex` indexes `lines` (-1: none).
+ */
+export function splitDigest(markdown) {
+  const lines = String(markdown).split(/\r?\n/);
+  const auditIndex = lines.findIndex(line => auditHeading.test(line.replace(collectionMarker, '').trim()));
+  const main = [];
+  let afterMarker = false;
+  for (const line of auditIndex >= 0 ? lines.slice(0, auditIndex) : lines) {
+    const stripped = line.replace(collectionMarker, '');
+    if (stripped !== line && !stripped.trim()) { afterMarker = true; continue; }
+    if (afterMarker && !stripped.trim()) continue;
+    afterMarker = false;
+    main.push(stripped);
+  }
+  return { lines, auditIndex, main };
+}
+const mainBody = markdown => splitDigest(markdown).main.join('\n');
+
+/**
+ * Every URL a reader can follow in text: bare URLs (scheme in any case) and every
+ * Markdown link destination in the renderer's grammar. Unsafe destinations throw.
+ */
+export function citedUrls(text) {
+  const found = [...text.matchAll(urlPattern)].map(match => [match.index, match[0].replace(trailing, '')]);
+  for (let index = text.indexOf('['); index >= 0; index = text.indexOf('[', index + 1)) {
+    const span = linkSpan(text, index);
+    if (!span) continue;
+    let linkable = /^[\\/]/.test(span.href);
+    try { new URL(span.href); linkable = true; } catch { /* Not a destination the renderer could emit. */ }
+    if (linkable) found.push([span.hrefStart, span.href]);
+  }
+  const urls = [...new Set(found.sort((a, b) => a[0] - b[0]).map(([, href]) => href))];
+  const unsafe = urls.find(href => !safeHref(href));
+  if (unsafe !== undefined) throw new Error(`Digest link is not a safe absolute HTTP(S) URL: ${unsafe}`);
+  return urls;
+}
 
 /** Raw URLs cited in the digest main body (the audit section is excluded). */
 export function digestUrls(markdown) {
-  return [...mainBody(markdown).matchAll(urlPattern)].map(match => match[0].replace(trailing, ''));
+  return citedUrls(mainBody(markdown));
 }
 
 // Each candidate with its own URL; thread contexts are discovery leads, not candidates.

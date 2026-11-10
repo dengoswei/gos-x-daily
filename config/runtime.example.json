@@ -14,7 +14,8 @@
     "enabled": false,
     "userId": null,
     "deploymentId": "CHANGE-ME",
-    "executable": "/ABSOLUTE/PATH/TO/VERIFIED/lark-cli"
+    "executable": "/ABSOLUTE/PATH/TO/VERIFIED/lark-cli",
+    "ledgerDir": "/ABSOLUTE/PATH/TO/EXISTING/delivery-ledger"
   },
   "totalBudgetMs": 3000000,
   "maxConcurrency": 2,

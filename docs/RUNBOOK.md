@@ -107,10 +107,20 @@ not merely settings/metrics. Preserve material limitations in the final render.
 Section rules: the digest needs the `# X AI 日报 YYYY-MM-DD` title, the collection
 marker, at least one `##` main section with a bullet carrying a direct URL, and a
 `## 差异补充` audit section. The validator does not pin main section names (the
-prompt's section list stays the editorial default); every main-body bullet
-(`-`, `*` or numbered) needs a URL. A `##` main section with no line containing a URL
+prompt's section list stays the editorial default); every main-body bullet needs
+a URL. A bullet is any line the renderer shows as one: after trimming, `-`, `*`, `+`,
+`1.` or `1)` followed by whitespace (indented bullets count), plus its continuation
+lines up to the next blank line, heading or bullet. A `##` main section with no line containing a URL
 is left out of the rendered message, so do not write placeholder sections; its text
 is still a review unit because review units come from digest.md, not the render.
+
+The main body ends at the first line that, with the collection marker removed and
+trimmed, is `## 差异补充`; render, URL binding and review roles share this one split.
+Every bare URL (scheme in any letter case) and every `[label](href)` destination in
+the main body is bound to the observed collection/materials, the cited-candidate
+check and published-URL history. A destination with whitespace, `<`, `>`, a
+backslash, credentials or a (percent-encoded) `.`/`..` path segment, or a non-HTTP(S)
+destination, is rejected rather than bound as a prefix.
 
 Repeats: to show the writer what recent reports already carried, pass the same
 `ledgerDir` named in `publication.json` to `compose-input`:
@@ -179,7 +189,9 @@ truth. The controller owns real reviewer independence and semantic quality.
 
 Verify the Lark bot, exact recipient and local credential/runtime configuration
 through authorized means. Use docs/LARK.md; do not ask for secrets in chat. Only
-then enable the verified local Lark target and prepare offline:
+then enable the verified local Lark target, set `lark.ledgerDir` in the runtime
+config to the already-initialized delivery ledger (absolute, or relative to the
+config file), and prepare offline:
 
 ```sh
 node cli.mjs prepare-delivery --sources "$RUN/sources.merged.json" --digest "$RUN/digest.md" --publication "$RUN/publication.json" --out "$RUN/delivery.json" --config config/runtime.local.json
@@ -189,7 +201,11 @@ Preparation re-runs the URL and dispositions gates, requires `dispositionsPath`
 and renders the same message as `review-input`; editing `dispositions.json` after
 approval invalidates the review. Preparation never sends. The separate `send`
 command also requires explicit `--allow-send`, `X_DAILY_ALLOW_SEND=1`, matching
-verified target, exact unchanged publication/review, and a forward ledger. See CLI help; do not run it without actual
+verified target, exact unchanged publication/review, and a forward ledger. With
+`lark.enabled: true`, both `prepare-delivery` and `send` refuse a runtime config
+without `lark.ledgerDir` and any publication whose `ledgerDir` resolves (via
+realpath) to another directory, so a freshly initialized ledger plus an edited
+`publication.json` cannot reuse an idempotency key. See CLI help; do not run it without actual
 send authority. No automatic retry: timeout/process failure/missing or malformed
 confirmation may mean uncertain delivery. Reconcile externally before any retry.
 Preserve API message IDs; acceptance is not proof the user read the report.

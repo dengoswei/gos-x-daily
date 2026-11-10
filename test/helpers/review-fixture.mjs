@@ -74,7 +74,7 @@ export function createSyntheticReviewedFixture(t, overrides = {}) {
   const ledgerDir = path.join(rootDir, 'ledger');
   initializeDeliveryLedger(ledgerDir, { notBeforeDate: overrides.notBeforeDate ?? collection.date, createdBy: 'SYNTHETIC-test-controller' });
   const target = overrides.target ?? {
-    enabled: true, userId: 'ou_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', deploymentId: 'gos-SYNTHETIC-test', executable: '/SYNTHETIC/not-a-real-lark-wrapper',
+    enabled: true, userId: 'ou_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', deploymentId: 'gos-SYNTHETIC-test', executable: '/SYNTHETIC/not-a-real-lark-wrapper', ledgerDir,
   };
   const publication = { rootDir, snapshotInputs, reviewPath, ledgerDir };
   return { rootDir, collection, markdown, dispositions, snapshotInputs, options, review, reviewPath, ledgerDir, target, publication };

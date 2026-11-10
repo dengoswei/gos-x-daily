@@ -7,6 +7,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { larkPostJson } from './lark-post.mjs';
+import { splitDigest } from './binding.mjs';
 
 const KIND = 'x-daily-recovery-review-v1';
 const SELF_KIND = 'x-daily-self-review-v1';
@@ -17,6 +18,8 @@ function reviewKind(options) {
 }
 export const sha256 = value => createHash('sha256').update(value).digest('hex');
 const hash = sha256;
+// Locale-independent order: the snapshot hash must not depend on the host's collation.
+const byCodeUnit = (a, b) => a < b ? -1 : a > b ? 1 : 0;
 const meaningful = value => typeof value === 'string' && value.trim().length > 0;
 const instant = (value, label) => {
   if (!meaningful(value) || !/^\d{4}-\d{2}-\d{2}T/.test(value) || !Number.isFinite(Date.parse(value))) {
@@ -45,6 +48,7 @@ function fileUnderRoot(rootDir, relativePath) {
 export function deriveReviewUnits(markdown, renderedMarkdown) {
   if (!meaningful(markdown) || !meaningful(renderedMarkdown)) throw new Error('Digest and exact render are required');
   const units = [];
+  const { lines, auditIndex } = splitDigest(markdown);
   let block = [], role = 'main', fenced = false, bullet = false;
   const flush = () => {
     const text = block.join('\n').trim();
@@ -54,13 +58,11 @@ export function deriveReviewUnits(markdown, renderedMarkdown) {
     }
     block = []; bullet = false;
   };
-  for (const line of markdown.split('\n')) {
+  for (const [index, line] of lines.entries()) {
+    // The audit boundary is the shared split's, so review roles match render and binding.
+    if (index === auditIndex) { flush(); role = 'audit'; fenced = false; continue; }
     if (/^\s*(```|~~~)/.test(line)) { fenced = !fenced; block.push(line); continue; }
-    if (!fenced && /^#{1,6}\s/.test(line)) {
-      flush();
-      if (/^##\s+差异补充\s*$/.test(line)) role = 'audit';
-      continue;
-    }
+    if (!fenced && /^#{1,6}\s/.test(line)) { flush(); continue; }
     if (!fenced && /^<!-- x-daily-collection: [a-zA-Z0-9-]+ -->\s*$/.test(line)) { flush(); continue; }
     if (!fenced && /^(?:[-*+]|\d+[.)])\s/.test(line)) { flush(); bullet = true; block.push(line); continue; }
     if (!fenced && !line.trim() && !bullet) { flush(); continue; }
@@ -102,7 +104,7 @@ export function buildReviewSnapshot({ rootDir, digestPath, sourcesPath, disposit
       if (!sources || typeof sources !== 'object' || Array.isArray(sources)) throw new Error('Review sources must be a JSON object');
     }
     return { ...descriptor, sha256: hash(file.bytes), sizeBytes: file.bytes.length };
-  }).sort((a, b) => a.role.localeCompare(b.role) || a.path.localeCompare(b.path));
+  }).sort((a, b) => byCodeUnit(a.role, b.role) || byCodeUnit(a.path, b.path));
   const provenance = sources.provenance;
   if (provenance && (Object.hasOwn(provenance, 'evidence') || provenance.transport === 'gos-supported-browser')) {
     if (!Array.isArray(provenance.evidence) || !provenance.evidence.length) throw new Error('Source provenance requires nonempty evidence records');

@@ -13,6 +13,12 @@ import { writeWorkerPackets } from './worker-packets.mjs';
 
 const root = path.dirname(fileURLToPath(import.meta.url));
 const readJson = file => JSON.parse(fs.readFileSync(file, 'utf8'));
+// An enabled target is pinned to the ledger its runtime config names (relative to that config file).
+const pinnedTarget = (configFile, lark) => {
+  if (lark?.enabled !== true) return lark;
+  if (typeof lark.ledgerDir !== 'string' || !lark.ledgerDir) throw new Error('An enabled lark target must name its delivery ledgerDir in the runtime config');
+  return { ...lark, ledgerDir: path.resolve(path.dirname(path.resolve(configFile)), lark.ledgerDir) };
+};
 
 export async function main(argv = process.argv.slice(2)) {
   const [command] = argv;
@@ -82,8 +88,9 @@ export async function main(argv = process.argv.slice(2)) {
     return { status: 'structural_review_binding_passed_not_semantic_proof', digest: gates.validation, ...validateReview(JSON.parse(readPublicationFile(p.rootDir, p.reviewPath)), inputs) };
   }
   if (command === 'send') {
-    const config = readJson(required('--config'));
-    return sendDelivery(readJson(required('--plan')), { authorized: argv.includes('--allow-send'), target: config.lark });
+    const configFile = required('--config');
+    const target = pinnedTarget(configFile, readJson(configFile).lark);
+    return sendDelivery(readJson(required('--plan')), { authorized: argv.includes('--allow-send'), target });
   }
   if (!['inspect-config', 'collect', 'prepare-delivery', 'import-browser', 'import-feed', 'coverage-plan', 'coverage-report'].includes(command)) throw new Error(`Unknown command: ${command}`);
   const configFile = path.resolve(value('--config', path.join(root, 'config/runtime.example.json')));
@@ -91,7 +98,8 @@ export async function main(argv = process.argv.slice(2)) {
   const sourcesFile = config.sourcesFile ? path.resolve(path.dirname(configFile), config.sourcesFile) : path.join(root, 'config/sources.json');
   const sources = readJson(sourcesFile);
   if (command === 'prepare-delivery') {
-    const plan = prepareDelivery(fs.readFileSync(required('--digest'), 'utf8'), readJson(required('--sources')), config.lark, publication());
+    const p = publication();
+    const plan = prepareDelivery(fs.readFileSync(required('--digest'), 'utf8'), readJson(required('--sources')), pinnedTarget(configFile, config.lark), p);
     const output = required('--out');
     write(output, JSON.stringify(plan, null, 2) + '\n');
     return { status: plan.status, output, target: plan.target, validation: plan.validation };

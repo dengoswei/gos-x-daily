@@ -31,7 +31,7 @@ test('complete forward run: synthetic browser import, prompt, supplemental mater
       quotedPosts: [{ url: 'https://x.com/original/status/12347', text: 'SYNTHETIC older Goodfire mechanism hypothesis', publishedAt: '2026-10-15T12:00:00Z', links: [{ href: 'https://goodfire.ai/' }] }] }] }] },
   };
   writeJson('browser-capture.json', bundle);
-  const target = { enabled: true, userId: 'ou_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', deploymentId: 'gos-SYNTHETIC-test', executable: '/SYNTHETIC/never-executed' };
+  const target = { enabled: true, userId: 'ou_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', deploymentId: 'gos-SYNTHETIC-test', executable: '/SYNTHETIC/never-executed', ledgerDir: './delivery-ledger' };
   writeJson('runtime.json', { dataDir: path.join(root, 'data'), lookbackHours: 48, collectionEnabled: false, lark: target });
   const priorFetch = globalThis.fetch, priorWs = globalThis.WebSocket;
   globalThis.fetch = () => { throw new Error('No network in synthetic integration'); };

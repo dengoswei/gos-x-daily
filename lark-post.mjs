@@ -6,24 +6,42 @@
  */
 const text = (value, bold = false) => ({ tag: 'text', text: value, ...(bold ? { style: ['bold'] } : {}) });
 
-function linkAt(input, start) {
+/** Shared with binding.mjs: the exact `[label](href)` span the renderer parses (balanced parentheses). */
+export function linkSpan(input, start) {
   const labelEnd = input.indexOf(']', start + 1);
   if (labelEnd < 0 || input[labelEnd + 1] !== '(') return null;
-  const label = input.slice(start + 1, labelEnd);
-  if (!label || /[\[\]\n]/.test(label)) throw new Error('Unsupported or empty link label');
   let depth = 1, end = labelEnd + 2;
   for (; end < input.length; end++) {
     if (input[end] === '(') depth++;
     if (input[end] === ')' && --depth === 0) break;
   }
-  if (depth) throw new Error('Unclosed Markdown link');
-  const href = input.slice(labelEnd + 2, end);
+  return { label: input.slice(start + 1, labelEnd), href: input.slice(labelEnd + 2, end), hrefStart: labelEnd + 2, end: end + 1, closed: depth === 0 };
+}
+
+/**
+ * The only destinations that may be rendered or bound: absolute HTTP(S) with the scheme
+ * in any case, no credentials, whitespace, `<`, `>`, backslash or (encoded) dot segments.
+ */
+export function safeHref(href) {
+  if (typeof href !== 'string' || !/^https?:\/\/[^\s<>\\]+$/i.test(href)) return false;
+  const pathname = href.replace(/^https?:\/\/[^/?#]*/i, '').split(/[?#]/)[0];
+  if (pathname.split('/').some(segment => /^(?:\.|%2e){1,2}$/i.test(segment))) return false;
   let parsed;
-  try { parsed = new URL(href); } catch { throw new Error('Invalid source link'); }
-  if (!['https:', 'http:'].includes(parsed.protocol) || /\s/.test(href) || parsed.username || parsed.password) {
-    throw new Error('Source links must be HTTP(S) URLs without credentials or whitespace');
-  }
-  return { node: { tag: 'a', text: label, href }, end: end + 1 };
+  try { parsed = new URL(href); } catch { return false; }
+  return ['https:', 'http:'].includes(parsed.protocol) && !parsed.username && !parsed.password;
+}
+
+/** One bullet grammar for render and validation, applied to a trimmed line. */
+export const bulletLine = /^(?:[-*+]\s+|\d+[.)]\s+)(.+)$/;
+
+function linkAt(input, start) {
+  const span = linkSpan(input, start);
+  if (!span) return null;
+  if (!span.label || /[\[\]\n]/.test(span.label)) throw new Error('Unsupported or empty link label');
+  if (!span.closed) throw new Error('Unclosed Markdown link');
+  try { new URL(span.href); } catch { throw new Error('Invalid source link'); }
+  if (!safeHref(span.href)) throw new Error('Source links must be HTTP(S) URLs without credentials, whitespace, angle brackets, backslashes or dot segments');
+  return { node: { tag: 'a', text: span.label, href: span.href }, end: span.end };
 }
 
 /** Explicit support: bold, inline code (literal text), and Markdown source links. */
@@ -79,7 +97,7 @@ export function renderLarkPost(markdown) {
     const heading = line.match(/^(#{2,6})\s+(.+)$/);
     if (heading) { flush(); content.push(larkInline(heading[2], { bold: true })); continue; }
     if (/^#\s/.test(line)) throw new Error('Post may contain only one first-level title');
-    const bullet = line.match(/^(?:[-*+]\s+|\d+[.)]\s+)(.+)$/);
+    const bullet = line.match(bulletLine);
     if (bullet) { flush(); block.push(`• ${bullet[1]}`); continue; }
     block.push(line);
   }
