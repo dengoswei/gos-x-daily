@@ -87,11 +87,20 @@ function validateReviewAnswer(answer, units, packet) {
     } else {
       const refs = row.evidence;
       if (!asList(refs, 100) || (row.status === 'pass' && !refs.length)) throw new Error('API review lacks fidelity evidence');
-      const evidence = refs.map(ref => {
+      const quotedIds = new Set();
+      const metadataIds = new Set();
+      const evidence = refs.flatMap(ref => {
         const source = packet.byId.get(ref?.id);
-        if (!source || !substantial(ref.quote) || !source.text.includes(ref.quote)) throw new Error('API review cited an unsupported evidence excerpt');
-        return { id: ref.id, quote: ref.quote };
+        if (!source || !substantial(ref.quote)) throw new Error('API review cited an unsupported evidence excerpt');
+        if (source.url && ref.quote === source.url) {
+          metadataIds.add(ref.id);
+          return [];
+        }
+        if (!source.text.includes(ref.quote)) throw new Error('API review cited an unsupported evidence excerpt');
+        quotedIds.add(ref.id);
+        return [{ id: ref.id, quote: ref.quote }];
       });
+      if ([...metadataIds].some(id => !quotedIds.has(id))) throw new Error('API review cited a URL without source text');
       if (row.status === 'pass') {
         const sources = evidence.map(ref => packet.byId.get(ref.id));
         if ((['render', 'transport'].includes(unit.kind) || unit.text.includes('本次采集范围') ||
@@ -110,7 +119,7 @@ function validateReviewAnswer(answer, units, packet) {
 }
 
 const comprehension = 'For each exact unit return {"units":[{"id":"…","status":"pass or fail","reconstruction":{"problem":"…","method":"…","result":"…","innovation":"…"},"notes":"…"}]}. Reconstruct the main point, mechanism, result, and contribution or limitation solely from the supplied final prose; for coverage, audit and transport units reconstruct their actual meaning and role. State what is missing rather than inventing it. Fail unclear or misleading units and explain the concrete defect. Use distinct, substantive explanations.';
-const fidelity = 'For each exact unit return {"units":[{"id":"…","status":"pass or fail","notes":"…","evidence":[{"id":"excerpt ID","quote":"verbatim substring of that excerpt"}]}]}. Compare claims, dates, mechanism, results, comparisons and limitations with the supplied evidence. Give specific findings, fail material discrepancies or missing evidence. Cite evidence for every link in main and rendered Markdown units, coverage evidence for any coverage claims, render and transport, and the local disposition facts for any candidate counts. A disposition reason records an editorial decision, not proof of which source bodies were read. For exact transport JSON check visible text, link grouping and any truncation against render; do not claim client UI readback. Use substantial verbatim quotes (at least 8 characters).';
+const fidelity = 'For each exact unit return {"units":[{"id":"…","status":"pass or fail","notes":"…","evidence":[{"id":"excerpt ID","quote":"verbatim substring of that excerpt\'s text field, at least 8 characters"}]}]}. Compare claims, dates, mechanism, results, comparisons and limitations with the supplied evidence. Give specific findings, fail material discrepancies or missing evidence. Cite evidence for every link in main and rendered Markdown units, coverage evidence for any coverage claims, render and transport, and the local disposition facts for any candidate counts. A URL alone is not evidence. A disposition reason records an editorial decision, not proof of which source bodies were read. For exact transport JSON check visible text, link grouping and any truncation against render; do not claim client UI readback.';
 
 export async function finalizeOpenAI({ runsDir, runDir, keyFile, ledgerDir, revision = false, fetchImpl = globalThis.fetch }) {
   const { run, sources, sourcesText } = frozenApiRun(runsDir, runDir);

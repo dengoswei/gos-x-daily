@@ -62,7 +62,7 @@ async function setup(t, variant) {
       const fail = stage === 'reader-fidelity' &&
         (variant === 'reader-fails' || (variant === 'repair' && stages.filter(value => value === 'reader-fidelity').length === 1));
       const covered = [{ id: 'coverage', quote: coverageText }];
-      const paper = [{ id: 'paper', quote: evidenceText }];
+      const paper = [{ id: 'paper', quote: evidenceText }, { id: 'paper', quote: fixture.input.excerpts[0].url }];
       const audit = !isComprehension && fromTag(all, 'local_disposition_facts');
       const reviewRows = units.map(unit => ({
         id: unit.id,
@@ -75,6 +75,7 @@ async function setup(t, variant) {
       }));
       if (variant === 'missing' && stage === 'reader-comprehension') reviewRows.pop();
       if (variant === 'forged' && stage === 'author-fidelity') reviewRows[0].evidence = [{ id: 'paper', quote: 'This passage was never seen in the source.' }];
+      if (variant === 'url-only' && stage === 'author-fidelity') reviewRows[0].evidence = [paper[1]];
       if (variant === 'tamper' && stage === 'author-fidelity') fs.appendFileSync(path.join(runDir, 'public-source.txt'), 'modified');
       answer = { units: reviewRows };
     }
@@ -133,7 +134,7 @@ test('API final revises a material finding and rechecks the new exact publicatio
 test('API final refuses unresolved findings, missing units, forged evidence and changed source bytes', async t => {
   for (const [variant, error] of [
     ['reader-fails', /two attempts/], ['missing', /incomplete unit coverage/],
-    ['forged', /unsupported evidence excerpt/], ['tamper', /evidence changed/],
+    ['forged', /unsupported evidence excerpt/], ['url-only', /without source text/], ['tamper', /evidence changed/],
   ]) {
     await t.test(variant, async sub => {
       const f = await setup(sub, variant);
