@@ -1,6 +1,8 @@
 // Deterministic split of a composed digest into review units: one per main-body
 // bullet block, plus one final audit unit carrying the coverage paragraph and the
 // whole 差异补充 section. No model is involved, so two stages see the same cut.
+import { canonicalUrl, digestUrls } from '../binding.mjs';
+
 const AUDIT_HEADING = /^##\s+差异补充\s*$/;
 const COVERAGE_START = /^(?:#{3,6}\s+)?本次采集范围/;
 const SECTION_HEADING = /^##\s+(.+?)\s*$/;
@@ -41,9 +43,18 @@ export function extractUnits(markdown) {
   return units;
 }
 
-/** A unit's evidence keys: the included dispositions rows whose cited URL appears in its prose. */
+const canonical = href => { try { return canonicalUrl(href); } catch { return null; } };
+
+/** The URLs a unit's prose cites, extracted the way the digest URL gate extracts them. */
+export const unitCitedUrls = unit => [...new Set(digestUrls(unit.prose))];
+
+/**
+ * A unit's evidence keys: the included dispositions rows whose URL the unit cites,
+ * compared canonically (`…/status/1` matches `…/status/1/`; `…/post` never matches `…/post-2`).
+ */
 export function unitEvidence(unit, dispositions) {
+  const cited = new Set(unitCitedUrls(unit).map(canonical).filter(Boolean));
   const rows = (Array.isArray(dispositions?.items) ? dispositions.items : [])
-    .filter(row => row?.disposition === 'included' && typeof row.url === 'string' && row.url.trim() && unit.prose.includes(row.url));
+    .filter(row => row?.disposition === 'included' && typeof row.url === 'string' && row.url.trim() && cited.has(canonical(row.url.trim())));
   return { keys: rows.map(row => row.key), citedUrls: [...new Set(rows.map(row => row.url))] };
 }

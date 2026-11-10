@@ -2,6 +2,9 @@
 // SYNTHETIC TEST FIXTURE ONLY: a deterministic stdin -> stdout stand-in for a model,
 // keyed on the orchestrator's stage marker. It never reviews, judges or approves;
 // it only exercises the stage contracts offline. Never use it in real work.
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
 const SECTION = 'Frameworks / Infra';
 const SECTIONS = ['Frameworks / Infra', 'Breakthrough Research', 'Applications / Products', 'Long-form / Essays', '补课 / 历史讨论'];
 
@@ -118,8 +121,18 @@ function judge(prompt) {
   }, null, 2));
 }
 
-const prompt = await readStdin();
-const stage = prompt.match(/<!-- stage: (screen|story|compose|review-a|review-b|judge) -->/)?.[1];
-const handler = { screen, story, compose, 'review-a': reviewA, 'review-b': reviewB, judge }[stage];
-if (!handler) { process.stderr.write(`Scripted model: unknown stage marker\n`); process.exit(1); }
-process.stdout.write(handler(prompt) + '\n');
+export const stageOf = prompt => prompt.match(/<!-- stage: (screen|story|compose|review-a|review-b|judge) -->/)?.[1] ?? null;
+
+/** The scripted reply to one whole prompt (system and user parts concatenated). */
+export function scriptedReply(prompt) {
+  const handler = { screen, story, compose, 'review-a': reviewA, 'review-b': reviewB, judge }[stageOf(prompt)];
+  if (!handler) throw new Error('Scripted model: unknown stage marker');
+  return handler(prompt) + '\n';
+}
+
+// As a command it is the exec provider's stdin -> stdout stand-in; imported, it is an in-process one.
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  const prompt = await readStdin();
+  if (!stageOf(prompt)) { process.stderr.write(`Scripted model: unknown stage marker\n`); process.exit(1); }
+  process.stdout.write(scriptedReply(prompt));
+}
