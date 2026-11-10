@@ -8,14 +8,15 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { candidateKeys, skipReasons } from '../binding.mjs';
 import { validateDigest } from '../digest.mjs';
-import { UNTRUSTED, jsonText, tagged, regularFile, stageContract, extractBlock, parseJsonBlock,
-  loadRoles, openRun, assembleEvidence, evidenceBlocks, usageLedger, makeStageRunner } from './run-packets.mjs';
-import { extractUnits, unitEvidence } from './review-units.mjs';
+import { UNTRUSTED, JSON_NOTE, jsonText, modelJson, escapeMarkup, tagged, regularFile, stageContract, extractBlock, parseJsonBlock, containsWholeUrl,
+  loadModels, openRun, promptView, assembleEvidence, evidenceBlocks, outputStore, mapPool, usageLedger, budgetGuard, makeStageRunner } from './run-packets.mjs';
+import { extractUnits, unitEvidence, unitCitedUrls } from './review-units.mjs';
 
 const ROLES = ['screen', 'story', 'compose'];
 const OPTIONAL_ROLES = ['review'];
 const SECTIONS = ['Frameworks / Infra', 'Breakthrough Research', 'Applications / Products', 'Long-form / Essays', '补课 / 历史讨论'];
 const LIMIT_FIELDS = ['paperPublishedAt', 'dateStatus', 'truncated', 'error'];
+const BULLET_START = /^(?:[-*]|\d+[.)])\s/;
 const ADVISORY_NOTE = 'Advisory feedback only: this stage has no approval authority, does not change the run status, and does not satisfy the deployment\'s required review.';
 
 const limitsOf = source => Object.fromEntries(LIMIT_FIELDS.filter(key => source?.[key] !== undefined).map(key => [key, source[key]]));
@@ -24,14 +25,23 @@ const stringList = (value, label) => {
   if (!Array.isArray(value) || value.some(entry => typeof entry !== 'string')) throw new Error(`${label} must be an array of strings`);
   return value.map(entry => entry.trim()).filter(Boolean);
 };
+const pad = (index, width) => String(index + 1).padStart(width, '0');
 
 export { extractBlock };
 
-// Only a fresh directory beneath an existing parent; never overwrite a prior run.
-function newDirectory(chosen) {
+/**
+ * A fresh directory beneath an existing parent, never overwriting a prior run; or, with
+ * resume, an existing unfinished one (no report.json yet) whose write-once files are reused.
+ */
+function outputDirectory(chosen, resume) {
   const target = path.resolve(chosen);
   const directory = path.join(fs.realpathSync(path.dirname(target)), path.basename(target));
-  if (fs.existsSync(directory)) throw new Error(`Orchestrator output directory must be new: ${directory}`);
+  if (resume) {
+    if (!fs.existsSync(directory) || fs.lstatSync(directory).isSymbolicLink() || !fs.statSync(directory).isDirectory()) throw new Error(`--resume needs an existing output directory: ${directory}`);
+    if (fs.existsSync(path.join(directory, 'report.json'))) throw new Error(`Orchestrator output is already complete (report.json exists); nothing to resume: ${directory}`);
+    return directory;
+  }
+  if (fs.existsSync(directory)) throw new Error(`Orchestrator output directory must be new (or pass --resume to continue an unfinished one): ${directory}`);
   fs.mkdirSync(directory, { mode: 0o700 });
   return directory;
 }
@@ -104,6 +114,10 @@ function buildGroups(decisions, keyOrder) {
 function parseStory(text, group, suppliedBytes) {
   const markdown = extractBlock(text, 'markdown');
   if (!/^[-*]\s/.test(markdown)) throw new Error('The markdown block must be a single bullet starting with "- "');
+  // extractUnits ends a bullet at a blank line, another bullet or a heading, so none may follow.
+  if (markdown.split('\n').slice(1).some(line => !line.trim() || BULLET_START.test(line) || /^#{1,6}\s/.test(line))) {
+    throw new Error('The markdown block must hold exactly one bullet: no blank line, second bullet or heading after its first line');
+  }
   if (!/https?:\/\/[^\s)<>]+/.test(markdown)) throw new Error('The bullet needs a direct source URL');
   const meta = parseJsonBlock(text);
   if (!group.includes(meta?.primaryKey)) throw new Error(`primaryKey must be one of this group's keys: ${group.join(', ')}`);
@@ -113,8 +127,9 @@ function parseStory(text, group, suppliedBytes) {
     if (!Array.isArray(meta[field]) || meta[field].some(entry => typeof entry !== 'string')) throw new Error(`${field} must be an array of strings`);
   }
   for (const url of meta.citedUrls) {
-    if (!suppliedBytes.includes(url)) throw new Error(`citedUrls contains a URL absent from the supplied packets: ${url}`);
-    if (!markdown.includes(url)) throw new Error(`citedUrls contains a URL the bullet does not cite: ${url}`);
+    // Whole-URL matches: a cited prefix of a longer supplied URL is not a supplied URL.
+    if (!containsWholeUrl(suppliedBytes, url)) throw new Error(`citedUrls contains a URL absent from the supplied packets: ${url}`);
+    if (!containsWholeUrl(markdown, url)) throw new Error(`citedUrls contains a URL the bullet does not cite: ${url}`);
   }
   return { markdown, primaryKey: meta.primaryKey, section: meta.section, citedUrls: [...meta.citedUrls], limits: [...meta.limits], unresolved: [...meta.unresolved] };
 }
@@ -162,137 +177,193 @@ function validateComposed(markdown, collection, dispositions) {
   return validateDigest(markdown, collection, { dispositions });
 }
 
+const evidenceUnresolvedFinding = urls => ({
+  severity: 'material', kind: 'evidence-unresolved',
+  quote: urls.length ? urls.join(' ') : '(the unit cites no URL)',
+  problem: 'No included dispositions row matches a URL this unit cites, so no evidence was resolved and source fidelity was not checked. Recorded by the orchestrator without a model call.',
+  suggestion: 'Cite the included candidate\'s own URL in the bullet, or correct the dispositions row url, then review the unit against its evidence.',
+});
+
 /**
- * Advisory stage 8 over the validated draft: blind comprehension per unit, persisted,
- * then source fidelity against that unit's own evidence. Feedback only, never approval.
+ * Advisory stage 8 over the validated draft, units in parallel: per unit, blind
+ * comprehension first and persisted, then source fidelity against that unit's own
+ * evidence. Feedback only, never approval.
  */
-async function advisoryReview({ markdown, dispositions, run, runStage, put }) {
+async function advisoryReview({ markdown, dispositions, run, runStage, store, concurrency }) {
   const units = extractUnits(markdown);
-  const verdicts = { clear: 0, unclear: 0, faithful: 0, issues: 0 };
-  const findings = { material: 0, minor: 0 };
-  const unitFiles = [];
-  for (const unit of units) {
-    const header = tagged('review_unit', jsonText({ unit: unit.id, kind: unit.kind, ...(unit.section ? { section: unit.section } : {}) }).trim());
-    const promptA = ['<!-- stage: review-a -->', stageContract('review-a'), header, tagged('unit_prose', unit.prose)].join('\n\n');
-    const stageA = await runStage({ stage: 'review', label: `review-a-${unit.id}`, prompt: promptA, parse: parseReconstruction });
-    const recordA = jsonText({ schemaVersion: 1, stage: 'review-a', advisory: true, notApproval: true,
-      unit: unit.id, kind: unit.kind, ...(unit.section ? { section: unit.section } : {}),
-      sourceBlind: true, persistedAt: new Date().toISOString(), ...stageA });
-    unitFiles.push(put(`review/${unit.id}.a.json`, recordA));
-    verdicts[stageA.verdictA] += 1;
+  const systemA = ['<!-- stage: review-a -->', stageContract('review-a')].join('\n\n');
+  const systemB = ['<!-- stage: review-b -->', stageContract('review-b'), UNTRUSTED, JSON_NOTE].join('\n\n');
+  const scope = unit => ({ unit: unit.id, kind: unit.kind, ...(unit.section ? { section: unit.section } : {}) });
+
+  const reviewUnit = async unit => {
+    const header = tagged('review_unit', modelJson(scope(unit)));
+    const stageA = await runStage({ stage: 'review', label: `review-a-${unit.id}`, system: systemA,
+      prompt: [header, tagged('unit_prose', unit.prose)].join('\n\n'), parse: parseReconstruction });
+    const fileA = `review/${unit.id}.a.json`;
+    let recordA;
+    if (store.exists(fileA)) {
+      // Resume: the persisted blind record, with its real timestamp, is what Stage B reads.
+      recordA = store.read(fileA);
+      const saved = JSON.parse(recordA);
+      if (saved.unit !== unit.id || saved.verdictA !== stageA.verdictA || JSON.stringify(saved.reconstruction) !== JSON.stringify(stageA.reconstruction)) {
+        throw new Error(`${fileA} does not match its checkpointed Stage A response; start a new --out`);
+      }
+    } else {
+      // Escaped JSON: the persisted bytes are exactly the bytes Stage B is shown.
+      recordA = escapeMarkup(jsonText({ schemaVersion: 1, stage: 'review-a', advisory: true, notApproval: true, ...scope(unit),
+        sourceBlind: true, persistedAt: new Date().toISOString(), ...stageA }));
+      store.put(fileA, recordA);
+    }
 
     const evidence = unitEvidence(unit, dispositions);
-    const blocks = unit.kind === 'audit'
-      ? [tagged('collection_context', jsonText(run.context).trim()),
-        tagged('coverage_accounting', jsonText({ coverage: run.collection.coverage, warnings: run.collection.warnings }).trim())]
-      : evidenceBlocks(assembleEvidence(run.read, run.rows, evidence.keys));
-    // Stage B reads back exactly the bytes just persisted, so the blind record cannot be revised.
-    const promptB = ['<!-- stage: review-b -->', stageContract('review-b'), UNTRUSTED, header,
-      tagged('stage_a_record', recordA.trim()), tagged('unit_prose', unit.prose), ...blocks].join('\n\n');
-    const stageB = await runStage({ stage: 'review', label: `review-b-${unit.id}`, prompt: promptB, parse: parseFindings });
-    unitFiles.push(put(`review/${unit.id}.b.json`, jsonText({ schemaVersion: 1, stage: 'review-b', advisory: true, notApproval: true,
-      unit: unit.id, kind: unit.kind, ...(unit.section ? { section: unit.section } : {}),
-      checkedAt: new Date().toISOString(), stageAFile: `review/${unit.id}.a.json`,
-      evidence: unit.kind === 'audit' ? { kind: 'collection_context_and_coverage' } : { keys: evidence.keys, citedUrls: evidence.citedUrls },
-      ...stageB })));
-    verdicts[stageB.verdictB] += 1;
-    for (const finding of stageB.findings) findings[finding.severity] += 1;
+    const unresolved = unit.kind === 'item' && !evidence.keys.length;
+    let stageB, warning = null;
+    if (unresolved) {
+      // Never hand a fidelity reviewer an empty evidence set as if evidence were present.
+      stageB = { findings: [evidenceUnresolvedFinding(unitCitedUrls(unit))], verdictB: 'issues' };
+      warning = `Advisory review ${unit.id}: no included dispositions row matches the unit's cited URLs; Stage B made no model call and records a material evidence-unresolved finding`;
+    } else {
+      const blocks = unit.kind === 'audit'
+        ? [tagged('collection_context', modelJson(promptView(run.context))),
+          tagged('coverage_accounting', modelJson({ coverage: run.collection.coverage, warnings: run.collection.warnings }))]
+        : evidenceBlocks(assembleEvidence(run.read, run.rows, evidence.keys));
+      // Stage B reads back exactly the bytes persisted, so the blind record cannot be revised.
+      stageB = await runStage({ stage: 'review', label: `review-b-${unit.id}`, system: systemB, parse: parseFindings,
+        prompt: [header, tagged('stage_a_record', recordA.trim()), tagged('unit_prose', unit.prose), ...blocks].join('\n\n') });
+    }
+    const fileB = `review/${unit.id}.b.json`;
+    if (store.exists(fileB)) {
+      if (JSON.parse(store.read(fileB)).verdictB !== stageB.verdictB) throw new Error(`${fileB} does not match its Stage B result; start a new --out`);
+    } else {
+      store.put(fileB, jsonText({ schemaVersion: 1, stage: 'review-b', advisory: true, notApproval: true, ...scope(unit),
+        checkedAt: new Date().toISOString(), stageAFile: fileA,
+        evidence: unit.kind === 'audit' ? { kind: 'collection_context_and_coverage' }
+          : { keys: evidence.keys, citedUrls: evidence.citedUrls, resolved: !unresolved, ...(unresolved ? { unitUrls: unitCitedUrls(unit) } : {}) },
+        ...(unresolved ? { modelCall: false } : {}), ...stageB }));
+    }
+    return { files: [fileA, fileB], verdictA: stageA.verdictA, verdictB: stageB.verdictB, findings: stageB.findings, warning };
+  };
+
+  const results = await mapPool(units, concurrency, reviewUnit, { what: 'review units', label: unit => unit.id });
+  const verdicts = { clear: 0, unclear: 0, faithful: 0, issues: 0 };
+  const findings = { material: 0, minor: 0 };
+  for (const result of results) {
+    verdicts[result.verdictA] += 1;
+    verdicts[result.verdictB] += 1;
+    for (const finding of result.findings) findings[finding.severity] += 1;
   }
-  return { units: units.length, stageABlind: true, verdicts, findings, unitFiles, note: ADVISORY_NOTE };
+  return {
+    review: { units: units.length, stageABlind: true, verdicts, findings,
+      evidenceUnresolved: results.filter(result => result.warning).length,
+      unitFiles: results.flatMap(result => result.files), note: ADVISORY_NOTE },
+    warnings: results.map(result => result.warning).filter(Boolean),
+  };
 }
 
 /**
  * Drives screening, story writing, composition and the optional advisory review over
  * RUN's worker packets. RUN needs sources.json, prompt.md and packets/ from `worker-input`.
+ * Independent calls run in a bounded pool; with resume, an unfinished OUT is continued.
  */
-export async function orchestrate({ runDir, modelsFile, outDir }) {
-  const roles = loadRoles(modelsFile, ROLES, OPTIONAL_ROLES);
+export async function orchestrate({ runDir, modelsFile, outDir, resume = false, runtime = {} }) {
+  const started = Date.now();
+  const { roles, budget: limits } = loadModels(modelsFile, ROLES, OPTIONAL_ROLES, runtime);
   const run = openRun(runDir);
   const { read, coordinator, collection, keyOrder, rows, history, context, integrity } = run;
   const runPrompt = fs.readFileSync(regularFile(path.join(run.runRoot, 'prompt.md')), 'utf8');
 
-  const out = newDirectory(outDir);
-  for (const sub of ['raw', 'screen', 'stories']) fs.mkdirSync(path.join(out, sub), { mode: 0o700 });
-  const put = (relative, text) => { fs.writeFileSync(path.join(out, relative), text, { flag: 'wx', mode: 0o600 }); return relative; };
+  const out = outputDirectory(outDir, resume);
+  const store = outputStore(out);
+  const manifest = jsonText({ schemaVersion: 1, kind: 'prototype-orchestrator-output', collectionId: collection.collectionId });
+  if (store.exists('manifest.json') && store.read('manifest.json') !== manifest) throw new Error(`--resume output belongs to a different collection: ${out}`);
+  store.putOnce('manifest.json', manifest);
   const usage = usageLedger();
-  const runStage = makeStageRunner({ roles, put, usage });
+  const budget = budgetGuard(limits);
+  const runStage = makeStageRunner({ roles, store, usage, budget, resume });
   const warnings = [];
 
+  // Stable per-run context goes into each stage's system prefix, shared by every call of
+  // that stage (provider prefix caching); only the batch, group or unit varies per call.
   const recent = history.publishedRecently.flatMap(({ date, urls }) => urls.map(url => `${date}  ${url}`));
-  const common = [UNTRUSTED, tagged('collection_context', jsonText({
+  const common = [UNTRUSTED, JSON_NOTE, tagged('collection_context', modelJson({
     collectionId: context.collectionId, date: context.date, window: context.window,
     candidateCount: coordinator.candidateCount, warnings: context.warnings, zeroYieldSources: context.zeroYieldSources,
-  }).trim())];
+  })), ...(recent.length ? [tagged('published_recently', escapeMarkup(recent.join('\n')))] : [])];
 
-  const decisions = [];
-  for (const [index, descriptor] of coordinator.sourcePackets.entries()) {
+  const screenSystem = ['<!-- stage: screen -->', stageContract('screen'), ...common].join('\n\n');
+  const screenLabel = (_, index) => `screen-${pad(index, 5)}`;
+  const screened = await mapPool(coordinator.sourcePackets, roles.screen.concurrency, async (descriptor, index) => {
     const packet = read(descriptor).value;
     const batch = packet.items.map(item => screeningView(read(item.packet).value.candidate));
-    const label = `screen-${String(index + 1).padStart(5, '0')}`;
-    const prompt = ['<!-- stage: screen -->', stageContract('screen'), ...common,
-      tagged('source_batch', jsonText({ source: packet.source, instructions: packet.instructions }).trim()),
-      tagged('candidates_json', jsonText(batch).trim()),
-      ...(recent.length ? [tagged('published_recently', recent.join('\n'))] : []),
-      tagged('screen_keys', batch.map(view => view.key).join('\n')),
-    ].join('\n\n');
+    const label = screenLabel(descriptor, index);
     const batchKeys = batch.map(view => view.key);
-    const decided = await runStage({ stage: 'screen', label, prompt, parse: text => parseDecisions(text, batchKeys) });
-    put(`screen/${label}.json`, jsonText({ schemaVersion: 1, source: packet.source, decisions: decided }));
-    decisions.push(...decided);
-  }
+    const prompt = [
+      tagged('source_batch', modelJson({ source: packet.source, instructions: packet.instructions })),
+      tagged('candidates_json', modelJson(batch)),
+      tagged('screen_keys', escapeMarkup(batchKeys.join('\n'))),
+    ].join('\n\n');
+    const decided = await runStage({ stage: 'screen', label, system: screenSystem, prompt, parse: text => parseDecisions(text, batchKeys) });
+    store.putOnce(`screen/${label}.json`, jsonText({ schemaVersion: 1, source: packet.source, decisions: decided }));
+    return decided;
+  }, { what: 'screening batches', label: screenLabel });
+  const decisions = screened.flat();
 
   const { groups, warnings: groupWarnings } = buildGroups(decisions, keyOrder);
   warnings.push(...groupWarnings);
   const reasonOf = new Map(decisions.map(decision => [decision.key, decision.reason]));
 
-  const stories = [];
-  for (const [index, group] of groups.entries()) {
+  const storySystem = ['<!-- stage: story -->', stageContract('story'), ...common].join('\n\n');
+  const storyLabel = (_, index) => `story-${pad(index, 4)}`;
+  const stories = await mapPool(groups, roles.story.concurrency, async (group, index) => {
     const packets = assembleEvidence(read, rows, group);
-    const label = `story-${String(index + 1).padStart(4, '0')}`;
-    const prompt = ['<!-- stage: story -->', stageContract('story'), ...common,
-      tagged('group', jsonText({ representative: group[0], keys: group, screeningReasons: group.map(key => ({ key, reason: reasonOf.get(key) })) }).trim()),
+    const label = storyLabel(group, index);
+    const prompt = [
+      tagged('group', modelJson({ representative: group[0], keys: group, screeningReasons: group.map(key => ({ key, reason: reasonOf.get(key) })) })),
       ...evidenceBlocks(packets),
-      ...(recent.length ? [tagged('published_recently', recent.join('\n'))] : []),
     ].join('\n\n');
-    const story = await runStage({ stage: 'story', label, prompt, parse: text => parseStory(text, group, packets.suppliedBytes) });
+    const story = await runStage({ stage: 'story', label, system: storySystem, prompt, parse: text => parseStory(text, group, packets.suppliedBytes) });
     const file = `stories/${label}.md`;
-    put(file, `${story.markdown}\n`);
-    put(`stories/${label}.json`, jsonText({ schemaVersion: 1, keys: group, ...story, markdown: undefined, file }));
-    stories.push({ ...story, keys: group, file });
-  }
+    store.putOnce(file, `${story.markdown}\n`);
+    store.putOnce(`stories/${label}.json`, jsonText({ schemaVersion: 1, keys: group, ...story, markdown: undefined, file }));
+    return { ...story, keys: group, file };
+  }, { what: 'story groups', label: (group, index) => `${storyLabel(group, index)} (${group.join(', ')})` });
 
   const skipped = decisions.filter(decision => decision.action === 'skip');
-  const composeBase = ['<!-- stage: compose -->', runPrompt, stageContract('compose-suffix'),
-    tagged('screen_decisions', jsonText({
+  // The run's composition input plus the compose contract is the prefix the compose call
+  // and its repair round share.
+  const composeSystem = ['<!-- stage: compose -->', runPrompt, stageContract('compose-suffix'), JSON_NOTE].join('\n\n');
+  const composeBase = [
+    tagged('screen_decisions', modelJson({
       selected: groups.map(group => ({ representative: group[0], keys: group })),
       skipped: skipped.map(decision => ({ key: decision.key, reason: decision.reason })),
-    }).trim()),
-    tagged('story_items', jsonText(stories.map(story => ({ primaryKey: story.primaryKey, keys: story.keys, section: story.section,
-      citedUrls: story.citedUrls, limits: story.limits, unresolved: story.unresolved, markdown: story.markdown }))).trim()),
+    })),
+    tagged('story_items', modelJson(stories.map(story => ({ primaryKey: story.primaryKey, keys: story.keys, section: story.section,
+      citedUrls: story.citedUrls, limits: story.limits, unresolved: story.unresolved, markdown: story.markdown })))),
   ].join('\n\n');
 
-  let composed = await runStage({ stage: 'compose', label: 'compose', prompt: composeBase, parse: parseComposed });
+  let composed = await runStage({ stage: 'compose', label: 'compose', system: composeSystem, prompt: composeBase, parse: parseComposed });
   let validation = null, failure = null, repaired = false, repairedFrom = null;
   try { validation = validateComposed(composed.markdown, collection, composed.dispositions); }
   catch (error) { failure = error.message; }
   if (failure) {
     repaired = true;
     repairedFrom = failure;
-    composed = await runStage({ stage: 'compose', label: 'compose.repair', parse: parseComposed,
+    composed = await runStage({ stage: 'compose', label: 'compose.repair', system: composeSystem, parse: parseComposed,
       prompt: `${composeBase}\n\n${tagged('validation_error', `The offline validator rejected your previous draft: ${failure}\nReturn the complete corrected digest and ledger in exactly the required format.`)}\n` });
     try { validation = validateComposed(composed.markdown, collection, composed.dispositions); failure = null; }
     catch (error) { failure = error.message; }
   }
 
   const passed = failure === null;
-  put(passed ? 'digest.md' : 'digest.rejected.md', composed.markdown);
-  put(passed ? 'dispositions.json' : 'dispositions.rejected.json', jsonText(composed.dispositions));
+  store.putOnce(passed ? 'digest.md' : 'digest.rejected.md', composed.markdown);
+  store.putOnce(passed ? 'dispositions.json' : 'dispositions.rejected.json', jsonText(composed.dispositions));
 
   // A rejected draft is never reviewed, and the review never changes the status below.
   let review = null;
   if (passed && roles.review) {
-    fs.mkdirSync(path.join(out, 'review'), { mode: 0o700 });
-    review = await advisoryReview({ markdown: composed.markdown, dispositions: composed.dispositions, run, runStage, put });
+    const advisory = await advisoryReview({ markdown: composed.markdown, dispositions: composed.dispositions, run, runStage, store, concurrency: roles.review.concurrency });
+    review = advisory.review;
+    warnings.push(...advisory.warnings);
   }
 
   const report = {
@@ -300,17 +371,19 @@ export async function orchestrate({ runDir, modelsFile, outDir }) {
     prototype: true, runDir: run.runRoot, outDir: out, packetsDir: run.packetsRoot,
     collectionId: collection.collectionId, date: collection.date,
     packets: { candidates: integrity.candidates, sourcePackets: coordinator.sourcePackets.length, integrity: integrity.status },
-    roles: Object.fromEntries(Object.keys(roles).map(role => [role, roles[role].describe()])),
+    roles: Object.fromEntries(Object.keys(roles).map(role => [role, { ...roles[role].describe(), concurrency: roles[role].concurrency }])),
     screening: { decided: decisions.length, story: decisions.length - skipped.length, skipped: skipped.length, groups: groups.length,
       skippedReasons: skipped.reduce((counts, decision) => ({ ...counts, [decision.reason]: (counts[decision.reason] ?? 0) + 1 }), {}) },
     decisions: decisions.map(decision => ({ key: decision.key, action: decision.action, ...(decision.action === 'skip' ? { reason: decision.reason } : {}) })),
     stories: stories.map(story => ({ primaryKey: story.primaryKey, keys: story.keys, section: story.section, citedUrls: story.citedUrls, file: story.file })),
     stages: usage.report(),
+    ...(limits ? { budget: budget.report() } : {}),
+    resumed: resume, elapsedMs: Date.now() - started,
     validation: { passed, repaired, ...(repaired ? { repairedFrom } : {}), ...(passed ? { digest: validation } : { error: failure }) },
     ...(review ? { advisoryReview: review } : {}),
     warnings, notApproval: true,
   };
-  put('report.json', jsonText(report));
+  store.put('report.json', jsonText(report));
   return report;
 }
 
@@ -318,12 +391,13 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   const argv = process.argv.slice(2);
   const value = flag => { const index = argv.indexOf(flag); return index >= 0 ? argv[index + 1] : undefined; };
   const [runDir, modelsFile, outDir] = ['--run', '--models', '--out'].map(value);
+  const resume = argv.includes('--resume');
   if (!runDir || !modelsFile || !outDir) {
-    console.error('Usage: orchestrate.mjs --run RUN_DIRECTORY --models models.json --out NEW_DIRECTORY');
+    console.error('Usage: orchestrate.mjs --run RUN_DIRECTORY --models models.json --out NEW_DIRECTORY [--resume]');
     process.exit(2);
   }
   try {
-    const report = await orchestrate({ runDir, modelsFile, outDir });
+    const report = await orchestrate({ runDir, modelsFile, outDir, resume });
     console.log(JSON.stringify(report, null, 2));
     if (!report.validation.passed) process.exitCode = 1;
   } catch (error) {

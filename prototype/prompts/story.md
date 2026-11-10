@@ -47,6 +47,8 @@ remembered. Prefer the primary candidate's own post/article URL.
 ## Output
 
 Return exactly two fenced blocks and nothing else: first the item, then its metadata.
+The `markdown` block holds exactly one bullet — continuation lines are fine, but no
+blank line, second bullet or heading.
 
 ````
 ```markdown

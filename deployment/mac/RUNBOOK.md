@@ -64,6 +64,8 @@ node $DEPLOYMENT_HOME/run.mjs local publish --publication "$RUN/publication.json
 
 `publish` rechecks deployment ownership, bot identity, the entire same-day private-chat history, target, current source/review/render bytes and the persistent ledger. It reserves the plan, persists an exclusive attempt and exclusive sender invocation, invokes the pinned bot once, records API acceptance and published URLs, and reads the message back. Readback verifies sender, recipient, ID, full visible text and all source links. No routine permission prompt belongs between successful self-check and this command.
 
+The portable delivery layer kills the sender after 60 s. `mac-sender.mjs` therefore runs every inner step against one deadline 45 s after its own process start: its repeated identity check gets at most 10 s, and it refuses before creating `.invoked.json` unless at least 20 s remain for the send. The send gets the remaining time and a stuck CLI is SIGKILLed at the deadline, so the sender exits on its own before the outer kill could leave an orphaned CLI that might still deliver. A sender refused before the invocation gate leaves an attempt and an uncertain record but no `.invoked.json`; that combination is evidence this sender never started the send, but it still blocks the day until reconciled against recipient history. A CLI that itself forks a detached child is outside this guarantee.
+
 If API acceptance was recorded but readback or URL history failed, run only:
 
 ```sh

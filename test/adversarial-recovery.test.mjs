@@ -102,6 +102,7 @@ test('independent audit: changed ledger route cannot reuse a previously prepared
   const plan = prepareDelivery(f.markdown, f.collection, f.target, f.publication);
   plan.publication.ledgerDir = g.ledgerDir;
   let calls = 0;
-  assert.throws(() => sendDelivery(plan, { ...auth(f.target), spawnSyncImpl: () => { calls++; } }), /modified/);
+  // The send-time target's pinned ledger now refuses the rerouted plan before plan comparison.
+  assert.throws(() => sendDelivery(plan, { ...auth(f.target), spawnSyncImpl: () => { calls++; } }), /modified|configured delivery ledger/);
   assert.equal(calls, 0);
 });

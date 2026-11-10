@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { larkInline, larkPostJson, larkPostVisibleText, renderLarkPost } from '../lark-post.mjs';
 import { prepareDelivery, sendDelivery } from '../digest.mjs';
 import { createReviewInput, validateReview } from '../review.mjs';
@@ -83,8 +84,10 @@ test('prepared transport is review-bound and tampering blocks before any sender 
   const options = { ...fixture.options, transport: 'feishu-post-v1' };
   const review = approveSyntheticReview(options);
   fs.writeFileSync(path.join(fixture.rootDir, fixture.reviewPath), JSON.stringify(review));
-  const target = { ...fixture.target, transport: 'feishu-post-v1' };
+  // Only the native post adapter sends the reviewed post; a direct CLI target is refused.
+  const target = { ...fixture.target, transport: 'feishu-post-v1', executable: fileURLToPath(new URL('../deployment/mac/mac-sender.mjs', import.meta.url)) };
   assert.throws(() => prepareDelivery(fixture.markdown, fixture.collection, fixture.target, fixture.publication), /transport must match/);
+  assert.throws(() => prepareDelivery(fixture.markdown, fixture.collection, { ...fixture.target, transport: 'feishu-post-v1' }, fixture.publication), /native post adapter/);
   const plan = prepareDelivery(fixture.markdown, fixture.collection, target, fixture.publication);
   assert.equal(plan.args[6], '--markdown');
   assert.equal(plan.args[9], `xdaily-${target.deploymentId}-${fixture.collection.date}`);

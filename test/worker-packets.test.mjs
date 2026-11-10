@@ -119,3 +119,21 @@ test('CLI writes worker manifest without exposing any original body in stdout re
   assert.ok(!JSON.stringify(result).includes('SYNTHETIC ORIGINAL'));
   assert.equal(validateWorkerPackets(f.outputDir).candidates, 54);
 });
+
+test('merged observations route every evidence record in evidenceIds, not only the last evidenceId', t => {
+  const f = fixture(t);
+  const records = ['merged-first', 'merged-second', 'unrelated'].map(id => ({ id, path: `evidence/${id}.png`, sha256: hash(id) }));
+  f.collection.provenance.evidence.push(...records);
+  // mergeItems keeps the latest evidenceId and the union of all observations in evidenceIds.
+  f.collection.sources.xFollowing[1] = { ...f.collection.sources.xFollowing[1], evidenceId: 'merged-second', evidenceIds: ['merged-first', 'merged-second'] };
+  f.collection.checks = { feeds: { 'Failed Feed': { attempted: true, items: 0, status: 'fetch_failed' }, 'Quiet Feed': { attempted: true, items: 0, status: 'ok' } } };
+  fs.writeFileSync(f.sourcesFile, JSON.stringify(f.collection));
+  writeWorkerPackets(f);
+  const coordinator = f.read('coordinator.json');
+  const row = f.read(coordinator.indexPages[0].path).items.find(item => item.key === 'x:2');
+  assert.deepEqual(f.read(row.packet.path).evidence.map(record => record.id), ['merged-first', 'merged-second']);
+  const context = f.read(coordinator.context.path);
+  assert.deepEqual(context.zeroYieldSources, ['Quiet Feed']);
+  assert.deepEqual(context.unavailableSources, [{ name: 'Failed Feed', status: 'fetch_failed' }]);
+  assert.equal(validateWorkerPackets(f.outputDir).candidates, 54);
+});

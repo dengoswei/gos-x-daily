@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { auditDeepLinks, rankDeepLinks, scanWindow, itemKey, mergeItems, readFeedDom, clusterByLink } from '../feed.mjs';
+import { auditDeepLinks, rankDeepLinks, scanWindow, itemKey, mergeItems, readFeedDom, clusterByLink, publicUrlRefusal } from '../feed.mjs';
 
 // Synthetic observations only. None of these fixtures fetch their URLs.
 const window = { start: '2026-10-16T01:00:00Z', end: '2026-10-17T01:00:00Z' };
@@ -406,4 +406,94 @@ test('clusterByLink groups shared content links and ignores page chrome', () => 
   assert.deepEqual(clusterByLink(pair, { keyOf: () => 'same' }), []);
   assert.deepEqual(clusterByLink(pair, { keyOf: item => `blog:${item.url}` }).map(cluster => cluster.itemKeys),
     [['blog:https://x.com/u1/status/1', 'blog:https://x.com/u2/status/2']]);
+});
+
+test('item keys keep identifying queries so distinct posts never overwrite each other', () => {
+  const urls = ['https://blog.example/?p=101', 'https://blog.example/?p=102', 'https://www.youtube.com/watch?v=aaa',
+    'https://www.youtube.com/watch?v=bbb', 'https://news.ycombinator.com/item?id=1', 'https://news.ycombinator.com/item?id=2'];
+  const items = urls.map(url => ({ url, text: `Synthetic ${url}` }));
+  assert.equal(new Set(items.map(itemKey)).size, urls.length);
+  assert.deepEqual(mergeItems(items).map(item => item.text), items.map(item => item.text));
+  // Tracking parameters and ordinary anchors still collapse; hash routes stay distinct.
+  assert.equal(itemKey({ url: 'https://blog.example/?p=101&utm_source=rss#comments' }), 'https://blog.example/?p=101');
+  assert.equal(itemKey({ url: 'https://blog.example/a?fbclid=1' }), itemKey({ url: 'https://blog.example/a' }));
+  assert.notEqual(itemKey({ url: 'https://app.example/#/post/1' }), itemKey({ url: 'https://app.example/#/post/2' }));
+  // A persisted pre-change observation (query already lost) stays a readable item and never crashes a merge.
+  const legacy = { url: 'https://blog.example/', text: 'Earlier run, query lost' };
+  assert.equal(mergeItems([legacy], items.slice(0, 2)).length, 3);
+});
+
+test('deep-read queue refuses plain HTTP, IP literals, loopback, link-local and LAN names', () => {
+  const hrefs = ['http://127.0.0.1:9449/json/list', 'https://127.0.0.1/research', 'https://2130706433/research', 'https://0x7f.1/research',
+    'http://169.254.169.254/latest/meta-data', 'https://169.254.169.254/research', 'https://[::1]/research', 'https://[fd00::1]/research',
+    'https://localhost/research', 'https://localhost./research', 'https://api.localhost/research', 'https://router.local/research',
+    'https://svc.internal/research', 'https://intranet/research', 'https://box.home.arpa/research', 'http://research.example/paper'];
+  const audit = auditDeepLinks(hrefs.map(href => linked('RL training research', href)));
+  assert.equal(audit.length, hrefs.length);
+  assert.ok(audit.every(link => !link.eligible && !link.selected && link.status === 'filtered'), JSON.stringify(audit.filter(link => link.eligible)));
+  assert.deepEqual([...new Set(audit.map(link => link.reason))].sort(), ['insecure_protocol', 'ip_literal_host', 'non_public_host']);
+  assert.equal(rankDeepLinks([linked('RL training research', 'https://research.example/paper')]).length, 1);
+  assert.equal(publicUrlRefusal('https://research.example/paper'), null);
+  assert.equal(publicUrlRefusal('https://u:p@research.example/'), 'embedded_credentials');
+  assert.equal(publicUrlRefusal('not a url'), 'invalid_url');
+  assert.equal(publicUrlRefusal('file:///etc/passwd'), 'unsupported_protocol');
+});
+
+// Drives the real readFeedDom against a synthetic DOM so scanWindow sees its actual output shape.
+function syntheticFeedDom(t, state) {
+  const original = new Map(['document', 'location', 'window'].map(key => [key, Object.getOwnPropertyDescriptor(globalThis, key)]));
+  t.after(() => { for (const [key, descriptor] of original) {
+    if (descriptor) Object.defineProperty(globalThis, key, descriptor); else delete globalThis[key];
+  } });
+  const node = id => ({ innerText: `Synthetic search post ${id}`,
+    querySelectorAll: selector => selector === 'a[href]' ? [{ innerText: 'Post', href: `https://x.com/synthetic/status/${id}` }] : [],
+    querySelector: selector => selector === 'time' ? {
+      getAttribute: name => name === 'datetime' ? '2026-10-16T12:00:00Z' : null,
+      closest: () => ({ href: `https://x.com/synthetic/status/${id}` }),
+    } : null,
+    closest: () => null,
+  });
+  Object.defineProperty(globalThis, 'document', { configurable: true, value: {
+    querySelectorAll: () => state.ids.map(node),
+    querySelector: selector => selector === '[role="progressbar"]' && state.loading ? {} : null,
+    body: { innerText: 'Synthetic search' }, documentElement: { scrollHeight: 2000 },
+  } });
+  Object.defineProperty(globalThis, 'location', { configurable: true, value: { pathname: '/search' } });
+  Object.defineProperty(globalThis, 'window', { configurable: true, get: () => ({ scrollY: state.atEnd ? 1200 : 0, innerHeight: 800 }) });
+}
+
+test('a settled bottom confirmed across a recovery nudge ends a bounded search window', async t => {
+  const state = { ids: ['1'], atEnd: true, loading: false };
+  syntheticFeedDom(t, state);
+  const page = readFeedDom('x');
+  assert.deepEqual(Object.keys(page).sort(), ['atEnd', 'blocked', 'empty', 'items', 'loading']);
+  assert.equal(page.exhausted, undefined);
+  let recoveries = 0;
+  const scan = options => scanWindow({ window, read: async () => readFeedDom('x'), scroll: async () => {},
+    recover: async () => { recoveries++; }, ...options });
+  const confirmed = await scan({ allowExhausted: true });
+  assert.equal(recoveries, 1);
+  assert.equal(confirmed.coverage.reason, 'observed_end');
+  assert.equal(confirmed.coverage.boundaryEvidence, 'stable_scroll_end');
+  assert.equal(confirmed.coverage.scanned, true);
+  assert.equal(confirmed.coverage.pages, 1 + 8 + 3);
+  // Without the adapter's opt-in, without recovery, while loading or above the bottom: never confirmed.
+  for (const [options, change] of [[{}, {}], [{ allowExhausted: true, recover: undefined }, {}],
+    [{ allowExhausted: true }, { loading: true }], [{ allowExhausted: true }, { atEnd: false }]]) {
+    Object.assign(state, { ids: ['1'], atEnd: true, loading: false }, change);
+    const result = await scan(options);
+    assert.equal(result.coverage.scanned, false, JSON.stringify(change));
+    assert.equal(result.coverage.reason, 'stalled');
+    assert.equal(result.coverage.boundaryEvidence, null);
+  }
+  // A post appearing after the nudge voids the earlier settled streak; the window stays incomplete.
+  Object.assign(state, { ids: ['1'], atEnd: true, loading: false });
+  const growing = await scan({ allowExhausted: true, recover: async () => { state.ids = ['1', '2']; } });
+  assert.equal(growing.coverage.scanned, false);
+  assert.equal(growing.coverage.reason, 'stalled');
+  // An undated observation still blocks certification.
+  const undated = await scanWindow({ window, allowExhausted: true, scroll: async () => {}, recover: async () => {},
+    read: async () => { const read = readFeedDom('x'); return { ...read, items: read.items.map(item => ({ ...item, publishedAt: null })) }; } });
+  assert.equal(undated.coverage.reason, 'observed_end');
+  assert.equal(undated.coverage.scanned, false);
 });

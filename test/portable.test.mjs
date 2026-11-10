@@ -138,6 +138,8 @@ test('send requires explicit authorization; mock process preserves Markdown lite
   const literal = markdown.replace('Example release', 'Literal `code` $(not-a-command) "quotes" release');
   const fixture = createSyntheticReviewedFixture(t, { markdown: literal, collection, target });
   const plan = prepareDelivery(literal, collection, target, fixture.publication);
+  // Sending requires the target to name its pinned ledger; preparation alone does not.
+  const pinned = { ...target, ledgerDir: fixture.ledgerDir };
   let calls = 0;
   const mock = (command, args, options) => {
     calls++;
@@ -148,14 +150,14 @@ test('send requires explicit authorization; mock process preserves Markdown lite
   };
   assert.throws(() => sendDelivery(plan, { spawnSyncImpl: mock, env: {} }), /not authorized/);
   assert.equal(calls, 0);
-  const result = sendDelivery(plan, { authorized: true, env: { X_DAILY_ALLOW_SEND: '1' }, spawnSyncImpl: mock, target });
+  const result = sendDelivery(plan, { authorized: true, env: { X_DAILY_ALLOW_SEND: '1' }, spawnSyncImpl: mock, target: pinned });
   assert.equal(result.messageId, 'synthetic-message');
   assert.equal(calls, 1);
   const changedPlan = structuredClone(plan);
   changedPlan.args[3] = 'user';
-  assert.throws(() => sendDelivery(changedPlan, { authorized: true, env: { X_DAILY_ALLOW_SEND: '1' }, spawnSyncImpl: mock, target }), /modified|Prior delivery/);
+  assert.throws(() => sendDelivery(changedPlan, { authorized: true, env: { X_DAILY_ALLOW_SEND: '1' }, spawnSyncImpl: mock, target: pinned }), /modified|Prior delivery/);
   assert.equal(calls, 1);
-  assert.throws(() => sendDelivery(plan, { authorized: true, env: { X_DAILY_ALLOW_SEND: '1' }, spawnSyncImpl: () => ({ status: 0, stdout: '{"ok":true}' }), target }), /Prior delivery/);
+  assert.throws(() => sendDelivery(plan, { authorized: true, env: { X_DAILY_ALLOW_SEND: '1' }, spawnSyncImpl: () => ({ status: 0, stdout: '{"ok":true}' }), target: pinned }), /Prior delivery/);
 });
 
 test('collector rejects an unexpected remote CDP endpoint with mocked fetch only', async t => {

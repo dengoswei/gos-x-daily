@@ -35,17 +35,17 @@ export function loadLocalConfig() {
   if (fs.realpathSync(process.execPath) !== config.node.path) throw new Error('Use the provisioned Node executable');
   return config;
 }
-function cli(config, args) {
+function cli(config, args, timeout = 55000) {
   const result = spawnSync(config.cli.path, ['--profile', config.profile, ...args], {
-    encoding: 'utf8', shell: false, timeout: 55000, maxBuffer: 8*1024*1024,
+    encoding: 'utf8', shell: false, timeout, killSignal: 'SIGKILL', maxBuffer: 8*1024*1024,
   });
   if (result.error || result.signal || result.status !== 0) throw new Error(`Lark operation failed: ${args.slice(0,2).join(' ')} (${result.error?.code ?? result.status})`);
   let parsed;
   try { parsed = JSON.parse(result.stdout); } catch { throw new Error('Lark returned invalid JSON'); }
   return parsed;
 }
-export function verifyIdentity(config) {
-  const state = cli(config, ['auth', 'status']);
+export function verifyIdentity(config, timeout) {
+  const state = cli(config, ['auth', 'status'], timeout);
   if (state.appId !== config.profile || state.brand !== 'feishu' || state.userOpenId !== config.userId ||
       state.identities?.bot?.available !== true || state.identities?.bot?.status !== 'ready') throw new Error('Provisioned bot/recipient identity mismatch');
   return { appId: state.appId, bot: 'ready' };

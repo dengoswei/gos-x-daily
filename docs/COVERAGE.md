@@ -27,6 +27,37 @@ history or promise exhaustive X recall.
 - Preserve partial results and exact failure reasons, actual timestamps, source
   dates and quote context. No missing receipt or history implies novelty.
 
+- An interval is certified only by `explicit_empty`, an opted-in
+  `ordered_timestamp_boundary`, or `observed_end`. The DOM reader reports
+  scroll position (`atEnd`), never exhaustion, so scroll geometry alone stays a
+  stall. The bounded follows-search adapter opts in (`allowExhausted`) to
+  `observed_end` with `boundaryEvidence: "stable_scroll_end"` only when the
+  bottom stayed settled (no loading indicator, no new post) for three reads
+  before a completed recovery nudge and three reads after it, with no undated
+  item. Any new post or non-bottom read voids the streak; the Following feed
+  never opts in. This is still `best_effort_ui` evidence, not platform recall;
+  the search time-filter check can still revoke it. Search windows are bounded
+  by `since_time`, so an older post means the filter failed, not a boundary.
+- Candidate/item keys: X posts are `x:<status id>`. Other URLs key on the
+  canonical link (tracking parameters such as `utm_*`/`fbclid` and ordinary
+  `#anchors` dropped; hash routes and identifying queries such as `?p=101`,
+  `?v=…`, `?id=…` kept). Earlier versions dropped every query, so two such
+  posts overwrote each other. Compatibility: the rolling state stores items,
+  not keys, and published history and the deep-link audit key on URLs, so they
+  re-key on load without error. Previously collapsed items cannot be restored.
+  A `dispositions.json` or review written for a collection under the old keys
+  no longer matches its query-bearing candidates and is rejected (fail closed,
+  never a silent "new item"); rebuild the dispositions for that collection.
+- Deep-read queue and collector page fetches accept only public HTTPS hosts.
+  Plain HTTP (`insecure_protocol`), IP literals (`ip_literal_host`) and
+  loopback/`.local`/`.internal`/`.localhost`/single-label names
+  (`non_public_host`) are audited as filtered, never queued. Fetches re-check
+  every redirect hop, browser deep reads discard text when the final page is
+  refused, and bodies are size-bounded. This is a name check, not DNS-rebinding
+  protection.
+- A failed or unattempted source is unknown, not zero: compose lists it under
+  `unavailableSources`, separate from `zeroYieldSources`.
+
 ```sh
 node cli.mjs coverage-plan --config config/runtime.local.json
 node cli.mjs coverage-report --config config/runtime.local.json

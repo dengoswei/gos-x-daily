@@ -5,9 +5,9 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { jsonText, tagged, regularFile, stageContract, parseJsonBlock,
-  loadRoles, openRun, assembleEvidence, evidenceBlocks, usageLedger, makeStageRunner } from './run-packets.mjs';
-import { extractUnits, unitEvidence } from './review-units.mjs';
+import { JSON_NOTE, jsonText, modelJson, tagged, regularFile, stageContract, parseJsonBlock, loadModels, openRun, assembleEvidence,
+  evidenceBlocks, outputStore, mapPool, usageLedger, budgetGuard, makeStageRunner } from './run-packets.mjs';
+import { extractUnits, unitEvidence, unitCitedUrls } from './review-units.mjs';
 
 const DIMENSIONS = { item: ['reconstructability', 'fidelity', 'disclosure'], digest: ['ordering', 'structure', 'coverageDisclosure'] };
 const MEASUREMENT_NOTE = 'Development-time measurement only: these scores carry no approval authority, resolve no finding, and no publication gate reads this file.';
@@ -42,7 +42,7 @@ function deterministicSection(report) {
 }
 
 /** Scores OUT_DIR's passed draft against RUN's packets and writes OUT_DIR/eval.json once. */
-export async function evaluate({ runDir, outDir, modelsFile }) {
+export async function evaluate({ runDir, outDir, modelsFile, resume = false, runtime = {} }) {
   const out = fs.realpathSync(outDir);
   const report = JSON.parse(fs.readFileSync(regularFile(path.join(out, 'report.json')), 'utf8'));
   if (report?.validation?.passed !== true) throw new Error('Eval needs a run whose composition passed validation');
@@ -50,41 +50,47 @@ export async function evaluate({ runDir, outDir, modelsFile }) {
   const dispositions = JSON.parse(fs.readFileSync(regularFile(path.join(out, 'dispositions.json')), 'utf8'));
   // Refuse before any model call, so a second invocation costs nothing.
   if (fs.existsSync(path.join(out, 'eval.json'))) throw new Error(`Eval output already exists: ${path.join(out, 'eval.json')}`);
-  const roles = loadRoles(modelsFile, ['judge']);
+  const { roles, budget: limits } = loadModels(modelsFile, ['judge'], [], runtime);
   const run = openRun(runDir);
   if (run.collection.collectionId !== report.collectionId) throw new Error('RUN and OUT belong to different collections');
 
-  fs.mkdirSync(path.join(out, 'raw'), { recursive: true, mode: 0o700 });
-  const put = (relative, text) => { fs.writeFileSync(path.join(out, relative), text, { flag: 'wx', mode: 0o600 }); return relative; };
+  const store = outputStore(out);
   const usage = usageLedger();
-  const runStage = makeStageRunner({ roles, put, usage });
+  const budget = budgetGuard(limits);
+  const runStage = makeStageRunner({ roles, store, usage, budget, resume });
   const deterministic = deterministicSection(report);
+  const system = ['<!-- stage: judge -->', stageContract('judge'), JSON_NOTE].join('\n\n');
 
-  const items = [];
-  for (const unit of extractUnits(markdown).filter(unit => unit.kind === 'item')) {
+  const units = extractUnits(markdown).filter(unit => unit.kind === 'item');
+  const items = await mapPool(units, roles.judge.concurrency, async unit => {
     const evidence = unitEvidence(unit, dispositions);
-    const prompt = ['<!-- stage: judge -->', stageContract('judge'),
-      tagged('judge_scope', jsonText({ scope: 'item', unit: unit.id, ...(unit.section ? { section: unit.section } : {}) }).trim()),
+    // An item whose cited URLs resolve to no included row is recorded, never scored blind.
+    if (!evidence.keys.length) return { unit: unit.id, keys: [], citedUrls: [], scores: null, notes: [], evidenceResolved: false, unitUrls: unitCitedUrls(unit) };
+    const prompt = [
+      tagged('judge_scope', modelJson({ scope: 'item', unit: unit.id, ...(unit.section ? { section: unit.section } : {}) })),
       tagged('unit_prose', unit.prose),
       ...evidenceBlocks(assembleEvidence(run.read, run.rows, evidence.keys)),
     ].join('\n\n');
-    const scored = await runStage({ stage: 'judge', label: `judge-${unit.id}`, prompt, parse: text => parseScores(text, 'item') });
-    items.push({ unit: unit.id, keys: evidence.keys, citedUrls: evidence.citedUrls, ...scored });
-  }
+    const scored = await runStage({ stage: 'judge', label: `judge-${unit.id}`, system, prompt, parse: text => parseScores(text, 'item') });
+    return { unit: unit.id, keys: evidence.keys, citedUrls: evidence.citedUrls, ...scored };
+  }, { what: 'judge items', label: unit => `judge-${unit.id}` });
+  const warnings = items.filter(item => item.evidenceResolved === false)
+    .map(item => `Eval ${item.unit}: no included dispositions row matches the unit's cited URLs; the item was not scored`);
 
-  const digestPrompt = ['<!-- stage: judge -->', stageContract('judge'),
-    tagged('judge_scope', jsonText({ scope: 'digest', items: items.length }).trim()),
+  const digestPrompt = [
+    tagged('judge_scope', modelJson({ scope: 'digest', items: items.length })),
     tagged('digest_markdown', markdown.trim()),
-    tagged('deterministic_summary', jsonText(deterministic).trim()),
+    tagged('deterministic_summary', modelJson(deterministic)),
   ].join('\n\n');
-  const digest = await runStage({ stage: 'judge', label: 'judge-digest', prompt: digestPrompt, parse: text => parseScores(text, 'digest') });
+  const digest = await runStage({ stage: 'judge', label: 'judge-digest', system, prompt: digestPrompt, parse: text => parseScores(text, 'digest') });
 
   const result = {
     schemaVersion: 1, kind: 'prototype-eval-measurement', notReview: true, note: MEASUREMENT_NOTE,
     runDir: run.runRoot, outDir: out, collectionId: report.collectionId,
     deterministic, items, digest, judge: roles.judge.describe(), usage: usage.report(),
+    ...(limits ? { budget: budget.report() } : {}), warnings,
   };
-  put('eval.json', jsonText(result));
+  store.put('eval.json', jsonText(result));
   return result;
 }
 
@@ -92,12 +98,13 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   const argv = process.argv.slice(2);
   const value = flag => { const index = argv.indexOf(flag); return index >= 0 ? argv[index + 1] : undefined; };
   const [runDir, outDir, modelsFile] = ['--run', '--out', '--models'].map(value);
+  const resume = argv.includes('--resume');
   if (!runDir || !outDir || !modelsFile) {
-    console.error('Usage: eval.mjs --run RUN_DIRECTORY --out ORCHESTRATOR_OUT_DIRECTORY --models models.json');
+    console.error('Usage: eval.mjs --run RUN_DIRECTORY --out ORCHESTRATOR_OUT_DIRECTORY --models models.json [--resume]');
     process.exit(2);
   }
   try {
-    console.log(JSON.stringify(await evaluate({ runDir, outDir, modelsFile }), null, 2));
+    console.log(JSON.stringify(await evaluate({ runDir, outDir, modelsFile, resume }), null, 2));
   } catch (error) {
     console.error(JSON.stringify({ status: 'failed', error: error.message }));
     process.exitCode = 1;

@@ -10,6 +10,12 @@ The adapter invokes a command directly (no shell expansion):
 EXECUTABLE im +messages-send --as bot --user-id VERIFIED_OPEN_ID --markdown EXACT_RENDERED_TEXT --idempotency-key xdaily-DEPLOYMENT-DATE
 ```
 
+`config.lark.ledgerDir` is required once `enabled` is true: the already-initialized
+delivery ledger of this deployment (absolute, or relative to the runtime config
+file). Preparation and sending refuse a publication whose `ledgerDir` resolves to
+any other directory, and `sendDelivery` refuses a target without one (except the
+native post adapter below, which reads its reservation from its own pinned ledger).
+
 `config.lark.executable` must be an explicit, verified absolute local executable
 or wrapper path; a bare command on PATH is deliberately rejected. The example
 path is a placeholder and must be replaced before enabling delivery.
@@ -30,7 +36,11 @@ and the review binds it.
 ## Compact native post transport
 
 The optional `snapshotInputs.transport: "feishu-post-v1"` requires the same
-`transport` on the verified deployment target and a compatible sender wrapper.
+`transport` on the verified deployment target and the repository's native post
+adapter, `deployment/mac/mac-sender.mjs`, as `executable`. The portable send path
+passes `--markdown` arguments, so preparing or sending a transport plan for any
+other executable (for example the Lark CLI itself) fails closed rather than
+sending Markdown in place of the reviewed post.
 It keeps the reviewed Markdown in the plan's existing argument positions for
 historical reconciliation. The plan additionally carries `transport.kind`, the
 exact serialized `transport.content`, and its `transport.sha256`.
@@ -58,7 +68,8 @@ their old plans and reconciliation path; never resend them to change format.
 
 Supported authoring syntax is deliberately narrow: a plain `#` title, headings,
 paragraphs, bullets, `**bold**`, inline code (displayed literally), and explicit
-`[label](http[s]://...)` links. Images, fenced code, tables and unremoved collection
+`[label](http[s]://...)` links (scheme in any case; no whitespace, `<`, `>`,
+backslash, credentials or dot segments). Images, fenced code, tables and unremoved collection
 markers fail closed instead of triggering network fetches or dropping content.
 Malformed links and unclosed bold/code spans also fail. No image or URL is fetched
 by the renderer. Use ordinary punctuation rather than unsupported Markdown.
