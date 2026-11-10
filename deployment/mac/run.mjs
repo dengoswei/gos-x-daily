@@ -47,6 +47,8 @@ export async function main(argv = process.argv.slice(2)) {
       editorialSha256: hash(fs.readFileSync(path.join(repo, 'EDITORIAL.md'))),
       runtime: { config: path.join(base, 'runtime.local.json'), lookbackHours: runtime.lookbackHours, sourcesFile: runtime.sourcesFile, dataDir: runtime.dataDir, collectionEnabled: runtime.collectionEnabled, larkEnabled: runtime.lark.enabled },
       controller: deployment.controller, model: deployment.model, delivery: deployment.delivery,
+      apiFinalization: { enabled: Boolean(deployment.model?.apiDraft?.keyFile), model: 'gpt-6.1-sol', reasoningEffort: 'high',
+        stages: ['final', 'reader-comprehension', 'reader-fidelity', 'author-comprehension', 'author-fidelity'], sends: false },
       schedule: 'Codex X Daily Digest 9AM, Asia/Shanghai; retired Dot remote schedule', localController: read(path.join(base, 'mac-authority.json')) };
   }
   if (command === 'test') {
@@ -57,7 +59,7 @@ export async function main(argv = process.argv.slice(2)) {
     }
     return { status: 'offline_checks_passed', filesVerified, semanticReview: 'not performed', reportSent: false };
   }
-  if (command !== 'cli' || !offline.has(args[0])) throw new Error('Use inspect, test, or cli with an offline command. Use local doctor/start-run/draft/publish/status/reconcile for Mac production. Direct CDP collection remains disabled.');
+  if (command !== 'cli' || !offline.has(args[0])) throw new Error('Use inspect, test, or cli with an offline command. Use local doctor/start-run/draft/finalize/publish/status/reconcile for Mac production. Direct CDP collection remains disabled.');
   const needsConfig = new Set(['inspect-config', 'coverage-plan', 'coverage-report', 'import-browser', 'import-feed', 'prepare-delivery']);
   if (needsConfig.has(args[0]) && !args.includes('--config')) args.push('--config', path.join(base, 'runtime.local.json'));
   const cli = await import(pathToFileURL(path.join(repo, 'cli.mjs')).href);

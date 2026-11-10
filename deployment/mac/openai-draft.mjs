@@ -10,7 +10,7 @@ const effort = 'high';
 const endpoint = 'https://api.openai.com/v1/chat/completions';
 const keyName = 'CODEX_API_KEY';
 
-function readApiKey(file) {
+export function readApiKey(file) {
   if (typeof file !== 'string' || !path.isAbsolute(file)) throw new Error('Configure an absolute OpenAI draft key file');
   const lines = fs.readFileSync(file, 'utf8').split(/\r?\n/);
   const entries = lines.filter(line => /^\s*CODEX_API_KEY\s*[:=]/.test(line));
@@ -19,16 +19,22 @@ function readApiKey(file) {
   return match[1] ?? match[2] ?? match[3];
 }
 
-export async function draftOpenAI({ runsDir, runDir, keyFile, models = defaultModels, resume = false, fetchImpl = globalThis.fetch }) {
+export function frozenApiRun(runsDir, runDir) {
   const root = fs.realpathSync(runsDir);
   if (typeof runDir !== 'string' || !path.isAbsolute(runDir) || path.dirname(runDir) !== root || fs.realpathSync(runDir) !== runDir) {
-    throw new Error('API draft requires a real run directly inside the configured runs directory');
+    throw new Error('API runner requires a real run directly inside the configured runs directory');
   }
   const run = JSON.parse(readPublicationFile(runDir, 'run.json'));
-  const sources = JSON.parse(readPublicationFile(runDir, 'sources.json'));
+  const sourcesText = readPublicationFile(runDir, 'sources.json');
+  const sources = JSON.parse(sourcesText);
   if (typeof run.date !== 'string' || sources.date !== run.date || !path.basename(runDir).startsWith(run.date + '-')) {
-    throw new Error('API draft source date does not match the frozen run');
+    throw new Error('API source date does not match the frozen run');
   }
+  return { run, sources, sourcesText };
+}
+
+export async function draftOpenAI({ runsDir, runDir, keyFile, models = defaultModels, resume = false, fetchImpl = globalThis.fetch }) {
+  frozenApiRun(runsDir, runDir);
 
   if (!models || ![sol, terra].includes(models.screen) || models.story !== sol || models.compose !== sol) {
     throw new Error('API draft needs a supported screen model and Sol for story and compose');
