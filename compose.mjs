@@ -129,8 +129,8 @@ export function compactCollection(collection, { publishedHistory = [] } = {}) {
 // Untrusted text must not close a prompt delimiter. JSON stays valid JSON with
 // <, > and & as \u escapes; a key or history line that could break its block is
 // emitted as such a JSON string literal instead of raw text.
-const promptJson = value => JSON.stringify(value, null, 2).replace(/[<>&]/g, c => `\\u${c.charCodeAt(0).toString(16).padStart(4, '0')}`);
-const promptLine = value => /[<>\p{Cc}\u2028\u2029]|^["\s]|\s$/u.test(value) ? promptJson(value) : value;
+export const promptJson = value => JSON.stringify(value, null, 2).replace(/[<>&]/g, c => `\\u${c.charCodeAt(0).toString(16).padStart(4, '0')}`);
+export const promptLine = value => /[<>\p{Cc}\u2028\u2029]|^["\s]|\s$/u.test(value) ? promptJson(value) : value;
 
 export function compactPromptText(collection, { publishedHistory = [] } = {}) {
   const compact = compactCollection(collection, { publishedHistory });
