@@ -127,7 +127,11 @@ export async function main(argv = process.argv.slice(2)) {
     verifyDocumentFiles(bundle, baseDir);
     const input = argv.includes('--sources') ? readJson(required('--sources')) : null;
     const maxText = argv.includes('--preserve-full-text') ? Infinity : undefined;
-    const collection = mergeFeedDocuments(runtime, input, bundle, baseDir, maxText ? { maxText } : {});
+    const maxSkewHours = argv.includes('--allow-window-skew') ? runtime.lookbackHours : undefined;
+    const collection = mergeFeedDocuments(runtime, input, bundle, baseDir, {
+      ...(maxText ? { maxText } : {}),
+      ...(maxSkewHours ? { maxSkewHours } : {}),
+    });
     const output = required('--out');
     write(output, JSON.stringify(collection, null, 2) + '\n');
     return { status: 'feed_documents_imported', stats: collection.stats, warnings: collection.warnings.slice((input?.warnings ?? []).length), output };

@@ -80,24 +80,71 @@ function contentStatusOf(kind, text, item) {
 }
 
 const NON_ARTICLE_HOSTS = /(^|\.)(x\.com|twitter\.com|t\.co|youtube\.com|youtu\.be|instagram\.com|facebook\.com|linkedin\.com)$/;
+const NON_FETCH_FINAL_HOSTS = /(^|\.)(x\.com|twitter\.com|youtube\.com|youtu\.be|instagram\.com|facebook\.com|linkedin\.com)$/;
+
+function xStatusKey(href) {
+  if (typeof href !== 'string') return null;
+  try {
+    const u = new URL(href);
+    if (!/(^|\.)(x\.com|twitter\.com)$/.test(u.hostname)) return null;
+    if (/\/analytics\/?$/.test(u.pathname)) return null;
+    const m = u.pathname.match(/\/status\/(\d+)/);
+    return m ? `x-status:${m[1]}` : null;
+  } catch { return null; }
+}
+
+function recoverDisplayLink(link) {
+  const href = String(link?.href ?? '').trim();
+  const label = String(link?.text ?? '').trim();
+  if (!href) return [];
+  const results = [{ href, text: label }];
+  try {
+    const u = new URL(href);
+    if (u.hostname === 't.co' && label && !label.includes('…') && !label.endsWith('...')) {
+      const candidate = /^https?:\/\//i.test(label) ? label : /^[a-z0-9.-]+\.[a-z]{2,}\/\S+$/i.test(label) ? `https://${label}` : null;
+      if (candidate) {
+        const parsed = new URL(candidate);
+        if (parsed.protocol === 'https:' && !NON_ARTICLE_HOSTS.test(parsed.hostname)) {
+          results.push({ href: parsed.href, text: label });
+        }
+      }
+    }
+  } catch { /* ignore */ }
+  return results;
+}
 
 function primarySubjectUrls(card) {
-  const urls = [];
-  const add = href => {
+  const keys = [];
+  const pushKey = k => { if (k && !keys.includes(k)) keys.push(k); };
+  const addUrl = href => {
     const c = safeCanonical(href);
     if (!c) return;
     try {
       const u = new URL(c);
+      if (u.hostname === 't.co' && u.pathname.length > 1) {
+        pushKey(c);
+        return;
+      }
       if (NON_ARTICLE_HOSTS.test(u.hostname)) return;
       if (u.pathname === '/' && !u.search && !u.hash) return;
-      if (!urls.includes(c)) urls.push(c);
+      pushKey(c);
     } catch { /* ignore */ }
   };
-  if (card.kind !== 'x' && card.kind !== 'watch') add(card.url);
-  for (const link of card.outboundUrls ?? []) add(link);
+
+  const ownStatus = xStatusKey(card.url);
+  if (ownStatus) pushKey(ownStatus);
+  else addUrl(card.url);
+
+  for (const link of card.outboundUrls ?? []) addUrl(link);
+  for (const raw of card.rawLinks ?? []) {
+    const quotedStatus = xStatusKey(raw.href);
+    if (quotedStatus && quotedStatus !== ownStatus) pushKey(quotedStatus);
+    addUrl(raw.href);
+  }
+
   // Normalize HF papers <-> arXiv IDs so posts linking arXiv cluster with HF Daily Papers entries.
-  const expanded = [...urls];
-  for (const u of urls) {
+  const expanded = [...keys];
+  for (const u of keys) {
     const arxivMatch = u.match(/arxiv\.org\/(?:abs|pdf|html)\/(\d{4}\.\d{4,5})/);
     const hfMatch = u.match(/huggingface\.co\/papers\/(\d{4}\.\d{4,5})/);
     const paperId = arxivMatch?.[1] ?? hfMatch?.[1];
@@ -161,6 +208,14 @@ export function buildContentStore(collection, storeDir, { softHistory = null, su
     groupedByKey.get(key).push(entry);
   }
 
+  const threadByStatus = new Map();
+  for (const ctx of list(sources.threadContexts)) {
+    const sk = xStatusKey(ctx?.url) ?? xStatusKey(ctx?.threadUrl);
+    if (!sk) continue;
+    if (!threadByStatus.has(sk)) threadByStatus.set(sk, []);
+    threadByStatus.get(sk).push(ctx);
+  }
+
   const cards = [];
   let index = 0;
   for (const [key, observations] of groupedByKey) {
@@ -171,7 +226,15 @@ export function buildContentStore(collection, storeDir, { softHistory = null, su
     const bodyTexts = observations.map(o => o.item?.text ?? o.item?.content ?? o.item?.bodyText ?? '').filter(Boolean);
     const longestBody = bodyTexts.sort((a, b) => b.length - a.length)[0] ?? '';
 
-    const allLinkObjs = observations.flatMap(o => list(o.item?.links));
+    const ownStatus = xStatusKey(item.url);
+    const threadExtras = ownStatus ? (threadByStatus.get(ownStatus) ?? []) : [];
+    const threadLinks = threadExtras.flatMap(ctx => [
+      ...list(ctx.links),
+      ...list(ctx.quotedPosts).flatMap(q => [...(q?.url ? [{ href: q.url, text: 'quoted' }] : []), ...list(q?.links)]),
+    ]);
+
+    const allLinkObjs = [...observations.flatMap(o => list(o.item?.links)), ...threadLinks]
+      .flatMap(recoverDisplayLink);
     const outboundUrls = [...new Set(
       auditDeepLinks([{ url: item.url, text: longestBody, links: allLinkObjs }], 0)
         .filter(r => !['invalid_url', 'unsupported_protocol', 'embedded_credentials', 'social_link', 'analytics_link', 'substack_navigation', 'homepage_navigation'].includes(r.reason))
@@ -425,7 +488,7 @@ export async function enrichTopicsWithFullText(topics, storeDir, {
       .filter(href => {
         try {
           const u = new URL(href);
-          return !publicUrlRefusal(u) && !NON_ARTICLE_HOSTS.test(u.hostname);
+          return !publicUrlRefusal(u) && !NON_FETCH_FINAL_HOSTS.test(u.hostname);
         } catch { return false; }
       });
 
@@ -445,6 +508,11 @@ export async function enrichTopicsWithFullText(topics, storeDir, {
       for (let hop = 0; ; hop++) {
         const refusal = publicUrlRefusal(current);
         if (refusal) throw new Error(`Refused target (${refusal})`);
+        if (hop > 0 && NON_FETCH_FINAL_HOSTS.test(current.hostname)) {
+          // A t.co link that resolved to another X status or video host stays a social post, not an external article.
+          if (!topic.allObservedUrls.includes(current.href)) topic.allObservedUrls.push(current.href);
+          break;
+        }
         const res = await fetchImpl(current.href, {
           redirect: 'manual',
           signal: controller.signal,
@@ -463,6 +531,16 @@ export async function enrichTopicsWithFullText(topics, storeDir, {
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         finalResponse = { res, finalUrl: current.href };
         break;
+      }
+
+      if (!finalResponse) {
+        stats.snippetOnly += 1;
+        writeJson(path.join(root, 'topics', `${topic.topicId}.json`), topic);
+        continue;
+      }
+
+      if (!topic.allObservedUrls.includes(finalResponse.finalUrl)) {
+        topic.allObservedUrls.unshift(finalResponse.finalUrl);
       }
 
       const contentType = (finalResponse.res.headers.get('content-type') ?? '').toLowerCase();

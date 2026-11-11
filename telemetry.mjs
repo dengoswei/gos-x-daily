@@ -221,7 +221,7 @@ export function collectSourceStatuses(collection, { configuredSources = null, ex
   const stats = collection?.stats ?? {};
   const reports = collection?.coverage?.reports ?? {};
 
-  if (checks.xFollowing || (collection?.sources?.xFollowing?.length ?? 0) > 0) {
+  if (configuredSources?.xFollowing !== false && (checks.xFollowing || (collection?.sources?.xFollowing?.length ?? 0) > 0)) {
     const xCheck = checks.xFollowing ?? { attempted: true, status: 'ok', items: collection.sources.xFollowing.length };
     const items = collection?.sources?.xFollowing?.length ?? xCheck.items ?? 0;
     const xReports = Array.isArray(reports.xFollowing) ? reports.xFollowing : [];
@@ -247,7 +247,7 @@ export function collectSourceStatuses(collection, { configuredSources = null, ex
       ...(stopReason ? { stopReason } : {}),
       ...(xCheck.status && xCheck.status !== 'ok' ? { error: xCheck.status } : {}),
     });
-  } else if (configuredSources?.requireXFollowing) {
+  } else if (configuredSources && configuredSources.xFollowing !== false) {
     rows.push({ id: 'xFollowing', label: 'X Following', kind: 'x', required: false, status: 'unattempted', items: 0 });
   }
 
@@ -396,6 +396,12 @@ export function updateSourceHealth(healthFile, sourceRows, { date = shanghaiDate
   return enriched;
 }
 
+function summarizeSourceList(rows, max = 4) {
+  const labels = rows.map(r => r.label || r.id).filter(Boolean);
+  if (labels.length <= max) return labels.join('、');
+  return `${labels.slice(0, max).join('、')} 等 ${labels.length} 项`;
+}
+
 /**
  * Computes overall health verdict [OK | WARN | ACTION_NEEDED], funnel drop-off numbers,
  * and concrete recommendations for humans or calling agents.
@@ -407,6 +413,14 @@ export function buildTelemetry({ date = shanghaiDate(), sources = [], funnel = {
   const unattempted = sources.filter(s => s.status === 'unattempted');
 
   const recommendations = [];
+  if (unattempted.length > 0) {
+    recommendations.push({
+      level: 'WARN',
+      target: 'unattempted_sources',
+      label: '未尝试信源',
+      reason: `计划信源中有 ${unattempted.length}/${sources.length} 项本次未尝试（${summarizeSourceList(unattempted)}），当前非全源覆盖`,
+    });
+  }
   for (const s of sources) {
     if (s.error === 'login_required' || s.consecutiveFailures >= 2) {
       recommendations.push({
@@ -445,7 +459,8 @@ export function buildTelemetry({ date = shanghaiDate(), sources = [], funnel = {
     });
   }
 
-  if ((funnel.publishedTotal ?? 0) === 0) {
+  const publishedTotal = funnel.publishedTotal ?? ((funnel.publishedDeepDive ?? 0) + (funnel.publishedQuickHits ?? 0));
+  if (publishedTotal === 0) {
     recommendations.push({
       level: 'ACTION_NEEDED',
       target: 'pipeline',
@@ -466,7 +481,7 @@ export function buildTelemetry({ date = shanghaiDate(), sources = [], funnel = {
   }
 
   const hasAction = recommendations.some(r => r.level === 'ACTION_NEEDED') || usable.length === 0;
-  const hasWarn = !hasAction && (recommendations.length > 0 || failed.length > 0 || (deepFetch.failed ?? 0) > 0);
+  const hasWarn = !hasAction && (recommendations.length > 0 || failed.length > 0 || unattempted.length > 0 || (deepFetch.failed ?? 0) > 0);
   const overallHealth = hasAction ? 'ACTION_NEEDED' : hasWarn ? 'WARN' : 'OK';
 
   return {
@@ -491,7 +506,7 @@ export function buildTelemetry({ date = shanghaiDate(), sources = [], funnel = {
       deepFetch,
       publishedDeepDive: funnel.publishedDeepDive ?? 0,
       publishedQuickHits: funnel.publishedQuickHits ?? 0,
-      publishedTotal: funnel.publishedTotal ?? ((funnel.publishedDeepDive ?? 0) + (funnel.publishedQuickHits ?? 0)),
+      publishedTotal,
     },
     recommendations,
     warnings,
@@ -543,9 +558,18 @@ export function renderTelemetryMarkdown(telemetry) {
     ? `（深度 ${funnel.publishedDeepDive ?? 0} + 快讯 ${funnel.publishedQuickHits ?? 0}）`
     : '';
 
+  const unattemptedRows = sources.filter(s => s.status === 'unattempted');
+  const statusHeader = sourceSummary.unattempted > 0
+    ? `信源状态 (可用 ${sourceSummary.usable}/${sourceSummary.configured} · 已尝试 ${sourceSummary.attempted} · 未尝试 ${sourceSummary.unattempted})`
+    : `信源状态 (${sourceSummary.usable}/${sourceSummary.configured} 可用)`;
+  const statusDetail = [
+    sourceParts.join(' · ') || '无活跃采集源',
+    ...(unattemptedRows.length ? [`未尝试：${summarizeSourceList(unattemptedRows)}`] : []),
+  ].join(' · ');
+
   const lines = [
     `### 运行自检 [${overallHealth}]`,
-    `- **信源状态 (${sourceSummary.usable}/${sourceSummary.attempted} 可用)**：${sourceParts.join(' · ') || '无活跃采集源'}`,
+    `- **${statusHeader}**：${statusDetail}`,
     `- **漏斗统计**：原始入库 ${funnel.rawItems} 条 → 7日去重跳过 ${funnel.dedupSkipped7d} 条 → 聚合 ${funnel.clusteredTopics} 个话题 → 初筛入选 ${funnel.screenSelectedTopics} 个${deepText} → 成稿 ${funnel.publishedTotal} 条${pubBreakdown}`,
   ];
 

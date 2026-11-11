@@ -305,6 +305,7 @@ test('end-to-end runDailyV2 produces two-tier digest, blocks leaked pipeline jar
   }));
 
   const sourcesConfig = {
+    xFollowing: false,
     watchProfiles: [],
     blogs: [],
     xiaohongshuProfiles: [],
@@ -428,4 +429,163 @@ test('end-to-end runDailyV2 produces two-tier digest, blocks leaked pipeline jar
     },
   );
   assert.equal(larkCalls.length, 2);
+});
+
+test('Mac Codex feedback regressions: unattempted sources warn in footer, >2h X+Feed skew merges, X quote/t.co clusters, and two-step host compose works without API calls', async t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'xdaily-v2-codex-fb-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+
+  // 1. Unattempted sources (e.g., 16 feeds usable + 5 unattempted: X Following, Watch @karpathy, 3 Blogs)
+  // MUST NOT display "16/16 可用 [OK]" in the footer!
+  const feedRows = Array.from({ length: 16 }, (_, i) => ({ id: `feed:f${i + 1}`, label: `Feed ${i + 1}`, kind: 'feed', status: 'ok', items: 3 }));
+  const unattemptedRows = [
+    { id: 'xFollowing', label: 'X Following', kind: 'x', status: 'unattempted', items: 0 },
+    { id: 'watch:karpathy', label: 'Watch @karpathy', kind: 'watch', status: 'unattempted', items: 0 },
+    { id: 'blog:Anthropic Engineering', label: 'Anthropic Engineering', kind: 'blog', status: 'unattempted', items: 0 },
+    { id: 'blog:Claude Blog', label: 'Claude Blog', kind: 'blog', status: 'unattempted', items: 0 },
+    { id: 'blog:Thinking Machines', label: 'Thinking Machines', kind: 'blog', status: 'unattempted', items: 0 },
+  ];
+  const partialTel = buildTelemetry({
+    date: '2026-11-11',
+    sources: [...feedRows, ...unattemptedRows],
+    funnel: { rawItems: 42, dedupSkipped7d: 0, clusteredTopics: 38, screenSelectedTopics: 11, publishedDeepDive: 7, publishedQuickHits: 4 },
+  });
+  assert.equal(partialTel.overallHealth, 'WARN');
+  const partialFooter = renderTelemetryMarkdown(partialTel);
+  assert.match(partialFooter, /### 运行自检 \[WARN\]/);
+  assert.match(partialFooter, /可用 16\/21 · 已尝试 16 · 未尝试 5/);
+  assert.match(partialFooter, /未尝试：X Following、Watch @karpathy、Anthropic Engineering、Claude Blog 等 5 项/);
+
+  // 2. Morning X capture (00:50Z) + Evening Feed capture (08:50Z, 8 hours apart > 2h) merges cleanly in runDailyV2,
+  // 3. X quote-tweets + t.co display/shortlinks cluster together,
+  // 4. Two-step --prepare-only + --finalize-digest runs with ZERO external LLM API calls.
+  const shot = Buffer.from('synthetic-mac-shot');
+  const shotHash = sha256(shot);
+  const browserDir = path.join(dir, 'browser');
+  fs.mkdirSync(browserDir, { recursive: true });
+  fs.writeFileSync(path.join(browserDir, 'x1.png'), shot);
+  fs.writeFileSync(path.join(browserDir, 'k1.png'), shot);
+  const browserBundlePath = path.join(browserDir, 'browser-capture.json');
+  fs.writeFileSync(browserBundlePath, JSON.stringify({
+    schemaVersion: 1,
+    transport: 'gos-supported-browser',
+    startedAt: '2026-11-11T00:50:00.000Z',
+    capturedAt: '2026-11-11T00:56:00.000Z',
+    evidence: [
+      { id: 'x1', kind: 'screenshot', url: 'https://x.com/home', capturedAt: '2026-11-11T00:52:00.000Z', path: 'x1.png', sha256: shotHash },
+      { id: 'k1', kind: 'screenshot', url: 'https://x.com/karpathy', capturedAt: '2026-11-11T00:54:00.000Z', path: 'k1.png', sha256: shotHash },
+    ],
+    feeds: {
+      xFollowing: {
+        status: 'ok',
+        view: 'following',
+        pages: [{
+          evidenceId: 'x1',
+          items: [
+            // Root announcement tweet with a t.co shortlink whose visible label shows the domain/path
+            { url: 'https://x.com/lab/status/5001', text: 'Announcing KernelForge v1 for FP8 MoE!', publishedAt: '2026-11-10T22:00:00.000Z', links: [{ href: 'https://t.co/kfshort1', text: 'kernelforge.example/v1' }] },
+            // Two independent tweets quoting the root announcement status 5001 -> must cluster into 1 topic!
+            { url: 'https://x.com/alice/status/5002', text: 'Tested KernelForge v1 on H100, 1.4x speedup.', publishedAt: '2026-11-10T23:00:00.000Z', links: [{ href: 'https://x.com/lab/status/5001', text: 'Quote' }] },
+          ],
+        }],
+      },
+      karpathy: {
+        status: 'ok',
+        pages: [{
+          evidenceId: 'k1',
+          items: [
+            { url: 'https://x.com/karpathy/status/5003', text: 'Nice clean Triton code in KernelForge.', publishedAt: '2026-11-11T00:10:00.000Z', links: [{ href: 'https://t.co/kfshort1', text: '' }] },
+          ],
+        }],
+      },
+    },
+  }));
+
+  // Evening feeds captured 8 hours later (08:55Z) mentioning https://kernelforge.example/v1
+  const feedDir = path.join(dir, 'evening-feeds');
+  fs.mkdirSync(path.join(feedDir, 'feeds'), { recursive: true });
+  const eveningRss = `<?xml version="1.0"?><rss version="2.0"><channel><title>Infra RSS</title>
+    <item><title>KernelForge v1 Technical Post</title><link>https://kernelforge.example/v1</link>
+      <pubDate>Tue, 10 Nov 2026 21:30:00 GMT</pubDate>
+      <description><![CDATA[<p>KernelForge fuses FP8 block scaling with persistent MoE dispatch.</p>]]></description>
+    </item>
+  </channel></rss>`;
+  fs.writeFileSync(path.join(feedDir, 'feeds', 'f1.xml'), eveningRss);
+  const feedBundlePath = path.join(feedDir, 'feed-capture.json');
+  fs.writeFileSync(feedBundlePath, JSON.stringify({
+    schemaVersion: 1,
+    transport: 'fetched-documents',
+    startedAt: '2026-11-11T08:55:00.000Z',
+    fetchedAt: '2026-11-11T08:56:00.000Z',
+    documents: [{
+      id: 'feed-evening-1',
+      feed: 'Infra RSS',
+      url: 'https://kernelforge.example/rss.xml',
+      path: 'feeds/f1.xml',
+      sha256: sha256(eveningRss),
+      fetchedAt: '2026-11-11T08:55:30.000Z',
+      contentType: 'application/xml',
+    }],
+  }));
+
+  const sourcesConfig = {
+    watchProfiles: [{ handle: 'karpathy', name: 'Karpathy', required: true, latest: 10 }],
+    blogs: [],
+    xiaohongshuProfiles: [],
+    feeds: [{ name: 'Infra RSS', url: 'https://kernelforge.example/rss.xml', kind: 'rss', maxItems: 5 }],
+  };
+
+  let publicArticleFetches = 0;
+  const publicFetchMock = async url => {
+    // Only public article fetch is allowed; zero calls to api.openai.com!
+    assert.ok(!String(url).includes('openai.com'));
+    publicArticleFetches += 1;
+    return new Response(
+      `<html><head><title>KernelForge v1</title></head><body><article><p>${'KernelForge FP8 persistent MoE kernel design and H100 benchmarks. '.repeat(25)}</p><a href="https://github.com/org/kernelforge">GitHub</a></article></body></html>`,
+      { status: 200, headers: { 'content-type': 'text/html' } },
+    );
+  };
+
+  const dataDir = path.join(dir, 'data');
+  // Step A: --prepare-only merges 8h-apart X + Feeds, clusters all 4 items (root X + quote X + Karpathy t.co + RSS) into 1 unified topic!
+  const prepared = await runDailyV2({
+    dataDir,
+    sourcesConfig,
+    browserArtifactsPath: browserBundlePath,
+    feedArtifactsPath: feedBundlePath,
+    prepareOnly: true,
+    fetchFullTextOnline: true,
+    runtimeHooks: { fetch: publicFetchMock, now: '2026-11-11T09:00:00Z' },
+  });
+
+  assert.equal(prepared.status, 'prepared_for_host_compose');
+  assert.equal(prepared.rawItems, 4);
+  assert.equal(prepared.clusteredTopics, 1, 'Root tweet, quote tweet, t.co tweet and RSS post should all cluster into 1 topic');
+  assert.equal(publicArticleFetches, 1);
+  assert.ok(fs.existsSync(prepared.preparedTopicsPath));
+  assert.ok(fs.existsSync(prepared.composePromptPath));
+
+  // Step B: Local host agent (e.g. Codex) writes draft.md locally, then --finalize-digest validates & wraps up!
+  const hostDraftPath = path.join(prepared.runDir, 'host-draft.md');
+  fs.writeFileSync(hostDraftPath, [
+    '# X AI 日报 2026-11-11',
+    '',
+    '## Frameworks / Infra',
+    '- **KernelForge v1：融合 FP8 块缩放与持久化 MoE 调度的算子库。** 11 月 10 日发布，通过单核持久化调度减少稀疏专家切换开销，社区实测 H100 端到端提速约 1.4 倍。 [原文](https://kernelforge.example/v1) · [代码](https://github.com/org/kernelforge) · [X 讨论](https://x.com/alice/status/5002)',
+    '',
+  ].join('\n'));
+
+  const finalized = await runDailyV2({
+    dataDir,
+    sourcesConfig,
+    runDir: prepared.runDir,
+    finalizeDigestPath: hostDraftPath,
+    runtimeHooks: { now: '2026-11-11T09:05:00Z' },
+  });
+
+  assert.equal(finalized.status, 'completed_local');
+  assert.equal(finalized.overallHealth, 'WARN'); // X Following bounded capture span < 36h -> WARN
+  const finalMd = fs.readFileSync(finalized.digestPath, 'utf8');
+  assert.match(finalMd, /信源状态 \(3\/3 可用\)/);
+  assert.match(finalMd, /原始入库 4 条 → 7日去重跳过 0 条 → 聚合 1 个话题 → 初筛入选 1 个 → 全文补齐 1\/1 → 成稿 1 条/);
 });

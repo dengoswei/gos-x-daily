@@ -321,7 +321,7 @@ export function parseFeedDocument(text, kind, label = kind, { maxText = MAX_TEXT
   });
 }
 
-export function mergeFeedDocuments(runtime, collection, bundle, baseDir, { maxText = MAX_TEXT } = {}) {
+export function mergeFeedDocuments(runtime, collection, bundle, baseDir, { maxText = MAX_TEXT, maxSkewHours = 2 } = {}) {
   if (bundle?.schemaVersion !== 1 || bundle.transport !== 'fetched-documents') throw new Error('Unsupported feed capture schema/transport');
   const startedAt = stamp(bundle.startedAt, 'startedAt');
   const fetchedAt = stamp(bundle.fetchedAt, 'fetchedAt');
@@ -350,8 +350,8 @@ export function mergeFeedDocuments(runtime, collection, bundle, baseDir, { maxTe
   const configured = validateFeedConfig(runtime.sources);
   const collectedAt = stamp(baseCollection.collectedAt, 'collection collectedAt');
   if (Date.parse(startedAt) > Date.parse(fetchedAt) || Date.parse(fetchedAt) - Date.parse(startedAt) > 2 * 3600000) throw new Error('Feed fetches must belong to one run of at most two hours');
-  // Feeds may be fetched shortly before or after the browser capture; both sides share one two-hour run.
-  if (Math.abs(Date.parse(startedAt) - Date.parse(collectedAt)) > 2 * 3600000) throw new Error('Feed fetch must start within two hours of the browser capture');
+  const skewHours = Math.abs(Date.parse(startedAt) - Date.parse(collectedAt)) / 3600000;
+  if (skewHours > maxSkewHours) throw new Error('Feed fetch must start within two hours of the browser capture');
   const base = fs.realpathSync(baseDir);
   if (!Array.isArray(bundle.documents) || !bundle.documents.length) throw new Error('Fetched feed documents are required');
   const failures = bundle.failures ?? [];
@@ -378,6 +378,9 @@ export function mergeFeedDocuments(runtime, collection, bundle, baseDir, { maxTe
   }
   const windowStart = Date.parse(startedAt) - runtime.lookbackHours * 3600000;
   const warnings = ['Feed items are publisher-declared entries; document hashes verify fetched bytes, not semantic accuracy.'];
+  if (collection && skewHours > 2) {
+    warnings.push(`Feed fetch and browser capture are ${skewHours.toFixed(1)} hours apart (merged across shared ${runtime.lookbackHours}h window)`);
+  }
   const checks = {}, items = [], seen = new Set(), evidence = [];
   let undated = 0;
   for (const feed of configured) {
