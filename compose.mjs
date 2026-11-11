@@ -68,6 +68,12 @@ export function candidateObservations(collection) {
 }
 
 const allLinks = entry => [entry, ...entry.alternateEntries].flatMap(observation => list(observation.item?.links));
+const clusterLinks = entry => [
+  ...allLinks(entry),
+  ...(['x', 'watch', 'deep'].includes(entry.kind) || typeof entry.item?.url !== 'string'
+    ? []
+    : [{ href: entry.item.url, text: entry.item?.title ?? '' }]),
+];
 const observationView = ({ kind, item, fallbackAuthor, watchedHandle }, { deferDeepText = false } = {}) => ({
   kind, author: handle(item?.url) ?? item?.author ?? item?.feedName ?? fallbackAuthor ?? null,
   ...(watchedHandle ? { watchedHandle } : {}),
@@ -82,7 +88,7 @@ export function compactCollection(collection, { publishedHistory = [] } = {}) {
   const raw = rawCandidates(sources);
   const expected = candidateKeys(collection);
   if (raw.length !== expected.length || raw.some((entry, index) => entry.key !== expected[index])) throw new Error('Compact candidates diverge from binding candidate keys');
-  const clusters = clusterByLink(raw.map(entry => ({ key: entry.key, links: allLinks(entry) })), { keyOf: entry => entry.key })
+  const clusters = clusterByLink(raw.map(entry => ({ key: entry.key, links: clusterLinks(entry) })), { keyOf: entry => entry.key })
     .map((cluster, index) => ({ index, ...cluster }));
   const clusterOf = new Map(clusters.map(cluster => [cluster.url, cluster.index]));
   const readStatus = new Map();
@@ -94,7 +100,7 @@ export function compactCollection(collection, { publishedHistory = [] } = {}) {
   }
   const candidates = raw.map(entry => {
     const { key, item, alternateEntries } = entry;
-    const indices = allLinks(entry).map(link => clusterOf.get(linkHref(link.href))).filter(index => index !== undefined);
+    const indices = clusterLinks(entry).map(link => clusterOf.get(linkHref(link.href))).filter(index => index !== undefined);
     // Primary deep-read text is carried in deepArticles under the same key.
     return { key, ...observationView(entry, { deferDeepText: true }),
       ...(alternateEntries.length ? { alternateObservations: alternateEntries.map(alternate => observationView(alternate)) } : {}),

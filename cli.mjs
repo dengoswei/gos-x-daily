@@ -125,11 +125,12 @@ export async function main(argv = process.argv.slice(2)) {
     const bundle = readJson(artifactFile);
     const baseDir = path.dirname(path.resolve(artifactFile));
     verifyDocumentFiles(bundle, baseDir);
-    const input = readJson(required('--sources'));
-    const collection = mergeFeedDocuments(runtime, input, bundle, baseDir);
+    const input = argv.includes('--sources') ? readJson(required('--sources')) : null;
+    const maxText = argv.includes('--preserve-full-text') ? Infinity : undefined;
+    const collection = mergeFeedDocuments(runtime, input, bundle, baseDir, maxText ? { maxText } : {});
     const output = required('--out');
     write(output, JSON.stringify(collection, null, 2) + '\n');
-    return { status: 'feed_documents_imported', stats: collection.stats, warnings: collection.warnings.slice((input.warnings ?? []).length), output };
+    return { status: 'feed_documents_imported', stats: collection.stats, warnings: collection.warnings.slice((input?.warnings ?? []).length), output };
   }
   if (command === 'coverage-plan' || command === 'coverage-report') {
     const now = value('--now', new Date().toISOString());

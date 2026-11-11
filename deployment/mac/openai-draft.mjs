@@ -25,12 +25,13 @@ export function frozenApiRun(runsDir, runDir) {
     throw new Error('API runner requires a real run directly inside the configured runs directory');
   }
   const run = JSON.parse(readPublicationFile(runDir, 'run.json'));
-  const sourcesText = readPublicationFile(runDir, 'sources.json');
+  const sourcesPath = fs.existsSync(path.join(runDir, 'sources.merged.json')) ? 'sources.merged.json' : 'sources.json';
+  const sourcesText = readPublicationFile(runDir, sourcesPath);
   const sources = JSON.parse(sourcesText);
   if (typeof run.date !== 'string' || sources.date !== run.date || !path.basename(runDir).startsWith(run.date + '-')) {
     throw new Error('API source date does not match the frozen run');
   }
-  return { run, sources, sourcesText };
+  return { run, sources, sourcesText, sourcesPath };
 }
 
 export async function draftOpenAI({ runsDir, runDir, keyFile, models = defaultModels, resume = false, fetchImpl = globalThis.fetch }) {

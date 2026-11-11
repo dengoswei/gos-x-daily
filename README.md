@@ -141,6 +141,8 @@ index pages are client-rendered and yield no links without the browser.
 ## Repository map
 
 - `cli.mjs`: offline entry points plus separately gated collection / send.
+- `run-daily.mjs`: portable v2 end-to-end pipeline (zero-bootstrap state, dual-layer `store/raw` + `store/cards` + `store/topics`, 7-day soft dedup, on-demand full-text fetch, two-tier digest composition, single-pass review, `telemetry.json` self-check, and `lark-cli` alert fallback).
+- `content-store.mjs`, `telemetry.mjs`: dual-layer original/card archive, cross-source topic clustering, rolling source health, funnel telemetry and operational alert cards.
 - `browser-artifacts.mjs`, `thread-discovery.mjs`: evidence imports and thread context.
 - `feed-import.mjs`, `tools/fetch-feeds.mjs`: offline feed import and its separate network fetch tool.
 - `coverage.mjs`, `feed.mjs`: bounded scans, deduplication and honest coverage gaps.

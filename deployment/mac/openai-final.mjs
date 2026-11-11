@@ -25,7 +25,7 @@ const substantial = text => typeof text === 'string' && text.trim().length >= 8 
 const fields = ['problem', 'method', 'result', 'innovation'];
 const checkedAt = () => new Date().toISOString();
 
-function loadPacket(root, sources, raw) {
+function loadPacket(root, sources, raw, sourcesPath = 'sources.json') {
   if (Buffer.byteLength(raw) > 350000) throw new Error('API final evidence manifest exceeds byte budget');
   const packet = JSON.parse(raw);
   if (packet.schemaVersion !== 1 || packet.collectionId !== sources.collectionId ||
@@ -35,7 +35,7 @@ function loadPacket(root, sources, raw) {
       !packet.materialsPaths.includes('collection-coverage.md')) throw new Error('Invalid API final evidence manifest');
   const materialsPaths = [inputName, ...packet.materialsPaths];
   const evidencePaths = [...new Set([...(sources.provenance?.evidence ?? []).map(row => row.path), ...packet.evidencePaths])];
-  const bound = new Set([...materialsPaths, ...evidencePaths, 'sources.json']);
+  const bound = new Set([...materialsPaths, ...evidencePaths, sourcesPath]);
   if (bound.size !== materialsPaths.length + evidencePaths.length + 1) throw new Error('Overlapping API final artifact roles');
   // The manifest itself must not introduce URLs to the publication allowlist.
   const originalUrls = observedUrls({ collection: sources, rootDir: root, materialsPaths: packet.materialsPaths, evidencePaths });
@@ -133,10 +133,10 @@ const comprehension = 'For each exact unit return {"units":[{"id":"…","status"
 const fidelity = 'For each exact unit return {"units":[{"id":"…","status":"pass or fail","notes":"…","evidence":[{"id":"excerpt ID","quote":"verbatim substring of that excerpt\'s text field, at least 8 characters"}]}]}. Compare claims, dates, mechanism, results, comparisons and limitations with the supplied evidence. Give specific findings, fail material discrepancies or missing evidence. Cite evidence for every link in main and rendered Markdown units, coverage evidence for any coverage claims, render and transport, and the local disposition facts for any candidate counts. A URL alone is not evidence. A disposition reason records an editorial decision, not proof of which source bodies were read. For exact transport JSON check visible text, link grouping and any truncation against render; do not claim client UI readback.';
 
 export async function finalizeOpenAI({ runsDir, runDir, keyFile, ledgerDir, revision = false, fetchImpl = globalThis.fetch }) {
-  const { run, sources, sourcesText } = frozenApiRun(runsDir, runDir);
+  const { run, sources, sourcesText, sourcesPath = 'sources.json' } = frozenApiRun(runsDir, runDir);
   const read = file => readPublicationFile(runDir, file);
   const inputRaw = read(inputName);
-  const packet = loadPacket(runDir, sources, inputRaw);
+  const packet = loadPacket(runDir, sources, inputRaw, sourcesPath);
   const recent = recentPublishedUrls(ledgerDir, { before: run.date });
   if (revision) recent.push(...recentPublishedUrls(ledgerDir, { before: new Date(Date.parse(run.date) + 86400000).toISOString().slice(0, 10) })
     .filter(row => row.date === run.date));
@@ -241,7 +241,7 @@ export async function finalizeOpenAI({ runsDir, runDir, keyFile, ledgerDir, revi
       write(path.join(folder, 'digest.md'), markdown);
       writeJson(path.join(folder, 'dispositions.json'), dispositions);
       const snapshotInputs = {
-        digestPath: rel('digest.md'), dispositionsPath: rel('dispositions.json'), sourcesPath: 'sources.json',
+        digestPath: rel('digest.md'), dispositionsPath: rel('dispositions.json'), sourcesPath,
         materialsPaths: [...packet.materialsPaths], evidencePaths: packet.evidencePaths, authorId: 'openai-api:' + model + ':' + final.id,
         reviewMode: 'self', renderStyle: 'concise', transport: 'feishu-post-v1',
       };
@@ -277,10 +277,10 @@ export async function finalizeOpenAI({ runsDir, runDir, keyFile, ledgerDir, revi
       snapshotInputs.materialsPaths.push(auditPath);
       const auditData = data('local_disposition_facts', audit);
       const scopedEvidence = { byId: new Map([...packet.byId,
-        [auditId, { ...audit, file: auditPath }], [accountingId, { ...accounting, file: 'sources.json' }]]) };
+        [auditId, { ...audit, file: auditPath }], [accountingId, { ...accounting, file: sourcesPath }]]) };
       // Detect changes since the evidence was actually read, then bind all exact local bytes.
       const assertEvidenceUnchanged = () => {
-        if (read(inputName) !== inputRaw || read('sources.json') !== sourcesText ||
+        if (read(inputName) !== inputRaw || read(sourcesPath) !== sourcesText ||
             [...packet.backing].some(([file, original]) => read(file) !== original)) throw new Error('API final evidence changed during review');
       };
       assertEvidenceUnchanged();
