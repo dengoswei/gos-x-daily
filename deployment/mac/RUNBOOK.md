@@ -78,13 +78,27 @@ fidelity call. The API author continues its own author transcript, checks every
 pending unit, including the audit, exact Markdown and native post JSON, and
 records `sourceBlind: false` under its actual author identity. The runner resolves
 evidence IDs and verbatim citations locally, rehashes the bound files, and fails
-closed on unresolved material findings or invalid review data. It may revise and
-review the whole report once. It writes request IDs and usage to `api-usage.jsonl`
+closed on unresolved material findings or invalid review data. If a fidelity
+review cites a known excerpt with a non-verbatim quote, the same reviewer gets
+one repair call for the affected units, using the same report and evidence.
+Those units must pass the same checks again. A material finding can trigger
+one revision and review of the whole report. Reviewers receive locally validated
+candidate counts, main-bullet count and counts grouped by cited public URL.
+The runner writes request IDs and usage to `api-usage.jsonl`
 under the returned final output directory. Finalization never contacts Feishu or
 writes to the delivery ledger. Use the returned `publication` path for the existing
 `cli validate-publication` and `local publish --publication` commands. Do not edit
 the reviewed artifacts. A separately authorized same-day revision uses
 `local finalize --run "$RUN" --revision` and the existing explicit revision sender.
+
+If finalization is interrupted, first check `local status --date YYYY-MM-DD`.
+Reconcile any accepted delivery and investigate any uncertain attempt. If there
+is no delivery attempt and an approved `api-final-result.json` exists, validate
+its publication and continue with the normal publish command. If no approved
+result exists, confirm on the host that no finalizer owns the run. Archive any
+empty stale `api-final.lock` directory under a unique name within the run, then
+restart finalization with the same frozen evidence and validated draft. Preserve
+prior attempt directories. Never move an active lock or a delivery-ledger file.
 
 ### Host author workflow without an API key file
 

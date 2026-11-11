@@ -16,6 +16,13 @@ async function setup(t, variant) {
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const fixture = await makeApiFinalFixture(root);
   const { runDir, ledgerDir, markdown, dispositions, evidenceText, coverageText, secret } = fixture;
+  const included = dispositions.items.find(row => row.disposition === 'included');
+  if (variant === 'citation-typo') {
+    const skippedIndex = dispositions.items.findIndex(row => row.disposition === 'skipped');
+    dispositions.items[skippedIndex] = { key: dispositions.items[skippedIndex].key, disposition: 'merged', mergedInto: included.key };
+    const secondSkipped = dispositions.items.findIndex(row => row.disposition === 'skipped');
+    dispositions.items[secondSkipped] = { ...included, key: dispositions.items[secondSkipped].key };
+  }
   const ledgerBefore = fs.readFileSync(path.join(ledgerDir, 'ledger.json'), 'utf8');
   const keyFile = path.join(root, 'SYNTHETIC-key');
   fs.writeFileSync(keyFile, 'CODEX_API_KEY=synthetic-placeholder\n');
@@ -40,14 +47,29 @@ async function setup(t, variant) {
       assert.equal(messages.find(message => message.role === 'assistant')?.content, finalText);
       assert.ok(all.includes(evidenceText));
     }
+    const repairingCitations = last.includes('<citation_errors>');
+    if (repairingCitations) {
+      stage = stage === 'final' ? 'author-fidelity' : stage;
+      assert.ok(messages.at(-2).role === 'assistant');
+      if (stage === 'author-fidelity') {
+        assert.equal(messages.find(message => message.role === 'assistant')?.content, finalText);
+      }
+    }
     stages.push(stage);
     let answer;
     if (stage === 'final') {
-      if (variant === 'repair' && stages.length > 1) assert.ok(last.includes('指出具体问题并进行修订'));
+      if (['repair', 'citation-then-material-fail'].includes(variant) && stages.length > 1) {
+        assert.ok(last.includes('指出具体问题并进行修订'));
+      }
       answer = { markdown, dispositions };
       finalText = JSON.stringify(answer);
     } else {
-      const units = fromTag(all, 'review_units');
+      const originalUnits = fromTag(all, 'review_units');
+      const units = repairingCitations ? fromTag(last, 'repair_units') : originalUnits;
+      if (repairingCitations) {
+        assert.deepEqual(units.map(unit => unit.id), fromTag(last, 'citation_errors').map(issue => issue.unitId));
+        assert.ok(units.length < originalUnits.length);
+      }
       const isComprehension = stage.endsWith('comprehension');
       if (stage === 'reader-comprehension') {
         assert.equal(messages.length, 2);
@@ -59,11 +81,21 @@ async function setup(t, variant) {
         const stored = fs.readdirSync(path.join(runDir, runOutput));
         assert.ok(stored.some(entry => entry.endsWith('reader-comprehension.json')));
       }
+      const materialAfterRepair = variant === 'citation-then-material-fail' && stage === 'reader-fidelity' &&
+        stages.filter(value => value === 'final').length === 1;
       const fail = stage === 'reader-fidelity' &&
-        (variant === 'reader-fails' || (variant === 'repair' && stages.filter(value => value === 'reader-fidelity').length === 1));
+        (variant === 'reader-fails' || (variant === 'repair' && stages.filter(value => value === 'reader-fidelity').length === 1) ||
+          (materialAfterRepair && repairingCitations));
       const covered = [{ id: 'coverage', quote: coverageText }];
       const paper = [{ id: 'paper', quote: evidenceText }, { id: 'paper', quote: fixture.input.excerpts[0].url }];
       const audit = !isComprehension && fromTag(all, 'local_disposition_facts');
+      if (audit) {
+        const facts = JSON.parse(audit.text);
+        assert.equal(facts.mainBullets, 1);
+        assert.deepEqual(Object.values(facts.publicUrlDispositions),
+          [variant === 'citation-typo' ? { includedKeys: 2, mergedKeys: 1 } : { includedKeys: 1, mergedKeys: 0 }]);
+        assert.ok(!audit.text.includes(included.key));
+      }
       const reviewRows = units.map(unit => ({
         id: unit.id,
         status: fail && unit === units[0] ? 'fail' : 'pass',
@@ -74,6 +106,13 @@ async function setup(t, variant) {
             : [...covered, ...paper, ...(unit.kind === 'audit' ? [{ id: audit.id, quote: audit.text }] : [])] }),
       }));
       if (variant === 'missing' && stage === 'reader-comprehension') reviewRows.pop();
+      if (!repairingCitations && ((variant === 'citation-typo' && stage.endsWith('fidelity')) || materialAfterRepair)) {
+        for (const [index, unit] of units.entries()) {
+          if (unit === units[0] || unit.kind === 'render') {
+            reviewRows[index].evidence = [{ id: 'paper', quote: 'This passage was never seen in the source.' }];
+          }
+        }
+      }
       if (variant === 'forged' && stage === 'author-fidelity') reviewRows[0].evidence = [{ id: 'paper', quote: 'This passage was never seen in the source.' }];
       if (variant === 'url-only' && stage === 'author-fidelity') reviewRows[0].evidence = [paper[1]];
       if (variant === 'tamper' && stage === 'author-fidelity') fs.appendFileSync(path.join(runDir, 'public-source.txt'), 'modified');
@@ -128,6 +167,30 @@ test('API final revises a material finding and rechecks the new exact publicatio
   assert.equal(f.stages.filter(stage => stage === 'reader-comprehension').length, 2);
   assert.equal(f.stages.filter(stage => stage === 'author-comprehension').length, 1);
   assert.ok(!fs.existsSync(path.join(result.outDir, 'attempt-1', 'publication.json')));
+  f.unchangedLedger();
+});
+
+test('API final repairs only units with invalid quotes before approving the same report', async t => {
+  const f = await setup(t, 'citation-typo');
+  const result = await f.run();
+  assert.equal(result.attempt, 1);
+  assert.deepEqual(f.stages, [
+    'final', 'reader-comprehension', 'reader-fidelity', 'reader-fidelity',
+    'author-comprehension', 'author-fidelity', 'author-fidelity',
+  ]);
+  const usage = fs.readFileSync(result.usagePath, 'utf8').trim().split('\n').map(JSON.parse);
+  assert.deepEqual(usage.filter(row => row.stage.endsWith('citation-repair')).map(row => row.stage),
+    ['reader-fidelity-citation-repair', 'author-fidelity-citation-repair']);
+  assert.equal((await cli(['validate-publication', '--publication', result.publication])).reviewedUnits, result.units);
+  f.unchangedLedger();
+});
+
+test('API final treats a material fail in a repaired verdict as a revision finding', async t => {
+  const f = await setup(t, 'citation-then-material-fail');
+  const result = await f.run();
+  assert.equal(result.attempt, 2);
+  assert.ok(!fs.existsSync(path.join(result.outDir, 'attempt-1', 'publication.json')));
+  assert.equal(f.stages.filter(stage => stage === 'author-comprehension').length, 1);
   f.unchangedLedger();
 });
 

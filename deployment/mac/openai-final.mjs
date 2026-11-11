@@ -73,14 +73,16 @@ function loadPacket(root, sources, raw) {
   return { excerpts, byId, backing, materialsPaths, evidencePaths };
 }
 
-function validateReviewAnswer(answer, units, packet) {
+function validateReviewAnswer(answer, units, packet, invalidQuotes) {
   if (!Array.isArray(answer.units) || answer.units.length !== units.length) throw new Error('API review returned incomplete unit coverage');
   const rows = new Map();
+  const seen = new Set();
   for (const row of answer.units) {
     const unit = units.find(item => item.id === row?.id);
-    if (!unit || rows.has(row.id) || !['pass', 'fail'].includes(row.status) || !substantial(row.notes)) {
+    if (!unit || seen.has(row.id) || !['pass', 'fail'].includes(row.status) || !substantial(row.notes)) {
       throw new Error('API review returned an invalid or duplicate unit verdict');
     }
+    seen.add(row.id);
     if (!packet) {
       if (!fields.every(key => substantial(row.reconstruction?.[key]))) throw new Error('API review lacks a substantive reconstruction');
       rows.set(row.id, { status: row.status, notes: row.notes, reconstruction: Object.fromEntries(fields.map(key => [key, row.reconstruction[key]])) });
@@ -89,6 +91,7 @@ function validateReviewAnswer(answer, units, packet) {
       if (!asList(refs, 100) || (row.status === 'pass' && !refs.length)) throw new Error('API review lacks fidelity evidence');
       const quotedIds = new Set();
       const metadataIds = new Set();
+      const invalidIds = new Set();
       const evidence = refs.flatMap(ref => {
         const source = packet.byId.get(ref?.id);
         if (!source || !substantial(ref.quote)) throw new Error('API review cited an unsupported evidence excerpt');
@@ -96,10 +99,18 @@ function validateReviewAnswer(answer, units, packet) {
           metadataIds.add(ref.id);
           return [];
         }
-        if (!source.text.includes(ref.quote)) throw new Error('API review cited an unsupported evidence excerpt');
+        if (!source.text.includes(ref.quote)) {
+          if (!invalidQuotes) throw new Error('API review cited an unsupported evidence excerpt');
+          invalidIds.add(ref.id);
+          return [];
+        }
         quotedIds.add(ref.id);
         return [{ id: ref.id, quote: ref.quote }];
       });
+      if (invalidIds.size) {
+        invalidQuotes.set(unit.id, [...invalidIds]);
+        continue;
+      }
       if ([...metadataIds].some(id => !quotedIds.has(id))) throw new Error('API review cited a URL without source text');
       if (row.status === 'pass') {
         const sources = evidence.map(ref => packet.byId.get(ref.id));
@@ -185,11 +196,31 @@ export async function finalizeOpenAI({ runsDir, runDir, keyFile, ledgerDir, revi
       write(path.join(outDir, attempt + '-' + stage + '.json'), content + '\n');
       return { answer, content, id: payload.id, actualModel: actual, finishedAt };
     };
+    const checkFidelity = async (stage, messages, attempt, units, evidence, authorModel) => {
+      const first = await call(stage, messages, attempt);
+      if (authorModel && first.actualModel !== authorModel) throw new Error('The final author model changed during self-review');
+      const invalidQuotes = new Map();
+      const rows = validateReviewAnswer(first.answer, units, evidence, invalidQuotes);
+      for (const row of rows.values()) row.checkedAt = first.finishedAt;
+      if (!invalidQuotes.size) return { result: first, rows };
+      const affected = units.filter(unit => invalidQuotes.has(unit.id));
+      const errors = affected.map(unit => ({ unitId: unit.id, excerptIds: invalidQuotes.get(unit.id) }));
+      const repair = message('user',
+        'Continue the same fidelity review. Return verdicts only for the listed repair units. The identified quotes were not exact substrings of their excerpt text. ' +
+        'Recheck the affected verdicts against the same evidence. Use short verbatim substrings of the supplied text, including any model version or qualifier that changes the claim. ' +
+        'If the source does not support a claim, return fail and explain the discrepancy. ' +
+        fidelity + '\n' + data('repair_units', affected) + '\n' + data('citation_errors', errors));
+      const result = await call(stage + '-citation-repair', [...messages, message('assistant', first.content), repair], attempt);
+      if (result.actualModel !== first.actualModel) throw new Error('The fidelity reviewer model changed during citation repair');
+      const repaired = validateReviewAnswer(result.answer, affected, evidence);
+      for (const [id, row] of repaired) rows.set(id, { ...row, checkedAt: result.finishedAt });
+      return { result, rows: new Map(units.map(unit => [unit.id, rows.get(unit.id)])) };
+    };
     const recentPublic = recent.map(row => ({ date: row.date, urls: row.urls.filter(url => canonicalAllowed.has(canonicalUrl(url))).map(canonicalUrl) }));
     const shared = data('verified_evidence', { renderedCoverage, recentPublic, excerpts: [...packet.excerpts, accounting] });
     const base = [
       system('final', repoText('../../EDITORIAL.md') + '\n' + repoText('../../prompts/compose-digest.md') +
-        '\nYou are the final author. Use the draft only as leads; every included story must be supported by verified excerpts. Cite only their exact public URLs. Use the draft collection ID and account for every original candidate key; compress same-reason skipped keys into groups if helpful. Audit counts must match your final dispositions. Do not infer which sources were read or why an excerpt is absent. Keep a concise 本次采集范围 paragraph in the visible main body, separated by blank lines, and preserve material limits. The renderer appends renderedCoverage verbatim. Distinguish hours with no certified traversal from measured actual gaps and unknown unseen-post count; make your own coverage text consistent with the appended line. No private source paths, links or headers. For repeats, require a supported new fact with 跟进. Return {"markdown":"complete digest","dispositions":{"schemaVersion":1,"collectionId":"…","items":[]}}.'),
+        '\nYou are the final author. Use the draft only as leads; every included story must be supported by verified excerpts. Cite only their exact public URLs. Use the draft collection ID and account for every original candidate key; compress same-reason skipped keys into groups if helpful. Audit counts must match your final dispositions. Count candidate keys, main bullets and supplemental links separately; one key or link need not equal one story. Do not infer reading depth, an excerpt absence reason, or the controller’s review or delivery status. Keep a concise 本次采集范围 paragraph in the visible main body, separated by blank lines, and preserve material limits. The renderer appends renderedCoverage verbatim. Distinguish hours with no certified traversal from measured actual gaps and unknown unseen-post count; make your own coverage text consistent with the appended line. No private source paths, links or headers. For repeats, require a supported new fact with 跟进. Return {"markdown":"complete digest","dispositions":{"schemaVersion":1,"collectionId":"…","items":[]}}.'),
       message('user', data('final_inputs', { date: run.date, revision, draft }) + '\n' + shared),
     ];
     let feedback = [];
@@ -226,8 +257,21 @@ export async function finalizeOpenAI({ runsDir, runDir, keyFile, ledgerDir, revi
         feedback = ['Coverage paragraph must survive the exact final render in a retained main section.'];
         continue;
       }
-      const { candidates, included, merged, skipped, skippedReasons } = gates.validation.dispositions;
-      const audit = { id: auditId, kind: 'audit', text: JSON.stringify({ candidates, included, merged, skipped, skippedReasons }) };
+      const { candidates, included, merged, skipped, skippedReasons, supplementUrls } = gates.validation.dispositions;
+      const includedUrlsByKey = new Map(dispositions.items.filter(row => row.disposition === 'included')
+        .map(row => [row.key, canonicalUrl(row.url)]));
+      const publicUrlDispositions = new Map();
+      for (const url of includedUrlsByKey.values()) {
+        if (!publicUrlDispositions.has(url)) publicUrlDispositions.set(url, { includedKeys: 0, mergedKeys: 0 });
+        publicUrlDispositions.get(url).includedKeys++;
+      }
+      for (const row of dispositions.items) {
+        if (row.disposition === 'merged') publicUrlDispositions.get(includedUrlsByKey.get(row.mergedInto)).mergedKeys++;
+      }
+      const audit = { id: auditId, kind: 'audit', text: JSON.stringify({
+        candidates, included, merged, skipped, skippedReasons, mainBullets: gates.validation.mainBullets,
+        supplementUrls, publicUrlDispositions: Object.fromEntries(publicUrlDispositions),
+      }) };
       const auditPath = rel('audit-facts.json');
       write(path.join(folder, 'audit-facts.json'), audit.text + '\n');
       snapshotInputs.materialsPaths.push(auditPath);
@@ -258,11 +302,10 @@ export async function finalizeOpenAI({ runsDir, runDir, keyFile, ledgerDir, revi
       const readerA = await call('reader-comprehension', [readerPrompt, message('user', unitData)], attempt);
       const readerARows = validateReviewAnswer(readerA.answer, units);
       if (checkedAt() <= readerA.finishedAt) await delay(2);
-      const readerB = await call('reader-fidelity', [
+      const { result: readerB, rows: readerBRows } = await checkFidelity('reader-fidelity', [
         system('reader-fidelity', 'You are the advisory fidelity reader. ' + fidelity),
         message('user', unitData + '\n' + data('persisted_reader_reconstruction', [...readerARows]) + '\n' + shared + '\n' + auditData),
-      ], attempt);
-      const readerBRows = validateReviewAnswer(readerB.answer, units, scopedEvidence);
+      ], attempt, units, scopedEvidence);
       writeJson(path.join(folder, 'reader.advisory.json'), {
         advisory: true, notApproval: true, model,
         snapshotSha256: pending.snapshotSha256,
@@ -279,11 +322,10 @@ export async function finalizeOpenAI({ runsDir, runDir, keyFile, ledgerDir, revi
       const selfA = await call('author-comprehension', [...transcript, selfRequest], attempt);
       const selfARows = validateReviewAnswer(selfA.answer, units);
       if (checkedAt() <= selfA.finishedAt) await delay(2);
-      const selfB = await call('author-fidelity', [...transcript, selfRequest, message('assistant', selfA.content),
+      if (selfA.actualModel !== final.actualModel) throw new Error('The final author model changed during self-review');
+      const { rows: selfBRows } = await checkFidelity('author-fidelity', [...transcript, selfRequest, message('assistant', selfA.content),
         message('user', 'Continue as the same final author; compare the exact units against the already supplied verified evidence. ' + fidelity + '\n' + auditData),
-      ], attempt);
-      if (selfA.actualModel !== final.actualModel || selfB.actualModel !== final.actualModel) throw new Error('The final author model changed during self-review');
-      const selfBRows = validateReviewAnswer(selfB.answer, units, scopedEvidence);
+      ], attempt, units, scopedEvidence, final.actualModel);
       feedback = failures(selfARows, selfBRows);
       if (feedback.length) feedback.unshift({ previousFinal: markdown });
       if (feedback.length) continue;
@@ -293,7 +335,7 @@ export async function finalizeOpenAI({ runsDir, runDir, keyFile, ledgerDir, revi
         units: pending.units.map(unit => ({
           ...unit, status: 'approved',
           comprehension: { ...selfARows.get(unit.id), sourceBlind: false, checkedAt: selfA.finishedAt },
-          fidelity: { status: 'pass', checkedAt: selfB.finishedAt, notes: selfBRows.get(unit.id).notes,
+          fidelity: { status: 'pass', checkedAt: selfBRows.get(unit.id).checkedAt, notes: selfBRows.get(unit.id).notes,
             sourcePaths: [...new Set(selfBRows.get(unit.id).evidence.map(ref => scopedEvidence.byId.get(ref.id).file))] },
         })),
       };
