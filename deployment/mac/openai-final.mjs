@@ -13,6 +13,7 @@ const inputName = 'api-final-input.json';
 const auditId = 'local-disposition-counts';
 const accountingId = 'local-coverage-accounting';
 const endpoint = 'https://api.openai.com/v1/chat/completions';
+const requestTimeoutMs = 8 * 60 * 1000;
 const write = (file, content) => fs.writeFileSync(file, content, { flag: 'wx', mode: 0o600 });
 const writeJson = (file, value) => write(file, JSON.stringify(value, null, 2) + '\n');
 const repoText = relative => fs.readFileSync(new URL(relative, import.meta.url), 'utf8');
@@ -24,6 +25,25 @@ const asList = (items, limit) => Array.isArray(items) && items.length <= limit;
 const substantial = text => typeof text === 'string' && text.trim().length >= 8 && text.length <= 3000;
 const fields = ['problem', 'method', 'result', 'innovation'];
 const checkedAt = () => new Date().toISOString();
+
+function applyDispositionChanges(original, changes) {
+  if (!Array.isArray(changes)) throw new Error('Disposition changes must be an array');
+  const replacements = new Map();
+  for (const row of changes) {
+    const keys = row?.keys ?? [row?.key];
+    if (!Array.isArray(keys) || !keys.length) throw new Error('Disposition changes require candidate keys');
+    for (const key of keys) {
+      if (typeof key !== 'string' || replacements.has(key)) throw new Error('Invalid or repeated disposition change key');
+      replacements.set(key, row);
+    }
+  }
+  const items = original.items.flatMap(row => {
+    if (!row.keys) return replacements.has(row.key) ? [] : [row];
+    const keys = row.keys.filter(key => !replacements.has(key));
+    return keys.length ? [{ ...row, keys }] : [];
+  });
+  return { ...original, items: [...items, ...changes] };
+}
 
 function loadPacket(root, sources, raw, sourcesPath = 'sources.json') {
   if (Buffer.byteLength(raw) > 350000) throw new Error('API final evidence manifest exceeds byte budget');
@@ -159,30 +179,50 @@ export async function finalizeOpenAI({ runsDir, runDir, keyFile, ledgerDir, revi
     const outDir = fs.mkdtempSync(path.join(runDir, 'api-final-'));
     const usagePath = path.join(outDir, 'api-usage.jsonl');
     const call = async (stage, messages, attempt) => {
-      if (Buffer.byteLength(JSON.stringify(messages)) > 540000) throw new Error('API final request exceeds byte budget');
+      const inputBytes = Buffer.byteLength(JSON.stringify(messages));
+      if (inputBytes > 540000) throw new Error('API final request exceeds byte budget');
       const startedAt = checkedAt();
+      const signal = AbortSignal.timeout(requestTimeoutMs);
+      const log = (event, fields = {}) => fs.appendFileSync(usagePath, JSON.stringify({
+        attempt, stage, model, event, inputBytes, startedAt, ...fields,
+      }) + '\n', { mode: 0o600 });
+      log('started', { timeoutMs: requestTimeoutMs });
       let response;
+      let phase = 'response_headers';
+      let payload;
+      let headersAt;
+      let httpRequestId;
       try {
         response = await fetchImpl(endpoint, {
-          method: 'POST', redirect: 'error', signal: AbortSignal.timeout(240000),
+          method: 'POST', redirect: 'error', signal,
           headers: { authorization: 'Bearer ' + key, 'content-type': 'application/json' },
           body: JSON.stringify({ model, messages, reasoning_effort: 'high', service_tier: 'default',
             max_completion_tokens: 20000, response_format: { type: 'json_object' }, store: false }),
         });
-      } catch {
-        throw new Error('OpenAI API final network failure or timeout at ' + stage);
+        headersAt = checkedAt();
+        httpRequestId = response.headers.get('x-request-id') ?? undefined;
+        phase = 'response_body';
+        payload = await response.json();
+      } catch (error) {
+        const failure = signal.aborted ? 'deadline_exceeded' :
+          error instanceof SyntaxError ? 'invalid_json' : 'transport_error';
+        const code = error.cause?.code;
+        log('failed', { phase, failure, headersAt, httpRequestId, status: response?.status,
+          code: typeof code === 'string' && /^[A-Z0-9_]{1,40}$/.test(code) ? code : undefined,
+          finishedAt: checkedAt() });
+        throw new Error(`OpenAI API final ${stage} failed at ${phase}: ${failure}${response ? ' (HTTP ' + response.status + ')' : ''}`);
       }
-      const payload = await response.json().catch(() => null);
       const actual = payload?.model;
       const usage = payload?.usage;
       const finishedAt = checkedAt();
-      fs.appendFileSync(usagePath, JSON.stringify({
-        attempt, stage, model, actualModel: actual, requestId: payload?.id, status: response.status, startedAt, finishedAt,
+      log('response', {
+        actualModel: actual, requestId: payload?.id, httpRequestId, status: response.status, headersAt, finishedAt,
+        finishReason: payload?.choices?.[0]?.finish_reason,
         serviceTier: payload?.service_tier, inputTokens: usage?.prompt_tokens, outputTokens: usage?.completion_tokens,
         cachedInputTokens: usage?.prompt_tokens_details?.cached_tokens,
         cacheWriteInputTokens: usage?.prompt_tokens_details?.cache_write_tokens,
         reasoningTokens: usage?.completion_tokens_details?.reasoning_tokens,
-      }) + '\n', { mode: 0o600 });
+      });
       const choice = payload?.choices?.[0];
       const content = choice?.message?.content;
       if (!response.ok || typeof payload?.id !== 'string' ||
@@ -220,7 +260,7 @@ export async function finalizeOpenAI({ runsDir, runDir, keyFile, ledgerDir, revi
     const shared = data('verified_evidence', { renderedCoverage, recentPublic, excerpts: [...packet.excerpts, accounting] });
     const base = [
       system('final', repoText('../../EDITORIAL.md') + '\n' + repoText('../../prompts/compose-digest.md') +
-        '\nYou are the final author. Use the draft only as leads; every included story must be supported by verified excerpts. Cite only their exact public URLs. Use the draft collection ID and account for every original candidate key; compress same-reason skipped keys into groups if helpful. Audit counts must match your final dispositions. Count candidate keys, main bullets and supplemental links separately; one key or link need not equal one story. Do not infer reading depth, an excerpt absence reason, or the controller’s review or delivery status. Keep a concise 本次采集范围 paragraph in the visible main body, separated by blank lines, and preserve material limits. The renderer appends renderedCoverage verbatim. Distinguish hours with no certified traversal from measured actual gaps and unknown unseen-post count; make your own coverage text consistent with the appended line. No private source paths, links or headers. For repeats, require a supported new fact with 跟进. Return {"markdown":"complete digest","dispositions":{"schemaVersion":1,"collectionId":"…","items":[]}}.'),
+        '\nYou are the final author. Use the draft only as leads; every included story must be supported by verified excerpts. Cite only their exact public URLs. Return {"markdown":"complete digest","dispositionChanges":[]} with only rows that change from the draft. The controller retains each unchanged draft row by candidate key. Supply replacement rows using the same schema for every key whose inclusion, section, URL, merge target, or skip reason changes. When dropping an included candidate, also update any merged rows pointing to it. Use grouped keys for skips with the same reason. Audit counts must match the resulting dispositions. Count candidate keys, main bullets and supplemental links separately; one key or link need not equal one story. Do not infer reading depth, an excerpt absence reason, or the controller’s review or delivery status. Keep a concise 本次采集范围 paragraph in the visible main body, separated by blank lines, and preserve material limits. The renderer appends renderedCoverage verbatim. Distinguish hours with no certified traversal from measured actual gaps and unknown unseen-post count; make your own coverage text consistent with the appended line. No private source paths, links or headers. For repeats, require a supported new fact with 跟进.'),
       message('user', data('final_inputs', { date: run.date, revision, draft }) + '\n' + shared),
     ];
     let feedback = [];
@@ -229,7 +269,17 @@ export async function finalizeOpenAI({ runsDir, runDir, keyFile, ledgerDir, revi
       fs.mkdirSync(folder, { mode: 0o700 });
       const author = feedback.length ? [...base, message('user', data('revision_findings', feedback))] : base;
       const final = await call('final', author, attempt);
-      const { markdown, dispositions } = final.answer;
+      const { markdown, dispositionChanges } = final.answer;
+      let { dispositions } = final.answer;
+      if (dispositionChanges !== undefined) {
+        try {
+          if (dispositions !== undefined) throw new Error('Return disposition changes only');
+          dispositions = applyDispositionChanges(draft.dispositions, dispositionChanges);
+        } catch (error) {
+          feedback = [error.message];
+          continue;
+        }
+      }
       const rel = file => path.relative(runDir, path.join(folder, file));
       if (typeof markdown !== 'string' || !dispositions || markdown.length > 24000 ||
           !markdown.includes('本次采集范围') ||

@@ -61,7 +61,8 @@ async function setup(t, variant) {
       if (['repair', 'citation-then-material-fail'].includes(variant) && stages.length > 1) {
         assert.ok(last.includes('指出具体问题并进行修订'));
       }
-      answer = { markdown, dispositions };
+      answer = variant === 'delta' ? { markdown, dispositionChanges: dispositions.items.filter(row => row.disposition === 'included') } :
+        { markdown, dispositions };
       finalText = JSON.stringify(answer);
     } else {
       const originalUnits = fromTag(all, 'review_units');
@@ -152,8 +153,9 @@ test('API final preserves reader isolation, author continuity, exact payload bin
   assert.equal(plan.status, 'prepared_not_sent');
   assert.equal(plan.transport.content, fs.readFileSync(path.join(path.dirname(result.publication), 'post.final.json'), 'utf8'));
   const usage = fs.readFileSync(result.usagePath, 'utf8').trim().split('\n').map(JSON.parse);
-  assert.deepEqual(usage.map(row => row.stage), f.stages);
-  assert.ok(usage.every(row => row.inputTokens === 100 && row.outputTokens === 20));
+  assert.deepEqual(usage.filter(row => row.event === 'started').map(row => row.stage), f.stages);
+  assert.deepEqual(usage.filter(row => row.event === 'response').map(row => row.stage), f.stages);
+  assert.ok(usage.filter(row => row.event === 'response').every(row => row.inputTokens === 100 && row.outputTokens === 20));
   await assert.rejects(f.run(), /already completed/);
   fs.appendFileSync(path.join(path.dirname(result.publication), 'digest.md'), '\n');
   await assert.rejects(cli(['validate-publication', '--publication', result.publication]), /stale or tampered/);
@@ -179,8 +181,15 @@ test('API final repairs only units with invalid quotes before approving the same
     'author-comprehension', 'author-fidelity', 'author-fidelity',
   ]);
   const usage = fs.readFileSync(result.usagePath, 'utf8').trim().split('\n').map(JSON.parse);
-  assert.deepEqual(usage.filter(row => row.stage.endsWith('citation-repair')).map(row => row.stage),
+  assert.deepEqual(usage.filter(row => row.event === 'response' && row.stage.endsWith('citation-repair')).map(row => row.stage),
     ['reader-fidelity-citation-repair', 'author-fidelity-citation-repair']);
+  assert.equal((await cli(['validate-publication', '--publication', result.publication])).reviewedUnits, result.units);
+  f.unchangedLedger();
+});
+
+test('API final accepts changed dispositions and keeps the remaining validated rows', async t => {
+  const f = await setup(t, 'delta');
+  const result = await f.run();
   assert.equal((await cli(['validate-publication', '--publication', result.publication])).reviewedUnits, result.units);
   f.unchangedLedger();
 });
