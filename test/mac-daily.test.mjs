@@ -16,12 +16,14 @@ test('review retains composer evidence tails and distinguishes observed links fr
   const companionUrls = Array.from({ length: 35 }, (_, index) => 'https://example.com/code-' + index);
   const text = 'First paragraph. '.repeat(1500) + 'UNIQUE-EXPERIMENT-LIMITATION-AT-THE-END';
   const evidence = selectedEvidence([{ title: 'Synthetic article', primaryUrl: url, companionUrls,
+    paperPublishedAt: '2026-11-09T00:00:00Z',
     observations: [{ url, text, publishedAt: '2026-11-11T00:00:00Z' }] }],
   [url, ...companionUrls], '2026-11-12T00:00:00Z');
   const primary = evidence.find(row => row.url === url);
   assert.ok(primary.text.endsWith('UNIQUE-EXPERIMENT-LIMITATION-AT-THE-END'));
   assert.ok(primary.text.includes('2026-11-11T00:00:00Z'));
   assert.ok(primary.text.includes('2026-11-12T00:00:00Z'));
+  assert.ok(primary.text.includes('"paperPublishedAt":"2026-11-09T00:00:00Z"'));
   for (const row of evidence.filter(row => row.url !== url)) {
     assert.ok(row.text.includes('link_only'));
     assert.ok(!row.text.includes('UNIQUE-EXPERIMENT-LIMITATION-AT-THE-END'));
@@ -108,6 +110,9 @@ test('Mac production uses the repository funnel and reviews its output without a
   assert.equal(validation.status, 'structural_review_binding_passed_not_semantic_proof');
   assert.ok(fs.existsSync(path.join(f.runDir, 'store', 'raw')));
   assert.ok(fs.existsSync(path.join(f.runDir, 'telemetry.json')));
+  const packet = JSON.parse(fs.readFileSync(path.join(f.runDir, 'api-final-input.json')));
+  assert.ok(packet.excerpts.some(row => row.id.startsWith('pipeline-accounting-') && row.text.includes('sourceCandidateCount')));
+  assert.match(fs.readFileSync(path.join(f.runDir, 'digest.publication.md'), 'utf8'), /一篇成稿可能综合多个来源/);
   assert.deepEqual(fs.readdirSync(f.ledgerDir), ledgerBefore);
   const again = await runProductionDaily({ ...f, dataDir: path.join(root, 'state-data'), keyFile, fetchImpl });
   assert.equal(again.publication, result.publication);

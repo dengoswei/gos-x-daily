@@ -22,6 +22,8 @@ async function setup(t, variant) {
     }));
   }
   const included = dispositions.items.find(row => row.disposition === 'included');
+  const notice = ['citation-empty', 'citation-missing', 'citation-empty-persistent'].includes(variant)
+    ? '本期版本说明：依据 X Following 和 Karpathy 抽样。' : undefined;
   const quickSection = '## Quick Hits / 快讯速览\n- **版本更新。** 新增本地导出命令。 [发布说明](https://example.com/synthetic-quick-release)\n\n';
   const quickExcerpt = { id: 'quick', kind: 'public', path: 'public-source.txt',
     url: 'https://example.com/synthetic-quick-release', text: 'SYNTHETIC release: version 1.2 adds a local export command.' };
@@ -93,6 +95,7 @@ async function setup(t, variant) {
         dispositionChanges: dispositions.items.filter(row => row.disposition === 'included'),
       } :
         { markdown, dispositions };
+      if (notice) answer.markdown = markdown.replace('## ' + included.section, notice + '\n\n## ' + included.section);
       if (variant === 'quick-first') {
         if (stages.length > 1) assert.match(last, /before every other main section/);
         answer.markdown = stages.length === 1
@@ -106,6 +109,12 @@ async function setup(t, variant) {
       if (repairingCitations) {
         assert.deepEqual(units.map(unit => unit.id), fromTag(last, 'citation_errors').map(issue => issue.unitId));
         assert.ok(units.length < originalUnits.length);
+        if (notice) {
+          assert.deepEqual(units.map(unit => unit.text), [notice]);
+          assert.deepEqual(fromTag(last, 'citation_errors'), [
+            { unitId: units[0].id, excerptIds: [], reason: 'pass_without_evidence' },
+          ]);
+        }
         if (['citation-unknown-id', 'citation-unknown-id-persistent'].includes(variant)) {
           assert.deepEqual(units.map(unit => unit.kind), ['render', 'transport']);
           assert.deepEqual(fromTag(last, 'citation_errors').map(issue => issue.excerptIds), [[units[0].id], ['paper']]);
@@ -115,6 +124,10 @@ async function setup(t, variant) {
         }
       }
       const isComprehension = stage.endsWith('comprehension');
+      if (!isComprehension) {
+        assert.match(repairingCitations ? last : all,
+          /Every pass verdict requires at least one valid source citation, including for titles, dates and notices/);
+      }
       if (stage.endsWith('fidelity') && !repairingCitations) {
         assert.match(all, /A link_only record can establish discovery of a companion link/);
         assert.match(all, /Fail any material claim about the destination content unless supported by separate content evidence/);
@@ -173,6 +186,15 @@ async function setup(t, variant) {
         reviewRows[render].evidence.push({ id: units[render].id, quote: evidenceText });
         reviewRows[transport].evidence.push({ id: 'paper', quote: evidenceText.slice(0, 7) });
       }
+      if (notice && !isComprehension) {
+        const row = reviewRows[units.findIndex(unit => unit.text === notice)];
+        row.evidence = covered;
+        if (stage === 'reader-fidelity' && (!repairingCitations || variant === 'citation-empty-persistent')) {
+          if (variant === 'citation-missing') delete row.evidence;
+          else row.evidence = [];
+        }
+      }
+      if (materialAfterRepair && repairingCitations) reviewRows[0].evidence = [];
       if (variant === 'forged' && stage === 'author-fidelity') reviewRows[0].evidence = [{ id: 'paper', quote: 'This passage was never seen in the source.' }];
       if (variant === 'url-only' && stage === 'author-fidelity') reviewRows[0].evidence = [paper[1]];
       if (variant === 'tamper' && stage === 'author-fidelity') fs.appendFileSync(path.join(runDir, 'public-source.txt'), 'modified');
@@ -288,6 +310,28 @@ test('API final refuses a review unit citation that survives the only citation r
   f.unchangedLedger();
 });
 
+test('API final repairs only the passing notice with missing or empty evidence', async t => {
+  for (const variant of ['citation-empty', 'citation-missing']) {
+    await t.test(variant, async sub => {
+      const f = await setup(sub, variant);
+      const result = await f.run();
+      assert.equal(result.attempt, 1);
+      assert.deepEqual(f.stages, ['final', 'reader-comprehension', 'reader-fidelity', 'reader-fidelity',
+        'author-comprehension', 'author-fidelity']);
+      assert.equal((await cli(['validate-publication', '--publication', result.publication])).reviewedUnits, result.units);
+      f.unchangedLedger();
+    });
+  }
+});
+
+test('API final blocks an uncited pass after the only citation retry', async t => {
+  const f = await setup(t, 'citation-empty-persistent');
+  await assert.rejects(f.run(), /lacks fidelity evidence/);
+  assert.deepEqual(f.stages, ['final', 'reader-comprehension', 'reader-fidelity', 'reader-fidelity']);
+  assert.ok(!fs.readdirSync(f.runDir, { recursive: true }).some(file => file.endsWith('publication.json')));
+  f.unchangedLedger();
+});
+
 test('API final keeps unchanged dispositions and reviews the exact observed spelling of links', async t => {
   const f = await setup(t, 'delta');
   const result = await f.run();
@@ -298,7 +342,7 @@ test('API final keeps unchanged dispositions and reviews the exact observed spel
   f.unchangedLedger();
 });
 
-test('API final treats a material fail in a repaired verdict as a revision finding', async t => {
+test('API final treats an uncited material fail in a repaired verdict as a revision finding', async t => {
   const f = await setup(t, 'citation-then-material-fail');
   const result = await f.run();
   assert.equal(result.attempt, 2);
