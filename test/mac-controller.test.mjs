@@ -9,8 +9,34 @@ import { initializeDeliveryLedger } from '../delivery-ledger.mjs';
 import { larkMarkdown } from '../digest.mjs';
 import { larkPostJson, larkPostVisibleText } from '../lark-post.mjs';
 import { approveSyntheticReview } from './helpers/review-fixture.mjs';
+import { chatId as fixtureChatId, macHome, sentId } from './helpers/mac-fixture.mjs';
 
 const sha = value => createHash('sha256').update(value).digest('hex');
+
+test('Mac failure notice uses the configured chat and an independent once-per-day reservation', t => {
+  const f = macHome(t);
+  const alert = stage => f.local(['alert', '--date', f.date, '--stage', stage]);
+  assert.equal(alert('arbitrary text').status, 1);
+  assert.equal(f.sends().length, 0);
+  assert.deepEqual(alert('finalize').json, { status: 'alert_accepted', date: f.date, messageId: sentId });
+  assert.equal(alert('publish').json.status, 'alert_already_accepted');
+  assert.equal(f.local(['status', '--date', f.date]).json.status, 'no_local_attempt');
+  assert.deepEqual(f.ledgerFiles(), []);
+  assert.equal(f.sends().length, 1);
+  const args = f.sends()[0].args;
+  assert.equal(args[args.indexOf('--chat-id') + 1], fixtureChatId);
+  assert.equal(args[args.indexOf('--idempotency-key') + 1], f.key + '-failure-alert');
+  assert.match(args[args.indexOf('--text') + 1], /终稿或审校/);
+});
+
+test('Mac failure notice never retries an uncertain send', t => {
+  const f = macHome(t);
+  f.stubWith({ send: 'fail' });
+  const args = ['alert', '--date', f.date, '--stage', 'finalize'];
+  assert.match(f.local(args).stderr, /outcome uncertain/);
+  assert.equal(f.local(args).json.status, 'alert_attempt_requires_reconciliation');
+  assert.equal(f.sends().length, 1);
+});
 test('Mac controller returns legacy accepted publication and reconciles without invoking sender', t => {
   const home = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'mac-controller-'));
   t.after(() => fs.rmSync(home, { recursive: true, force: true }));

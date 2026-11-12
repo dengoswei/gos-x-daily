@@ -58,6 +58,38 @@ function authority(config, date) {
   }
   return a;
 }
+const alertStages = new Map([
+  ['collection', '信源采集'], ['draft', '初稿生成'], ['finalize', '终稿或审校'],
+  ['publish', '投递或回读'],
+]);
+const todayInShanghai = () => new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Shanghai' }).format(new Date());
+
+function sendFailureAlert(config, date, stage) {
+  const label = alertStages.get(stage);
+  if (!label || date !== todayInShanghai()) throw new Error('Alert requires today’s date and a recognized failure stage');
+  authority(config, date);
+  const key = keyFor(date) + '-failure-alert';
+  const prefix = path.join(config.ledgerDir, hash(key));
+  if (fs.existsSync(prefix + '.receipt.json')) {
+    return { status: 'alert_already_accepted', date, messageId: read(prefix + '.receipt.json').messageId };
+  }
+  if (fs.existsSync(prefix + '.attempt.json')) return { status: 'alert_attempt_requires_reconciliation', date };
+  verifyIdentity(config);
+  const text = `X Daily 运行告警 · ${date}\n「${label}」阶段中断，需要检查 Mac 本地运行记录和投递状态。`;
+  const target = { deploymentId: config.namespace, chatId: config.chatId, kind: 'failure-alert' };
+  const attempt = recordDeliveryAttempt(config.ledgerDir, { date, idempotencyKey: key, planSha256: hash(text), target });
+  try {
+    const response = cli(config, ['im', '+messages-send', '--as', 'bot', '--chat-id', config.chatId,
+      '--text', text, '--idempotency-key', key]);
+    const messageId = response.data?.message_id;
+    if (response.ok !== true || !/^om_[a-z0-9]+$/.test(messageId ?? '')) throw new Error('Alert API acceptance unconfirmed');
+    recordDeliveryReceipt(attempt, { messageId });
+    return { status: 'alert_accepted', date, messageId };
+  } catch {
+    try { recordDeliveryUncertain(attempt, 'failure_alert_outcome_unconfirmed'); } catch { /* Attempt already blocks another send. */ }
+    throw new Error('Feishu failure alert outcome uncertain; reconcile before sending again');
+  }
+}
 function receipt(config, date) {
   const prefix = prefixFor(config, date);
   return fs.existsSync(prefix+'.receipt.json') ? read(prefix+'.receipt.json') : null;
@@ -181,6 +213,12 @@ export async function main(args) {
   const config=loadLocalConfig();
   const command=args[0];
   const value=flag=>args[args.indexOf(flag)+1];
+  if (command === 'alert') {
+    if (args.length !== 5 || args[1] !== '--date' || args[3] !== '--stage') {
+      throw new Error('Use local alert --date YYYY-MM-DD --stage collection|draft|finalize|publish');
+    }
+    return sendFailureAlert(config, args[2], args[4]);
+  }
   if (command === 'finalize') {
     if (args[1] !== '--run' || !args[2] || (args.length !== 3 && !(args.length === 4 && args[3] === '--revision'))) {
       throw new Error('Use local finalize --run RUN [--revision]');

@@ -126,3 +126,11 @@ Return the Feishu message link/ID and a concise outcome, or a precise operationa
 failure. Update the automation's private memory with actual run path, coverage
 limits and receipt. Do not write to Obsidian/Space, sync Notion, change schedules
 or send test messages. Offline tests belong to code maintenance, not daily runs.
+
+On an unresolved operational failure, before returning, run
+`local alert --date YYYY-MM-DD --stage collection|draft|finalize|publish`
+with the current Shanghai date and the applicable stage, through the same
+provisioned wrapper in host context. The command sends a fixed incident notice
+to the configured private Feishu chat once per day, under its own ledger key.
+Report the alert receipt or the alert failure alongside the original error.
+If the digest was accepted, reconcile it without sending it again.

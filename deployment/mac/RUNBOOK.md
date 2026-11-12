@@ -84,7 +84,10 @@ one repair call for the affected units, using the same report and evidence.
 Those units must pass the same checks again. A material finding can trigger
 one revision and review of the whole report. Reviewers receive locally validated
 candidate counts, main-bullet count and counts grouped by cited public URL.
-The runner writes request IDs and usage to `api-usage.jsonl`
+The runner applies the author's changed disposition rows to the validated draft
+and verifies the full resulting ledger. The API has an eight-minute per-request
+deadline. The runner writes request starts, failure phase, HTTP request IDs and
+usage to `api-usage.jsonl`
 under the returned final output directory. Finalization never contacts Feishu or
 writes to the delivery ledger. Use the returned `publication` path for the existing
 `cli validate-publication` and `local publish --publication` commands. Do not edit
@@ -99,6 +102,12 @@ result exists, confirm on the host that no finalizer owns the run. Archive any
 empty stale `api-final.lock` directory under a unique name within the run, then
 restart finalization with the same frozen evidence and validated draft. Preserve
 prior attempt directories. Never move an active lock or a delivery-ledger file.
+
+For an unresolved scheduled failure, use
+`local alert --date YYYY-MM-DD --stage collection|draft|finalize|publish`
+with the current Shanghai date and one stage. It records the attempt before
+sending a fixed notice to the verified Feishu chat. Its daily key is independent
+of the digest key. If the result is uncertain, reconcile externally without retry.
 
 ### Host author workflow without an API key file
 
