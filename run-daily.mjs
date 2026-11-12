@@ -649,6 +649,10 @@ export async function runDailyV2({
       }
 
       const composeInput = tagged('digest_date', reportDate) + '\n\n' + tagged('selected_topics', modelJson(selectedMaterials));
+      // Count the material actually available to this writer after projection.
+      const availableFullText = selectedMaterials.filter(row => row.material.contentStatus === 'full_text').length;
+      deepFetchStats = { ...deepFetchStats, attempted: selectedMaterials.length,
+        fullText: availableFullText, snippetOnly: selectedMaterials.length - availableFullText };
 
       // Save prepared artifacts so a local host agent (Codex / Claude Code) can author the digest
       // without transmitting private browser captures to an external HTTP API.

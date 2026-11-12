@@ -143,8 +143,13 @@ function validateReviewAnswer(answer, units, packet, invalidQuotes) {
       if (!fields.every(key => substantial(row.reconstruction?.[key]))) throw new Error('API review lacks a substantive reconstruction');
       rows.set(row.id, { status: row.status, notes: row.notes, reconstruction: Object.fromEntries(fields.map(key => [key, row.reconstruction[key]])) });
     } else {
-      const refs = row.evidence;
-      if (!asList(refs, 100) || (row.status === 'pass' && !refs.length)) throw new Error('API review lacks fidelity evidence');
+      const refs = row.evidence ?? [];
+      if (!asList(refs, 100)) throw new Error('API review lacks fidelity evidence');
+      if (row.status === 'pass' && !refs.length) {
+        if (!invalidQuotes) throw new Error('API review lacks fidelity evidence');
+        invalidQuotes.set(unit.id, []);
+        continue;
+      }
       const quotedIds = new Set();
       const metadataIds = new Set();
       const invalidIds = new Set();
@@ -188,7 +193,7 @@ function validateReviewAnswer(answer, units, packet, invalidQuotes) {
 }
 
 const comprehension = 'For each exact unit return {"units":[{"id":"…","status":"pass or fail","reconstruction":{"problem":"…","method":"…","result":"…","innovation":"…"},"notes":"…"}]}. Reconstruct the main point, mechanism, result, and contribution or limitation solely from the supplied final prose; for coverage, audit and transport units reconstruct their actual meaning and role. State what is missing rather than inventing it. Fail unclear or misleading units and explain the concrete defect. Use distinct, substantive explanations.';
-const fidelity = 'For each exact unit return {"units":[{"id":"…","status":"pass or fail","notes":"…","evidence":[{"id":"excerpt ID","quote":"verbatim substring of that excerpt\'s text field, at least 8 characters"}]}]}. Compare claims, dates, mechanism, results, comparisons and limitations with the supplied evidence. Give specific findings, fail material discrepancies or missing evidence. Cite evidence for every link in main and rendered Markdown units, coverage evidence for any coverage claims, render and transport, and the local disposition facts for any candidate counts. A URL alone is not evidence. A link_only record can establish discovery of a companion link when quoted with its recorded context. Do not claim its destination was read. Fail any material claim about the destination content unless supported by separate content evidence. A disposition reason records an editorial decision, not proof of which source bodies were read. For exact transport JSON check visible text, link grouping and any truncation against render; do not claim client UI readback.';
+const fidelity = 'For each exact unit return {"units":[{"id":"…","status":"pass or fail","notes":"…","evidence":[{"id":"excerpt ID","quote":"verbatim substring of that excerpt\'s text field, at least 8 characters"}]}]}. Every pass verdict requires at least one valid source citation, including for titles, dates and notices. Use supplied run metadata or audit facts when relevant. If supporting evidence is unavailable, return fail with specific notes and allow an empty evidence array for that verdict. Compare claims, dates, mechanism, results, comparisons and limitations with the supplied evidence. Give specific findings, fail material discrepancies or missing evidence. Cite evidence for every link in main and rendered Markdown units, coverage evidence for any coverage claims, render and transport, and the local disposition facts for any candidate counts. A URL alone is not evidence. A link_only record can establish discovery of a companion link when quoted with its recorded context. Do not claim its destination was read. Fail any material claim about the destination content unless supported by separate content evidence. A disposition reason records an editorial decision, not proof of which source bodies were read. For exact transport JSON check visible text, link grouping and any truncation against render; do not claim client UI readback.';
 
 export async function finalizeOpenAI({ runsDir, runDir, keyFile, ledgerDir, revision = false, resume, generated, fetchImpl = globalThis.fetch }) {
   const { run, sources, sourcesText, sourcesPath = 'sources.json' } = frozenApiRun(runsDir, runDir);
@@ -327,9 +332,12 @@ export async function finalizeOpenAI({ runsDir, runDir, keyFile, ledgerDir, revi
       for (const row of rows.values()) row.checkedAt = first.finishedAt;
       if (!invalidQuotes.size) return { result: first, rows };
       const affected = units.filter(unit => invalidQuotes.has(unit.id));
-      const errors = affected.map(unit => ({ unitId: unit.id, excerptIds: invalidQuotes.get(unit.id) }));
+      const errors = affected.map(unit => {
+        const excerptIds = invalidQuotes.get(unit.id);
+        return { unitId: unit.id, excerptIds, ...(excerptIds.length ? {} : { reason: 'pass_without_evidence' }) };
+      });
       const repair = message('user',
-        'Continue the same fidelity review. Return verdicts only for the listed repair units. Some citations use an unknown ID, have a quote shorter than eight characters or a quote that is not an exact substring, or omit required coverage evidence. ' +
+        'Continue the same fidelity review. Return verdicts only for the listed repair units. Some pass verdicts have no citations, some citations use an unknown ID or invalid quote, or required coverage evidence is missing. ' +
         'Cite only IDs in valid_evidence_ids. Review unit IDs (including render and transport IDs) identify content under review and must never be cited as source evidence. For any listed unit about collection or coverage, cite a verbatim quote from a coverage excerpt and preserve other relevant citations. ' +
         'Recheck the affected verdicts against the same evidence. Use short verbatim substrings of the supplied text, including any model version or qualifier that changes the claim. ' +
         'If the source does not support a claim, return fail and explain the discrepancy. ' +

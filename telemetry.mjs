@@ -554,7 +554,7 @@ export function renderTelemetryMarkdown(telemetry) {
 
   const df = funnel.deepFetch ?? {};
   const deepText = df.attempted > 0
-    ? ` → 全文补齐 ${df.fullText ?? 0}/${df.attempted}${df.snippetOnly ? ` (${df.snippetOnly} 篇仅摘要/截断)` : ''}${df.failed ? ` (${df.failed} 篇抓取失败)` : ''}`
+    ? ` → 正文可用 ${df.fullText ?? 0}/${df.attempted}${df.snippetOnly ? ` (${df.snippetOnly} 篇仅摘要/截断)` : ''}${df.failed ? ` (${df.failed} 篇抓取失败)` : ''}`
     : '';
   const pubBreakdown = (funnel.publishedDeepDive || funnel.publishedQuickHits)
     ? `（深度 ${funnel.publishedDeepDive ?? 0} + 快讯 ${funnel.publishedQuickHits ?? 0}${funnel.publishedFromBacklog ? `，含捞回遗珠 ${funnel.publishedFromBacklog}` : ''}）`

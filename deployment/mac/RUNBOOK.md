@@ -67,6 +67,9 @@ manually repair dispositions: the shared pipeline maps cited URLs to every
 original candidate owner, including browser deep reads attached to topic cards.
 Review receives the same preserved text and source dates used for composition;
 companion URLs are identified as link-only discovery unless their body was read.
+Funnel counts include public supplements and recalled topics; disposition counts
+cover the current collection only. Preserve that scope note and per-topic
+accounting evidence. Available body text is not a claim of complete reading.
 An interrupted review may resume the original composer transcript only when its
 draft, selected materials and collection still match. All review calls run again.
 Do not use prototype orchestration for a daily occurrence. Use the reviewed publication

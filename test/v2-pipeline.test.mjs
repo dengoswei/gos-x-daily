@@ -119,7 +119,7 @@ test('rolling source health tracks consecutive failures and triggers ACTION_NEED
 
   const panel = renderTelemetryMarkdown(telemetry);
   assert.match(panel, /### 运行自检 \[ACTION_NEEDED\]/);
-  assert.match(panel, /原始入库 240 条 → 7日去重跳过 18 条 → 聚合 140 个话题 → 初筛入选 8 个 → 全文补齐 7\/8/);
+  assert.match(panel, /原始入库 240 条 → 7日去重跳过 18 条 → 聚合 140 个话题 → 初筛入选 8 个 → 正文可用 7\/8/);
 });
 
 test('funnel expansion preserves embedded feed links, untruncated bodies, watch deep links, cross-source clusters, and sources.merged.json compatibility', t => {
@@ -582,7 +582,7 @@ test('Mac Codex feedback regressions: unattempted sources warn in footer, >2h X+
   assert.equal(finalized.overallHealth, 'WARN'); // X Following bounded capture span < 36h -> WARN
   const finalMd = fs.readFileSync(finalized.digestPath, 'utf8');
   assert.match(finalMd, /信源状态 \(3\/3 可用\)/);
-  assert.match(finalMd, /原始入库 4 条 → 7日去重跳过 0 条 → 聚合 1 个话题 → 初筛入选 1 个 → 全文补齐 1\/1 → 成稿 1 条/);
+  assert.match(finalMd, /原始入库 4 条 → 7日去重跳过 0 条 → 聚合 1 个话题 → 初筛入选 1 个 → 正文可用 1\/1 → 成稿 1 条/);
 });
 
 test('selection balance & Quick Hits rules: 20 HF papers never drown out Infra/Products/Essays, papers never spill into Quick Hits, t.co HEAD resolution merges X posts, and Quick Hits always renders first', async t => {
