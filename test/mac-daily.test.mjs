@@ -55,6 +55,9 @@ test('Mac production uses the repository funnel and reviews its output without a
   const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'xdaily-unified-synthetic-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const f = await makeApiFinalFixture(root);
+  // Synthetic revision metadata; this fixture never invokes a real sender.
+  const runFile = path.join(f.runDir, 'run.json');
+  fs.writeFileSync(runFile, JSON.stringify({ ...JSON.parse(fs.readFileSync(runFile)), revisionOf: 'synthetic-original-message' }));
   const sourcesPath = path.join(f.runDir, 'sources.json');
   const sources = JSON.parse(fs.readFileSync(sourcesPath, 'utf8'));
   sources.sources.substack.push({ url: 'https://example.com/private-subscription', text: 'PRIVATE-SUBSCRIPTION-MUST-STAY-LOCAL', publishedAt: sources.collectedAt });
@@ -112,6 +115,8 @@ test('Mac production uses the repository funnel and reviews its output without a
   assert.ok(fs.existsSync(path.join(f.runDir, 'telemetry.json')));
   const packet = JSON.parse(fs.readFileSync(path.join(f.runDir, 'api-final-input.json')));
   assert.ok(packet.excerpts.some(row => row.id.startsWith('pipeline-accounting-') && row.text.includes('sourceCandidateCount')));
+  assert.ok(packet.excerpts.some(row => row.text.includes('same_day_revision') && row.text.includes('replacement takes effect')));
+  assert.ok(packet.materialsPaths.includes('run.json'));
   assert.match(fs.readFileSync(path.join(f.runDir, 'digest.publication.md'), 'utf8'), /一篇成稿可能综合多个来源/);
   assert.deepEqual(fs.readdirSync(f.ledgerDir), ledgerBefore);
   const again = await runProductionDaily({ ...f, dataDir: path.join(root, 'state-data'), keyFile, fetchImpl });

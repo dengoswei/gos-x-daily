@@ -70,6 +70,8 @@ companion URLs are identified as link-only discovery unless their body was read.
 Funnel counts include public supplements and recalled topics; disposition counts
 cover the current collection only. Preserve that scope note and per-topic
 accounting evidence. Available body text is not a claim of complete reading.
+For a same-day revision, review evidence includes the frozen run's replacement
+intent and explicitly records that delivery is still pending.
 An interrupted review may resume the original composer transcript only when its
 draft, selected materials and collection still match. All review calls run again.
 Do not use prototype orchestration for a daily occurrence. Use the reviewed publication
