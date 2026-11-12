@@ -105,6 +105,10 @@ result exists, confirm on the host that no finalizer owns the run. Archive any
 empty stale `api-final.lock` directory under a unique name within the run, then
 restart finalization with the same frozen evidence and validated draft. Preserve
 prior attempt directories. Never move an active lock or a delivery-ledger file.
+If attempt one reached reader fidelity and saved its three API responses, use
+`local finalize --run "$RUN" --resume api-final-XXXXXX` with that attempt
+directory name. It verifies the pending review snapshot and reuses the saved
+responses before running any required citation repair and fresh author checks.
 
 For an unresolved scheduled failure, use
 `local alert --date YYYY-MM-DD --stage collection|draft|finalize|publish`

@@ -33,6 +33,7 @@ async function setup(t, variant) {
   fs.writeFileSync(keyFile, 'CODEX_API_KEY=synthetic-placeholder\n');
   const stages = [];
   let finalText;
+  let interrupted = false;
   const fetchImpl = async (url, request) => {
     const body = JSON.parse(request.body);
     assert.equal(url, 'https://api.openai.com/v1/chat/completions');
@@ -61,6 +62,10 @@ async function setup(t, variant) {
       }
     }
     stages.push(stage);
+    if (variant === 'resume-coverage' && repairingCitations && !interrupted) {
+      interrupted = true;
+      throw new TypeError('synthetic interruption');
+    }
     let answer;
     if (stage === 'final') {
       if (variant === 'delta') {
@@ -119,6 +124,10 @@ async function setup(t, variant) {
             : [...covered, ...paper, ...(unit.kind === 'audit' ? [{ id: audit.id, quote: audit.text }] : [])] }),
       }));
       if (variant === 'missing' && stage === 'reader-comprehension') reviewRows.pop();
+      if (variant === 'resume-coverage' && stage === 'reader-fidelity' && !repairingCitations) {
+        const index = units.findIndex(unit => unit.kind === 'render');
+        reviewRows[index].evidence = reviewRows[index].evidence.filter(ref => ref.id !== 'coverage');
+      }
       if (!repairingCitations && ((variant === 'citation-typo' && stage.endsWith('fidelity')) || materialAfterRepair)) {
         for (const [index, unit] of units.entries()) {
           if (unit === units[0] || unit.kind === 'render') {
@@ -135,7 +144,7 @@ async function setup(t, variant) {
       choices: [{ message: { content: JSON.stringify(answer) }, finish_reason: 'stop' }],
       usage: { prompt_tokens: 100, completion_tokens: 20 } });
   };
-  return { ...fixture, stages, run: () => finalizeOpenAI({ runsDir: root, runDir, ledgerDir, keyFile, fetchImpl }),
+  return { ...fixture, stages, run: resume => finalizeOpenAI({ runsDir: root, runDir, ledgerDir, keyFile, fetchImpl, resume }),
     unchangedLedger: () => {
       assert.deepEqual(fs.readdirSync(ledgerDir), ['ledger.json']);
       assert.equal(fs.readFileSync(path.join(ledgerDir, 'ledger.json'), 'utf8'), ledgerBefore);
@@ -171,6 +180,19 @@ test('API final preserves reader isolation, author continuity, exact payload bin
   await assert.rejects(f.run(), /already completed/);
   fs.appendFileSync(path.join(path.dirname(result.publication), 'digest.md'), '\n');
   await assert.rejects(cli(['validate-publication', '--publication', result.publication]), /stale or tampered/);
+  f.unchangedLedger();
+});
+
+test('API final resumes bound responses and repairs only the unit missing a coverage citation', async t => {
+  const f = await setup(t, 'resume-coverage');
+  await assert.rejects(f.run(), /reader-fidelity-citation-repair failed/);
+  const prior = fs.readdirSync(f.runDir).find(name => /^api-final-[A-Za-z0-9]{6}$/.test(name));
+  const result = await f.run(prior);
+  assert.equal(result.attempt, 1);
+  assert.deepEqual(f.stages, ['final', 'reader-comprehension', 'reader-fidelity', 'reader-fidelity', 'reader-fidelity', 'author-comprehension', 'author-fidelity']);
+  const usage = fs.readFileSync(result.usagePath, 'utf8').trim().split('\n').map(JSON.parse);
+  assert.deepEqual(usage.filter(row => row.reusedFrom === prior).map(row => row.stage), ['final', 'reader-comprehension', 'reader-fidelity']);
+  assert.equal((await cli(['validate-publication', '--publication', result.publication])).reviewedUnits, result.units);
   f.unchangedLedger();
 });
 
