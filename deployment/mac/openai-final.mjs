@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
-import { canonicalUrl, citedUrls, digestUrls, observedUrls, readPublicationFile } from '../../binding.mjs';
+import { canonicalUrl, citedUrls, digestUrls, observedUrls, readPublicationFile, splitDigest } from '../../binding.mjs';
 import { coverageStatusLine, larkMarkdown, publicationGates } from '../../digest.mjs';
 import { recentPublishedUrls } from '../../delivery-ledger.mjs';
 import { createReviewInput, validateReview } from '../../review.mjs';
@@ -27,6 +27,19 @@ const substantial = text => typeof text === 'string' && text.trim().length >= 8 
 const fields = ['problem', 'method', 'result', 'innovation'];
 const checkedAt = () => new Date().toISOString();
 const sha256 = value => createHash('sha256').update(value).digest('hex');
+const quickHitsHeading = 'Quick Hits / 快讯速览';
+
+function quickHitsLayoutIssue(markdown) {
+  const headings = splitDigest(markdown).main.flatMap(line => {
+    const heading = line.match(/^##[ \t]+(.+?)\s*$/)?.[1];
+    return heading ? [heading] : [];
+  });
+  const quickHits = headings.filter(heading => /quick\s*hits|快讯速览/i.test(heading));
+  if (quickHits.length && (quickHits.length !== 1 || headings[0] !== quickHitsHeading)) {
+    return 'Use exactly one ## Quick Hits / 快讯速览 section, before every other main section, when there are qualifying short updates.';
+  }
+  return null;
+}
 
 function applyDispositionChanges(original, changes) {
   if (!Array.isArray(changes)) throw new Error('Disposition changes must be an array');
@@ -353,6 +366,11 @@ export async function finalizeOpenAI({ runsDir, runDir, keyFile, ledgerDir, revi
           (revision && !markdown.startsWith('# X AI 日报 ' + run.date + '\n' + Number(run.date.slice(5, 7)) + ' 月 ' + Number(run.date.slice(-2)) + ' 日修订版。')) ||
           citedUrls(markdown).some(url => !allowed.has(url))) {
         feedback = ['Final must be bounded, use only exact authorized public links, include current coverage, and use the required date/revision header.'];
+        continue;
+      }
+      const layoutIssue = quickHitsLayoutIssue(markdown);
+      if (layoutIssue) {
+        feedback = [layoutIssue];
         continue;
       }
       write(path.join(folder, 'digest.md'), markdown);
