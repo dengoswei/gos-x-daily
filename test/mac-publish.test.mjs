@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { macHome, sentId, profile, userId, chatId } from './helpers/mac-fixture.mjs';
+import { effectiveSources } from '../source-config.mjs';
 
 const history = f => path.join(f.ledger, 'published-urls.jsonl');
 
@@ -103,7 +104,9 @@ test('start-run freezes the roster in a new run directory and refuses unsafe env
   assert.equal(r.json.status, 'run_created');
   assert.equal(path.dirname(r.json.run), path.join(f.home, 'runs'));
   assert.ok(path.basename(r.json.run).startsWith(f.date+'-'));
-  assert.equal(fs.readFileSync(path.join(r.json.run, 'sources.frozen.json'), 'utf8'), fs.readFileSync(path.join(f.home, 'sources.local.json'), 'utf8'));
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(r.json.run, 'sources.frozen.json'), 'utf8')),
+    effectiveSources(JSON.parse(fs.readFileSync(new URL('../config/sources.json', import.meta.url), 'utf8')),
+      JSON.parse(fs.readFileSync(path.join(f.home, 'sources.local.json'), 'utf8'))));
   const runtime = JSON.parse(fs.readFileSync(path.join(r.json.run, 'runtime.json'), 'utf8'));
   assert.equal(runtime.sourcesFile, path.join(r.json.run, 'sources.frozen.json'));
   assert.equal(JSON.parse(fs.readFileSync(path.join(r.json.run, 'run.json'), 'utf8')).date, f.date);

@@ -8,6 +8,9 @@ import { recordPublishedUrls, inspectDeliveryLedger, recordDeliveryAttempt, reco
 
 import { deploymentHome, sourceRepo } from './paths.mjs';
 import { expectedReadback, nativeSenderArgs, normalizedReadback } from './transport.mjs';
+import { effectiveSources } from '../../source-config.mjs';
+import { loadTasteConfig, saveBacklogPool } from '../../curation.mjs';
+import { acquireLeaseLock } from '../../telemetry.mjs';
 const base = deploymentHome();
 const hash = bytes => createHash('sha256').update(bytes).digest('hex');
 const read = file => JSON.parse(fs.readFileSync(file, 'utf8'));
@@ -133,6 +136,20 @@ function readBack(config, date, accepted, plan, prefix = prefixFor(config,date))
     messageUrl:message.message_app_link, verifiedAt:new Date().toISOString(), verifiedSourceLinks:urls.length };
   const file=prefix+'.readback.json';
   if (!fs.existsSync(file)) write(file, { ...result, response });
+  const runDir = plan.publication?.rootDir;
+  if (runDir && date === todayInShanghai() && fs.existsSync(path.join(runDir, 'daily-result.json')) &&
+      !fs.existsSync(path.join(runDir, 'backlog-published.json'))) {
+    const stateDir = path.join(base, 'v2', 'state');
+    const lock = acquireLeaseLock(path.join(stateDir, 'run-daily.lock'), { stage: 'record_publication' });
+    try {
+      const state = read(path.join(runDir, 'prepare-state.json'));
+      saveBacklogPool(stateDir, {
+        reportDate: date, topics: state.topics.map(topic => ({ ...topic, _storeDir: path.join(runDir, 'store') })),
+        citedUrls: plan.publishedUrls, deferredTopicIds: new Map(state.deferredEntries ?? []), taste: loadTasteConfig(),
+      });
+      write(path.join(runDir, 'backlog-published.json'), { messageId: accepted.messageId, date });
+    } finally { lock.release(); }
+  }
   return result;
 }
 function publicationAt(file, config) {
@@ -213,34 +230,29 @@ export async function main(args) {
   const config=loadLocalConfig();
   const command=args[0];
   const value=flag=>args[args.indexOf(flag)+1];
+  if (command === 'daily') {
+    if (args.length !== 3 || args[1] !== '--run') throw new Error('Use local daily --run RUN');
+    const { runProductionDaily } = await import('./daily.mjs');
+    const deployment = read(path.join(base, 'deployment.local.json'));
+    try {
+      return await runProductionDaily({ runDir: args[2], runsDir: config.runsDir,
+        dataDir: path.join(base, 'v2'), ledgerDir: config.ledgerDir,
+        keyFile: deployment.model?.apiDraft?.keyFile, screenModel: deployment.model?.apiDraft?.models?.screen });
+    } catch (error) {
+      let alert;
+      try { alert = sendFailureAlert(config, todayInShanghai(), 'finalize'); }
+      catch (alertError) { alert = { status: 'alert_failed', error: alertError.message }; }
+      throw new Error(error.message + '\n' + JSON.stringify({ alert }));
+    }
+  }
+  if (command === 'draft' || command === 'finalize') {
+    throw new Error('The separate Mac generation workflow is retired. Use local daily --run RUN, which runs run-daily.mjs and reviews its exact output.');
+  }
   if (command === 'alert') {
     if (args.length !== 5 || args[1] !== '--date' || args[3] !== '--stage') {
       throw new Error('Use local alert --date YYYY-MM-DD --stage collection|draft|finalize|publish');
     }
     return sendFailureAlert(config, args[2], args[4]);
-  }
-  if (command === 'finalize') {
-    const options = args.slice(3);
-    const revision = options[0] === '--revision';
-    if (revision) options.shift();
-    const resume = options[0] === '--resume' && options.length === 2 ? options[1] : undefined;
-    if (args[1] !== '--run' || !args[2] || (options.length && resume === undefined)) {
-      throw new Error('Use local finalize --run RUN [--revision] [--resume API_FINAL_DIR_NAME]');
-    }
-    const { finalizeOpenAI } = await import('./openai-final.mjs');
-    const deployment = read(path.join(base, 'deployment.local.json'));
-    return finalizeOpenAI({ runsDir: config.runsDir, runDir: args[2], ledgerDir: config.ledgerDir,
-      keyFile: deployment.model?.apiDraft?.keyFile, revision, resume });
-  }
-  if (command === 'draft') {
-    if (!args.includes('--run')) throw new Error('Use local draft --run RUN [--resume]');
-    const { draftOpenAI } = await import('./openai-draft.mjs');
-    const deployment = read(path.join(base, 'deployment.local.json'));
-    return draftOpenAI({
-      runsDir: config.runsDir, runDir: value('--run'),
-      keyFile: deployment.model?.apiDraft?.keyFile, models: deployment.model?.apiDraft?.models,
-      resume: args.includes('--resume'),
-    });
   }
   if (command === 'doctor') {
     fs.accessSync(path.join(sourceRepo,'deployment/mac/mac-sender.mjs'), fs.constants.X_OK);
@@ -256,17 +268,22 @@ export async function main(args) {
     const today=new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Shanghai'}).format(new Date());
     authority(config,today);
     const prior=receipt(config,today);
-    if(prior) return {status:'already_accepted',messageId:prior.messageId,date:today};
-    inspectDeliveryLedger(config.ledgerDir, {date:today, idempotencyKey:keyFor(today)});
+    const revisionOf = args[1] === '--revision-of' && args.length === 3 ? args[2] : null;
+    if (args.length !== 1 && !revisionOf) throw new Error('Use start-run [--revision-of CANONICAL_MESSAGE_ID]');
+    if (revisionOf && (!prior || prior.messageId !== revisionOf)) throw new Error('Revision must reference the accepted original report');
+    if(prior && !revisionOf) return {status:'already_accepted',messageId:prior.messageId,date:today};
+    inspectDeliveryLedger(config.ledgerDir, {date:today, idempotencyKey:keyFor(today) + (revisionOf ? '-revision' : '')});
     fs.mkdirSync(config.runsDir,{recursive:true,mode:0o700});
     const run=fs.mkdtempSync(path.join(config.runsDir,today+'-'));
-    fs.copyFileSync(path.join(base,'sources.local.json'),path.join(run,'sources.frozen.json'));
+    write(path.join(run,'sources.frozen.json'), effectiveSources(
+      read(path.join(sourceRepo,'config/sources.json')), read(path.join(base,'sources.local.json'))));
     write(path.join(run,'source-roster.json'), {
       frozenAt:new Date().toISOString(), configuredSources:'sources.frozen.json',
       required:['X Following selected and usable', 'Karpathy genuine latest-post check'],
       supplemental:['Following Latest time slices when useful','Gmail technical newsletters','Gmail exact sender news@alphasignal.ai','Substack Recent subscriptions','configured Xiaohongshu profiles','configured official blogs','original materials behind relevant leads'],
     });
-    write(path.join(run,'run.json'),{date:today,startedAt:new Date().toISOString(),lookbackHours:48,sourceRoster:'sources.frozen.json'});
+    write(path.join(run,'run.json'),{date:today,startedAt:new Date().toISOString(),lookbackHours:48,sourceRoster:'sources.frozen.json',
+      ...(revisionOf ? {revisionOf} : {})});
     write(path.join(run,'runtime.json'),{...read(path.join(base,'runtime.local.json')),sourcesFile:path.join(run,'sources.frozen.json')});
     return {status:'run_created',run,ledgerDir:config.ledgerDir};
   }

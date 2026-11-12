@@ -40,7 +40,7 @@ import {
   saveBacklogPool,
 } from './curation.mjs';
 
-import { DEEP_SECTION_ORDER as CANONICAL_DEEP_ORDER, digestLayoutPrompt, QUICK_SECTION } from './digest-layout.mjs';
+import { DEEP_SECTION_ORDER as CANONICAL_DEEP_ORDER, digestLayoutPrompt, QUICK_SECTION, assertDigestLayout } from './digest-layout.mjs';
 
 const repoRoot = path.dirname(fileURLToPath(import.meta.url));
 const readPrompt = name => fs.readFileSync(path.join(repoRoot, 'prompts', name), 'utf8');
@@ -261,6 +261,7 @@ export function normalizeDigestSectionOrder(markdown) {
  */
 export function validateV2Digest(markdown, { date, observedUrlSet }) {
   const clean = String(markdown ?? '').trim();
+  assertDigestLayout(clean);
   if (!clean.startsWith(`# X AI 日报 ${date}`)) {
     throw new Error(`Digest must start with "# X AI 日报 ${date}"`);
   }
@@ -342,6 +343,7 @@ export async function runDailyV2({
   browserArtifactsPath = null,
   feedArtifactsPath = null,
   premergedSourcesPath = null,
+  publishedHistoryFile = null,
   supplements = [],
   prepareOnly = false,
   selectedTopicsPath = null,
@@ -512,7 +514,7 @@ export async function runDailyV2({
         // Stage 2: Build Dual-Layer Content Store + Merge Rolling Backlog + 7-Day Soft Deduplication
         currentStage = 'build_content_store';
         lock.heartbeat(currentStage);
-        const softHistory = loadSoftHistory(workspace.historyFile, { before: reportDate, days: 7 });
+        const softHistory = loadSoftHistory(publishedHistoryFile ?? workspace.historyFile, { before: reportDate, days: 7 });
         warnings.push(...softHistory.warnings);
 
         storeDir = path.join(runDir, 'store');
@@ -557,8 +559,9 @@ export async function runDailyV2({
       if (modelsFile && !prepareOnly) {
         const loaded = loadModels(modelsFile, ['compose'], ['screen', 'review'], runtimeHooks);
         roles = loaded.roles;
-        const stageStore = outputStore(path.join(runDir, 'model-artifacts'));
-        fs.mkdirSync(path.join(runDir, 'model-artifacts'), { recursive: true, mode: 0o700 });
+        const artifactsDir = runtimeHooks.modelArtifactsDir ?? path.join(runDir, 'model-artifacts');
+        fs.mkdirSync(artifactsDir, { recursive: true, mode: 0o700 });
+        const stageStore = outputStore(artifactsDir);
         runStage = makeStageRunner({ roles, store: stageStore, usage, budget: budgetGuard(loaded.budget) });
       }
 
@@ -700,9 +703,9 @@ export async function runDailyV2({
           stage: 'compose',
           label: 'v2-compose',
           system: composeV2Prompt(),
-          prompt: composeInput,
+          prompt: composeInput + (runtimeHooks.editorialFeedback ? '\n\n' + tagged('review_findings', modelJson(runtimeHooks.editorialFeedback)) : ''),
           parse: text => {
-            const md = extractBlock(text, 'markdown');
+            const md = normalizeDigestSectionOrder(extractBlock(text, 'markdown'));
             validateV2Digest(md, { date: reportDate, observedUrlSet });
             return md;
           },
@@ -768,7 +771,7 @@ export async function runDailyV2({
       const savedPool = saveBacklogPool(workspace.stateDir, {
         reportDate,
         topics: storeTopics,
-        citedUrls: digestStats.citedUrls,
+        citedUrls: runtimeHooks.publicationPending ? [] : digestStats.citedUrls,
         deferredTopicIds: deferredMap,
         taste,
       });

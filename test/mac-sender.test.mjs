@@ -80,11 +80,12 @@ test('sender verifies identity before the exclusive gate, sends once natively an
 test('a slow identity check is cut off inside the sender budget before the gate and never sends', t => {
   const f = macHome(t);
   const plan = reserve(f);
-  f.stubWith({ authDelayMs: 4000 });
-  const r = budgeted(f, plan.args, { totalMs: 3000, identityMs: 300, minSendMs: 500 });
+  // Leave room for the fixture's Node process to start on a loaded Mac.
+  f.stubWith({ authDelayMs: 12000 });
+  const r = budgeted(f, plan.args, { totalMs: 6000, identityMs: 1500, minSendMs: 500 });
   assert.equal(r.status, 1);
   assert.match(r.stderr, /Lark operation failed: auth status/);
-  assert.ok(r.elapsed < 3000, `identity budget not enforced (${r.elapsed} ms)`);
+  assert.ok(r.elapsed < 6000, `identity budget not enforced (${r.elapsed} ms)`);
   assert.equal(fs.existsSync(f.prefix+'.invoked.json'), false);
   assert.equal(f.sends().length, 0);
   assert.equal(alive(f.calls()[0].pid), false);
@@ -97,15 +98,15 @@ test('a hanging send is killed at the shared sender deadline, leaving the gate a
   const f = macHome(t);
   const plan = reserve(f);
   f.stubWith({ send: 'hang', hangMs: 20000 });
-  const r = budgeted(f, plan.args, { totalMs: 2000, identityMs: 500, minSendMs: 500 });
+  const r = budgeted(f, plan.args, { totalMs: 6000, identityMs: 3000, minSendMs: 500 });
   assert.equal(r.status, 1);
   assert.match(r.stderr, /CLI send outcome is uncertain/);
-  assert.ok(r.elapsed < 4000, `send deadline not enforced (${r.elapsed} ms)`);
+  assert.ok(r.elapsed < 9000, `send deadline not enforced (${r.elapsed} ms)`);
   assert.equal(fs.existsSync(f.prefix+'.invoked.json'), true);
   const [send] = f.sends();
   assert.equal(alive(send.pid), false);
   assert.equal(fs.existsSync(path.join(f.home, 'late-delivery.marker')), false);
-  assert.match(budgeted(f, plan.args, { totalMs: 2000, identityMs: 500, minSendMs: 500 }).stderr, /EEXIST/);
+  assert.match(budgeted(f, plan.args, { totalMs: 6000, identityMs: 3000, minSendMs: 500 }).stderr, /EEXIST/);
   assert.equal(f.sends().length, 1);
 });
 

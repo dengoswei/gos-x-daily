@@ -27,7 +27,8 @@ versioned here**; deployment-specific identity/configuration and history stay lo
 | Editorial depth and coherence | `EDITORIAL.md`, `prompts/compose-digest.md` |
 | Small coordinator inputs and complete worker packets | `worker-packets.mjs`, `cli.mjs worker-input` |
 | Compact Feishu post and exact review binding | `lark-post.mjs`, `review.mjs`, `digest.mjs` |
-| Configured Mac API drafting, final writing and semantic review | `deployment/mac/openai-draft.mjs`, `deployment/mac/openai-final.mjs` |
+| Selection, enrichment, composition, backlog and telemetry | `run-daily.mjs` |
+| Mac credentials and review of the pipeline's exact output | `deployment/mac/daily.mjs`, `deployment/mac/openai-final.mjs` |
 | Mac entry/controller/sole sender | `deployment/mac/` |
 | Sync and activate production | `npm run mac:update` |
 
@@ -142,7 +143,7 @@ index pages are client-rendered and yield no links without the browser.
 ## Repository map
 
 - `cli.mjs`: offline entry points plus separately gated collection / send.
-- `run-daily.mjs`: local preview for the content store, selection, backlog and telemetry. It shares the section rules in `digest-layout.mjs` with Mac production. See [docs/DESIGN-FUNNEL-AND-CURATION.md](docs/DESIGN-FUNNEL-AND-CURATION.md).
+- `run-daily.mjs`: the shared local and production pipeline for the content store, selection, backlog, composition and telemetry. Mac `local daily` calls this function directly, reviews its output and returns a publication for the sole sender. See [docs/DESIGN-FUNNEL-AND-CURATION.md](docs/DESIGN-FUNNEL-AND-CURATION.md).
 - `content-store.mjs`, `curation.mjs`, `telemetry.mjs`, `config/taste.json`: dual-layer original/card archive, 4-signal prior scorer (`author + source SNR + social/engagement - noise`), cross-day high-value backlog pool (`backlog-pool.json`), rolling source health, funnel telemetry and operational alert cards.
 - `browser-artifacts.mjs`, `thread-discovery.mjs`: evidence imports and thread context.
 - `feed-import.mjs`, `tools/fetch-feeds.mjs`: offline feed import and its separate network fetch tool.
@@ -152,7 +153,7 @@ index pages are client-rendered and yield no links without the browser.
 - `compose.mjs`: compact composition input (candidates keyed as `binding.mjs` keys them,
   shared-link clusters, deep reads, recently published URLs) without audit records or evidence paths.
 - `prompts/`, `EDITORIAL.md`: user-owned composition and independent review rules;
-  `prompts/compose-digest.md` holds the production composition rules and uses the shared layout in `digest-layout.mjs`.
+  `prompts/v2-compose-digest.md` holds the shared composition rules with the layout in `digest-layout.mjs`. `prompts/compose-digest.md` remains for legacy offline packet experiments.
 - `examples/`: deliberately incomplete path templates, **not evidence or approval**.
 - `test/`: synthetic, no-production-network regression tests.
 

@@ -23,7 +23,7 @@ node $DEPLOYMENT_HOME/run.mjs local start-run
 
 `inspect` verifies source and local-controller release hashes. `doctor` verifies pinned dependencies, the existing bot identity and recipient access. An expired *user* token alone does not invalidate the ready *bot*. The bot commands need host network and macOS Keychain access. If a sandbox denies these, retry the same scoped wrapper command in host context through the execution tool permission mechanism, using the existing task authorization. A sandbox denial is not an expired credential and must not trigger a new login. `start-run` returns the new persistent run directory, freezes the source configuration and supplemental roster, and checks same-day attempts first. If it returns an existing receipt, use `local reconcile --date YYYY-MM-DD` and finish. Never recollect or resend an accepted report.
 
-Read `EDITORIAL.md`, `prompts/compose-digest.md` and `BROWSER-ARTIFACTS.md` in the source checkout reported by `inspect`. Read `prompts/run-daily.md` and `docs/AGENT-WORKFLOW.md` in that checkout. Delegate collection, story processing and advisory review using fresh bounded worker contexts. The installed Mac runtime uses explicit `reviewMode: "self"` and `renderStyle: "concise"` and `transport: "feishu-post-v1"`. Generic upstream documentation describes the default independent-review contract; this provisioned Mac contract is the user's authorized production policy.
+Read `EDITORIAL.md`, `prompts/v2-compose-digest.md` and `BROWSER-ARTIFACTS.md` in the source checkout reported by `inspect`. Read `prompts/run-daily.md` and `docs/AGENT-WORKFLOW.md` in that checkout. Delegate collection and original-source reading with fresh bounded worker contexts. The installed runtime uses explicit `reviewMode: "self"`, `renderStyle: "concise"` and `transport: "feishu-post-v1"`.
 
 ## Collect and write
 
@@ -40,109 +40,38 @@ node $DEPLOYMENT_HOME/run.mjs cli compose-input --sources "$RUN/sources.json" --
 
 If configured feeds are used, import them with `cli import-feed` and use the merged sources consistently. Unsupported optional page shapes can remain declared supplemental materials with direct URLs and preserved originals. Do not falsify URLs to satisfy the importer.
 
-When `model.apiDraft.keyFile` is configured in the private, pinned
-`deployment.local.json`, generate worker packets at `RUN/packets`, then invoke
-`node $DEPLOYMENT_HOME/run.mjs local draft --run "$RUN"`. The key file must
-contain one `CODEX_API_KEY` entry. The API draft sends the normalized
-collection prompts and worker packets to the official OpenAI API using the
-configured `model.apiDraft.models.screen` (Sol or Terra) for screening and
-Sol for story and compose, with high reasoning on each call. It writes its
-results and token usage under `RUN/api-draft`. A partial provider failure can continue via
-`local draft --run "$RUN" --resume` with the same input and configuration.
+### Generate and review
 
-### API finalization
+Run `node $DEPLOYMENT_HOME/run.mjs local daily --run "$RUN"` after imports.
+This adapter invokes the same `run-daily.mjs` pipeline used by local runs. It
+supplies the provisioned API key, frozen roster, persistent data directory and
+canonical published history. The repository pipeline owns selection, raw/card/topic
+storage, backlog, enrichment, writing, dispositions and telemetry. The adapter
+reviews that exact output using the original author transcript, then returns a
+bound publication. It does not generate a replacement final digest.
 
-For configured API runs, read original sources and write `canonical-materials.json`,
-`collection-coverage.md` and `api-final-input.json`. The latter is an explicit
-projection; see [the shape](../../examples/api-final-input.example.json). Set
-`collectionId` to the imported collection ID and list all local material and
-supplemental evidence paths. The runner also binds every evidence path from source
-provenance. Paths are relative to the run and cannot use symlinks.
+Public feed/blog defaults track the installed release. Local entries override
+matching source names. `disabledSources` explicitly excludes named public
+sources. Private watch and Xiaohongshu profiles remain local. Empty legacy feed
+arrays do not erase the release's default feeds.
 
-Only the `excerpts` projection (plus already processed draft, derived coverage
-counts and relevant public history URLs) goes to the API. Choose exact short text
-from the named, preserved file. Include date, mechanism, result and material
-limits for each publishable lead; use multiple excerpts for a long source. Each
-public source must have its observed direct HTTPS URL in its backing file, with
-no query string. Provide current coverage facts from `collection-coverage.md`.
-Review excerpts for private text, identifiers, paths and private URLs before
-running. Local bindings can include private mail or screenshots, but never use
-them as excerpts. Read public originals for useful leads from private mail; leave
-out claims that cannot be supported with shareable evidence and disclose the gap.
-For a recovery with verified editorial findings, `editorialFocus` can list the
-public excerpt IDs containing conditions or exceptions the new final should
-state explicitly when it covers the corresponding topic.
+Supply public originals from newsletters and extra source batches through
+RUN/supplements.public.json. Private mail bodies stay outside the model projection.
+The pipeline writes its model requests and usage under the run, keeps unselected
+high-value topics in the persistent DEPLOYMENT_HOME/v2/state pool, and removes published topics
+only after the verified production send. Its default pool is 1,000 entries and
+365 days, controlled by config/taste.json.
 
-```sh
-node $DEPLOYMENT_HOME/run.mjs local finalize --run "$RUN"
-```
+The obsolete `local draft` and `local finalize` commands are disabled. Do not
+use prototype orchestration for a daily occurrence. Use the reviewed publication
+returned by `local daily` with `local publish --publication PATH`.
+For an explicitly authorized replacement of today's accepted report, first
+reconcile the original receipt, then use `local start-run --revision-of MESSAGE_ID`.
+The same daily pipeline adds the visible replacement notice. Send its reviewed
+publication with `local publish-revision --publication PATH --reply-to MESSAGE_ID`.
 
-Sol High writes the final report and dispositions. A fresh reader reconstructs
-the final prose without source access and saves that result before the separate
-fidelity call. The API author continues its own author transcript, checks every
-pending unit, including the audit, exact Markdown and native post JSON, and
-records `sourceBlind: false` under its actual author identity. The runner resolves
-evidence IDs and verbatim citations locally, rehashes the bound files, and fails
-closed on unresolved material findings or invalid review data. If a fidelity
-review cites a known excerpt with a non-verbatim quote, the same reviewer gets
-one repair call for the affected units, using the same report and evidence.
-Those units must pass the same checks again. A material finding can trigger
-one revision and review of the whole report. Reviewers receive locally validated
-candidate counts, main-bullet count and counts grouped by cited public URL.
-The runner applies the author's changed disposition rows to the validated draft
-and verifies the full resulting ledger. The API has an eight-minute per-request
-deadline. The runner writes request starts, failure phase, HTTP request IDs and
-usage to `api-usage.jsonl`
-under the returned final output directory. Finalization never contacts Feishu or
-writes to the delivery ledger. Use the returned `publication` path for the existing
-`cli validate-publication` and `local publish --publication` commands. Do not edit
-the reviewed artifacts. A separately authorized same-day revision uses
-`local finalize --run "$RUN" --revision` and the existing explicit revision sender.
-
-If finalization is interrupted, first check `local status --date YYYY-MM-DD`.
-Reconcile any accepted delivery and investigate any uncertain attempt. If there
-is no delivery attempt and an approved `api-final-result.json` exists, validate
-its publication and continue with the normal publish command. If no approved
-result exists, confirm on the host that no finalizer owns the run. Archive any
-empty stale `api-final.lock` directory under a unique name within the run, then
-restart finalization with the same frozen evidence and validated draft. Preserve
-prior attempt directories. Never move an active lock or a delivery-ledger file.
-If attempt one reached reader fidelity and saved its three API responses, use
-`local finalize --run "$RUN" --resume api-final-XXXXXX` with that attempt
-directory name. It verifies the pending review snapshot and reuses the saved
-responses before running any required citation repair and fresh author checks.
-
-For an unresolved scheduled failure, use
-`local alert --date YYYY-MM-DD --stage collection|draft|finalize|publish`
-with the current Shanghai date and one stage. It records the attempt before
-sending a fixed notice to the verified Feishu chat. Its daily key is independent
-of the digest key. If the result is uncertain, reconcile externally without retry.
-
-### Host author workflow without an API key file
-
-Write `digest.md`, `canonical-materials.json`, `collection-coverage.md` and one disposition per imported candidate key. Explain the problem, mechanism and supported result in plain Chinese. Keep old publication dates, author claims and material limitations visible. Select substantive supported stories without an item quota. Review all observed candidates and relevant mail/Substack leads. Use recently published URLs for deduplication and identify a real new fact in any follow-up.
-
-The reader-facing message contains the articles and a short coverage paragraph. Detailed page counts, failed reads, cumulative coverage and candidate dispositions belong in the audit. Imported `included` keys are not the final article count because supplemental articles may be outside that set. Previous reports are historical evidence only, not a style or semantic approval baseline. Use the editorial and worker contracts in this checkout.
-
-### Host self-check and binding
-
-Create `publication.json` with absolute `ledgerDir` above, `rootDir: "."`, `reviewPath: "review.self.json"` and these snapshot fields:
-
-- `digestPath`, `sourcesPath`, `dispositionsPath` pointing to the actual final files.
-- The actual `authorId`, `reviewMode: "self"`, `renderStyle: "concise"` and `transport: "feishu-post-v1"`.
-- `materialsPaths` covering the canonical materials, collection audit and supplemental text.
-- `evidencePaths` covering every source-provenance evidence file and all relevant supplemental captures. Paths are unique, relative and physically inside the run.
-
-```sh
-node $DEPLOYMENT_HOME/run.mjs cli review-input --publication "$RUN/publication.json" --out "$RUN/review.pending.json"
-```
-
-This creates pending units and bindings only. The agent must perform and record the semantic checks. For every unit, reconstruct the point from the prose, then compare its facts and limits with the preserved source. Check the audit and complete final render too. The author is also `reviewerId`; `comprehension.sourceBlind` is false. Record actual check times, meaningful reconstruction and notes, permitted evidence/material source paths, and unresolved issues. `digest.md` and `dispositions.json` are review targets, not permitted fidelity source paths. Only after all units pass may the record be saved as `review.self.json` with approved status. Do not import synthetic fixture helpers, mechanically approve unexamined units, or invent another reviewer. Any changed bound bytes require a new pending record and recheck.
-
-```sh
-node $DEPLOYMENT_HOME/run.mjs cli validate-publication --publication "$RUN/publication.json"
-node $DEPLOYMENT_HOME/run.mjs local publish --publication "$RUN/publication.json"
-```
+On an unresolved failure, invoke `local alert --date YYYY-MM-DD --stage collection|draft|finalize|publish`
+through the provisioned wrapper and report its receipt or failure.
 
 `publish` rechecks deployment ownership, bot identity, the entire same-day private-chat history, target, current source/review/render bytes and the persistent ledger. It reserves the plan, persists an exclusive attempt and exclusive sender invocation, invokes the pinned bot once, records API acceptance and published URLs, and reads the message back. Readback verifies sender, recipient, ID, full visible text and all source links. No routine permission prompt belongs between successful self-check and this command.
 

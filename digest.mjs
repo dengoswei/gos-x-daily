@@ -9,7 +9,7 @@ import { candidateKeys, canonicalUrl, citedUrls, digestUrls, observedUrls, readP
 import { compactPromptText, promptJson, promptLine } from './compose.mjs';
 import { bulletLine, larkPostJson } from './lark-post.mjs';
 
-import { digestLayoutPrompt } from './digest-layout.mjs';
+import { digestLayoutPrompt, assertDigestLayout } from './digest-layout.mjs';
 
 export { readPublicationFile };
 
@@ -117,6 +117,7 @@ function bulletBlocks(lines) {
  */
 export function validateDigest(markdown, collection, { observed, dispositions, publishedHistory } = {}) {
   assertCollection(collection);
+  assertDigestLayout(mainBodyLines(markdown).join('\n'));
   if (!markdown.startsWith(`# X AI 日报 ${collection.date}\n`)) throw new Error('Digest title/date mismatch');
   if (!markdown.includes(collection.digestMarker)) throw new Error('Digest must match this collection marker');
   if (splitDigest(markdown).auditIndex < 0) throw new Error('Missing section: 差异补充');

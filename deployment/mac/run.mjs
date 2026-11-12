@@ -50,8 +50,9 @@ export async function main(argv = process.argv.slice(2), pointer) {
       editorialSha256: hash(fs.readFileSync(path.join(repo, 'EDITORIAL.md'))),
       runtime: { config: path.join(base, 'runtime.local.json'), lookbackHours: runtime.lookbackHours, sourcesFile: runtime.sourcesFile, dataDir: runtime.dataDir, collectionEnabled: runtime.collectionEnabled, larkEnabled: runtime.lark.enabled },
       controller: deployment.controller, model: deployment.model, delivery: deployment.delivery,
-      apiFinalization: { enabled: Boolean(deployment.model?.apiDraft?.keyFile), model: 'gpt-6.1-sol', reasoningEffort: 'high',
-        stages: ['final', 'reader-comprehension', 'reader-fidelity', 'author-comprehension', 'author-fidelity'], sends: false },
+      dailyPipeline: { entry: 'run-daily.mjs', command: 'local daily --run RUN',
+        enabled: Boolean(deployment.model?.apiDraft?.keyFile), model: 'gpt-6.1-sol', reasoningEffort: 'high',
+        stages: ['screen', 'compose', 'reader-comprehension', 'reader-fidelity', 'author-comprehension', 'author-fidelity'], sends: false },
       schedule: 'Codex X Daily Digest 9AM, Asia/Shanghai; retired Dot remote schedule', localController: read(path.join(base, 'mac-authority.json')) };
   }
   if (command === 'test') {
