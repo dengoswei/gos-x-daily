@@ -88,6 +88,10 @@ through the provisioned wrapper and report its receipt or failure.
 
 The portable delivery layer kills the sender after 60 s. `mac-sender.mjs` therefore runs every inner step against one deadline 45 s after its own process start: its repeated identity check gets at most 10 s, and it refuses before creating `.invoked.json` unless at least 20 s remain for the send. The send gets the remaining time and a stuck CLI is SIGKILLed at the deadline, so the sender exits on its own before the outer kill could leave an orphaned CLI that might still deliver. A sender refused before the invocation gate leaves an attempt and an uncertain record but no `.invoked.json`; that combination is evidence this sender never started the send, but it still blocks the day until reconciled against recipient history. A CLI that itself forks a detached child is outside this guarantee.
 
+Readback tolerates Feishu's automatic decoration of a plain domain as an exactly
+identical label and destination. Changed destinations or visible prose still
+fail, and every published source URL remains independently required.
+
 If API acceptance was recorded but readback or URL history failed, run only:
 
 ```sh

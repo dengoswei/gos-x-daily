@@ -4,6 +4,14 @@ import { createHash } from 'node:crypto';
 import { larkPostJson, larkPostVisibleText } from '../lark-post.mjs';
 import { nativeSenderArgs, expectedReadback, normalizedReadback } from '../deployment/mac/transport.mjs';
 
+test('readback accepts same-domain autolinking but rejects changed destinations or text', () => {
+  const original = 'A report from [Institute / ModelLab.ai · Memory] follows.';
+  assert.equal(normalizedReadback(original), normalizedReadback('A report from [Institute / [ModelLab.ai](ModelLab.ai) · Memory] follows.'));
+  assert.notEqual(normalizedReadback(original), normalizedReadback('A report from [Institute / [ModelLab.ai](different.ai) · Memory] follows.'));
+  assert.notEqual(normalizedReadback(original), normalizedReadback('A report from [Institute / [ModelLab.ai](ModelLab.ai) · Changed] follows.'));
+  assert.notEqual(normalizedReadback('[label](label)'), normalizedReadback('label'));
+});
+
 const markdown = '# Test digest\n## Section\n- **Finding.** Explanation. [Original](https://example.invalid/a) · [Code](https://example.invalid/b)\n';
 function plan() {
   const content = larkPostJson(markdown);
