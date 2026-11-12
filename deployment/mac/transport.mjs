@@ -21,4 +21,8 @@ export function expectedReadback(plan) {
   return larkPostVisibleText(plan.args[7]);
 }
 
-export const normalizedReadback = text => text.replace(/^#{1,6}\s+/gm, '').replace(/\*\*/g, '').replace(/[\s\u200b-\u200d\ufeff]/g, '');
+export const normalizedReadback = text => text
+  // Feishu may autolink a plain domain in a text node. Accept only identical
+  // label/destination decoration; changed destinations still fail comparison.
+  .replace(/\[([a-zA-Z0-9](?:[a-zA-Z0-9.-]*[a-zA-Z0-9])?\.[a-zA-Z]{2,63})\]\(\1\)/g, '$1')
+  .replace(/^#{1,6}\s+/gm, '').replace(/\*\*/g, '').replace(/[\s\u200b-\u200d\ufeff]/g, '');
