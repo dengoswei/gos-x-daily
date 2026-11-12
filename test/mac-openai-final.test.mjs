@@ -106,8 +106,19 @@ async function setup(t, variant) {
       if (repairingCitations) {
         assert.deepEqual(units.map(unit => unit.id), fromTag(last, 'citation_errors').map(issue => issue.unitId));
         assert.ok(units.length < originalUnits.length);
+        if (['citation-unknown-id', 'citation-unknown-id-persistent'].includes(variant)) {
+          assert.deepEqual(units.map(unit => unit.kind), ['render', 'transport']);
+          assert.deepEqual(fromTag(last, 'citation_errors').map(issue => issue.excerptIds), [[units[0].id], ['paper']]);
+          assert.deepEqual(new Set(fromTag(last, 'valid_evidence_ids')),
+            new Set(['paper', 'coverage', 'local-coverage-accounting', 'local-disposition-counts']));
+          assert.match(last, /Review unit IDs .* must never be cited as source evidence/);
+        }
       }
       const isComprehension = stage.endsWith('comprehension');
+      if (stage.endsWith('fidelity') && !repairingCitations) {
+        assert.match(all, /A link_only record can establish discovery of a companion link/);
+        assert.match(all, /Fail any material claim about the destination content unless supported by separate content evidence/);
+      }
       if (stage === 'reader-comprehension') {
         assert.equal(messages.length, 2);
         assert.ok(!all.includes(evidenceText) && !all.includes(coverageText) && !all.includes('verified_evidence') && !all.includes('local_disposition_facts'));
@@ -154,6 +165,13 @@ async function setup(t, variant) {
             reviewRows[index].evidence = [{ id: 'paper', quote: 'This passage was never seen in the source.' }];
           }
         }
+      }
+      if (stage === 'reader-fidelity' && (variant === 'citation-unknown-id-persistent' ||
+          (variant === 'citation-unknown-id' && !repairingCitations))) {
+        const render = units.findIndex(unit => unit.kind === 'render');
+        const transport = units.findIndex(unit => unit.kind === 'transport');
+        reviewRows[render].evidence.push({ id: units[render].id, quote: evidenceText });
+        reviewRows[transport].evidence.push({ id: 'paper', quote: evidenceText.slice(0, 7) });
       }
       if (variant === 'forged' && stage === 'author-fidelity') reviewRows[0].evidence = [{ id: 'paper', quote: 'This passage was never seen in the source.' }];
       if (variant === 'url-only' && stage === 'author-fidelity') reviewRows[0].evidence = [paper[1]];
@@ -249,6 +267,24 @@ test('API final repairs only units with invalid quotes before approving the same
   assert.deepEqual(usage.filter(row => row.event === 'response' && row.stage.endsWith('citation-repair')).map(row => row.stage),
     ['reader-fidelity-citation-repair', 'author-fidelity-citation-repair']);
   assert.equal((await cli(['validate-publication', '--publication', result.publication])).reviewedUnits, result.units);
+  f.unchangedLedger();
+});
+
+test('API final repairs a review unit citation and a short source quote in one retry', async t => {
+  const f = await setup(t, 'citation-unknown-id');
+  const result = await f.run();
+  assert.equal(result.attempt, 1);
+  assert.deepEqual(f.stages, ['final', 'reader-comprehension', 'reader-fidelity', 'reader-fidelity',
+    'author-comprehension', 'author-fidelity']);
+  assert.equal((await cli(['validate-publication', '--publication', result.publication])).reviewedUnits, result.units);
+  f.unchangedLedger();
+});
+
+test('API final refuses a review unit citation that survives the only citation retry', async t => {
+  const f = await setup(t, 'citation-unknown-id-persistent');
+  await assert.rejects(f.run(), /unsupported evidence excerpt/);
+  assert.deepEqual(f.stages, ['final', 'reader-comprehension', 'reader-fidelity', 'reader-fidelity']);
+  assert.ok(!fs.readdirSync(f.runDir, { recursive: true }).some(file => file.endsWith('publication.json')));
   f.unchangedLedger();
 });
 

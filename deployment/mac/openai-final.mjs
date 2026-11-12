@@ -25,6 +25,7 @@ const message = (role, content) => ({ role, content });
 const data = (tag, value) => tagged(tag, modelJson(value));
 const system = (stage, task) => message('system', '<!-- stage: ' + stage + ' -->\n' + task + '\n' + UNTRUSTED + '\n' + JSON_NOTE + '\nReturn exactly one JSON object.');
 const evidenceKinds = new Set(['public', 'coverage']);
+const evidenceIdPattern = /^[a-zA-Z0-9-]{1,50}$/;
 const asList = (items, limit) => Array.isArray(items) && items.length <= limit;
 const substantial = text => typeof text === 'string' && text.trim().length >= 8 && text.length <= 3000;
 const fields = ['problem', 'method', 'result', 'innovation'];
@@ -76,11 +77,11 @@ function restoreObservedLinkSpelling(markdown, allowed) {
 }
 
 function loadPacket(root, sources, raw, sourcesPath = 'sources.json') {
-  if (Buffer.byteLength(raw) > 350000) throw new Error('API final evidence manifest exceeds byte budget');
+  if (Buffer.byteLength(raw) > 700000) throw new Error('API final evidence manifest exceeds byte budget');
   const packet = JSON.parse(raw);
   if (packet.schemaVersion !== 1 || packet.collectionId !== sources.collectionId ||
       !asList(packet.materialsPaths, 200) || !asList(packet.evidencePaths, 500) ||
-      !asList(packet.excerpts, 100) || !packet.excerpts.length ||
+      !asList(packet.excerpts, 250) || !packet.excerpts.length ||
       !packet.materialsPaths.includes('canonical-materials.json') ||
       !packet.materialsPaths.includes('collection-coverage.md')) throw new Error('Invalid API final evidence manifest');
   const materialsPaths = [inputName, ...packet.materialsPaths];
@@ -92,7 +93,7 @@ function loadPacket(root, sources, raw, sourcesPath = 'sources.json') {
   const byId = new Map();
   const backing = new Map();
   const excerpts = packet.excerpts.map(({ id, kind, path: file, url, text }) => {
-    if (!/^[a-zA-Z0-9-]{1,50}$/.test(id ?? '') || byId.has(id) || [auditId, accountingId].includes(id) || !evidenceKinds.has(kind) ||
+    if (!evidenceIdPattern.test(id ?? '') || byId.has(id) || [auditId, accountingId].includes(id) || !evidenceKinds.has(kind) ||
         !bound.has(file) || file === inputName || /(?:^|\/)(?:mail|gmail|private)(?:[\/._-]|$)/i.test(file) ||
         !/\.(?:json|md|txt|html)$/i.test(file) || !substantial(text) || text.length > 3000) {
       throw new Error('Invalid API final excerpt or disallowed backing file');
@@ -124,7 +125,7 @@ function loadPacket(root, sources, raw, sourcesPath = 'sources.json') {
       editorialFocus.some(id => byId.get(id)?.kind !== 'public')) {
     throw new Error('API final editorial focus must reference distinct public evidence IDs');
   }
-  if (Buffer.byteLength(JSON.stringify(excerpts)) > 180000) throw new Error('API final excerpt budget exceeded');
+  if (Buffer.byteLength(JSON.stringify(excerpts)) > 400000) throw new Error('API final excerpt budget exceeded');
   return { excerpts, editorialFocus, byId, backing, materialsPaths, evidencePaths };
 }
 
@@ -149,14 +150,14 @@ function validateReviewAnswer(answer, units, packet, invalidQuotes) {
       const invalidIds = new Set();
       const evidence = refs.flatMap(ref => {
         const source = packet.byId.get(ref?.id);
-        if (!source || !substantial(ref.quote)) throw new Error('API review cited an unsupported evidence excerpt');
-        if (source.url && ref.quote === source.url) {
-          metadataIds.add(ref.id);
+        if (!source || !substantial(ref.quote) || (ref.quote !== source.url && !source.text.includes(ref.quote))) {
+          if (!invalidQuotes) throw new Error('API review cited an unsupported evidence excerpt');
+          const id = ref?.id;
+          invalidIds.add(typeof id === 'string' && evidenceIdPattern.test(id) ? id : null);
           return [];
         }
-        if (!source.text.includes(ref.quote)) {
-          if (!invalidQuotes) throw new Error('API review cited an unsupported evidence excerpt');
-          invalidIds.add(ref.id);
+        if (source.url && ref.quote === source.url) {
+          metadataIds.add(ref.id);
           return [];
         }
         quotedIds.add(ref.id);
@@ -187,7 +188,7 @@ function validateReviewAnswer(answer, units, packet, invalidQuotes) {
 }
 
 const comprehension = 'For each exact unit return {"units":[{"id":"…","status":"pass or fail","reconstruction":{"problem":"…","method":"…","result":"…","innovation":"…"},"notes":"…"}]}. Reconstruct the main point, mechanism, result, and contribution or limitation solely from the supplied final prose; for coverage, audit and transport units reconstruct their actual meaning and role. State what is missing rather than inventing it. Fail unclear or misleading units and explain the concrete defect. Use distinct, substantive explanations.';
-const fidelity = 'For each exact unit return {"units":[{"id":"…","status":"pass or fail","notes":"…","evidence":[{"id":"excerpt ID","quote":"verbatim substring of that excerpt\'s text field, at least 8 characters"}]}]}. Compare claims, dates, mechanism, results, comparisons and limitations with the supplied evidence. Give specific findings, fail material discrepancies or missing evidence. Cite evidence for every link in main and rendered Markdown units, coverage evidence for any coverage claims, render and transport, and the local disposition facts for any candidate counts. A URL alone is not evidence. A disposition reason records an editorial decision, not proof of which source bodies were read. For exact transport JSON check visible text, link grouping and any truncation against render; do not claim client UI readback.';
+const fidelity = 'For each exact unit return {"units":[{"id":"…","status":"pass or fail","notes":"…","evidence":[{"id":"excerpt ID","quote":"verbatim substring of that excerpt\'s text field, at least 8 characters"}]}]}. Compare claims, dates, mechanism, results, comparisons and limitations with the supplied evidence. Give specific findings, fail material discrepancies or missing evidence. Cite evidence for every link in main and rendered Markdown units, coverage evidence for any coverage claims, render and transport, and the local disposition facts for any candidate counts. A URL alone is not evidence. A link_only record can establish discovery of a companion link when quoted with its recorded context. Do not claim its destination was read. Fail any material claim about the destination content unless supported by separate content evidence. A disposition reason records an editorial decision, not proof of which source bodies were read. For exact transport JSON check visible text, link grouping and any truncation against render; do not claim client UI readback.';
 
 export async function finalizeOpenAI({ runsDir, runDir, keyFile, ledgerDir, revision = false, resume, generated, fetchImpl = globalThis.fetch }) {
   const { run, sources, sourcesText, sourcesPath = 'sources.json' } = frozenApiRun(runsDir, runDir);
@@ -240,7 +241,7 @@ export async function finalizeOpenAI({ runsDir, runDir, keyFile, ledgerDir, revi
       const serialized = JSON.stringify(messages);
       const inputBytes = Buffer.byteLength(serialized);
       const inputSha256 = sha256(serialized);
-      if (inputBytes > 540000) throw new Error('API final request exceeds byte budget');
+      if (inputBytes > 1200000) throw new Error('API final request exceeds byte budget');
       const startedAt = checkedAt();
       const signal = AbortSignal.timeout(requestTimeoutMs);
       const log = (event, fields = {}) => fs.appendFileSync(usagePath, JSON.stringify({
@@ -328,10 +329,12 @@ export async function finalizeOpenAI({ runsDir, runDir, keyFile, ledgerDir, revi
       const affected = units.filter(unit => invalidQuotes.has(unit.id));
       const errors = affected.map(unit => ({ unitId: unit.id, excerptIds: invalidQuotes.get(unit.id) }));
       const repair = message('user',
-        'Continue the same fidelity review. Return verdicts only for the listed repair units. Some required evidence was missing or a quote was not an exact substring. For any listed unit about collection or coverage, cite a verbatim quote from a coverage excerpt and preserve other relevant citations. ' +
+        'Continue the same fidelity review. Return verdicts only for the listed repair units. Some citations use an unknown ID, have a quote shorter than eight characters or a quote that is not an exact substring, or omit required coverage evidence. ' +
+        'Cite only IDs in valid_evidence_ids. Review unit IDs (including render and transport IDs) identify content under review and must never be cited as source evidence. For any listed unit about collection or coverage, cite a verbatim quote from a coverage excerpt and preserve other relevant citations. ' +
         'Recheck the affected verdicts against the same evidence. Use short verbatim substrings of the supplied text, including any model version or qualifier that changes the claim. ' +
         'If the source does not support a claim, return fail and explain the discrepancy. ' +
-        fidelity + '\n' + data('repair_units', affected) + '\n' + data('citation_errors', errors));
+        fidelity + '\n' + data('repair_units', affected) + '\n' + data('citation_errors', errors) +
+        '\n' + data('valid_evidence_ids', [...evidence.byId.keys()]));
       const result = await call(stage + '-citation-repair', [...messages, message('assistant', first.content), repair], attempt);
       if (result.actualModel !== first.actualModel) throw new Error('The fidelity reviewer model changed during citation repair');
       const repaired = validateReviewAnswer(result.answer, affected, evidence);

@@ -4,12 +4,29 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { effectiveSources } from '../source-config.mjs';
-import { runProductionDaily } from '../deployment/mac/daily.mjs';
+import { runProductionDaily, selectedEvidence, resumeGeneratedDraft } from '../deployment/mac/daily.mjs';
 import { makeApiFinalFixture } from './helpers/api-final-fixture.mjs';
 import { main as cli } from '../cli.mjs';
 import { modelTopic } from '../model-input.mjs';
 
 const tagged = (text, name) => JSON.parse(text.split('<' + name + '>\n')[1].split('\n</' + name + '>')[0]);
+
+test('review retains composer evidence tails and distinguishes observed links from read bodies', () => {
+  const url = 'https://example.com/article';
+  const companionUrls = Array.from({ length: 35 }, (_, index) => 'https://example.com/code-' + index);
+  const text = 'First paragraph. '.repeat(1500) + 'UNIQUE-EXPERIMENT-LIMITATION-AT-THE-END';
+  const evidence = selectedEvidence([{ title: 'Synthetic article', primaryUrl: url, companionUrls,
+    observations: [{ url, text, publishedAt: '2026-11-11T00:00:00Z' }] }],
+  [url, ...companionUrls], '2026-11-12T00:00:00Z');
+  const primary = evidence.find(row => row.url === url);
+  assert.ok(primary.text.endsWith('UNIQUE-EXPERIMENT-LIMITATION-AT-THE-END'));
+  assert.ok(primary.text.includes('2026-11-11T00:00:00Z'));
+  assert.ok(primary.text.includes('2026-11-12T00:00:00Z'));
+  for (const row of evidence.filter(row => row.url !== url)) {
+    assert.ok(row.text.includes('link_only'));
+    assert.ok(!row.text.includes('UNIQUE-EXPERIMENT-LIMITATION-AT-THE-END'));
+  }
+});
 
 test('legacy and logged-in source bodies require public provenance before entering model packets', () => {
   for (const kind of ['backlog', 'mail', 'xhs', 'substack']) {
@@ -46,6 +63,7 @@ test('Mac production uses the repository funnel and reviews its output without a
   fs.writeFileSync(keyFile, 'CODEX_API_KEY=synthetic-placeholder\n');
   const ledgerBefore = fs.readdirSync(f.ledgerDir);
   const calls = [];
+  let interruptFirstReview = true;
   const fetchImpl = async (url, init) => {
     if (url !== 'https://api.openai.com/v1/chat/completions') return new Response('<article>' + f.evidenceText.repeat(8) + '</article>');
     const body = JSON.parse(init.body);
@@ -65,6 +83,10 @@ test('Mac production uses the repository funnel and reviews its output without a
       content = '```markdown\n# X AI 日报 2026-11-08\n\n' + topics.map(topic =>
         '## ' + topic.section + '\n\n- **Synthetic runtime caches repeated prefix state.** A simulated two-level index reuses decoded state. [Original](' + topic.material.primaryUrl + ')').join('\n\n') + '\n```';
     } else {
+      if (interruptFirstReview) {
+        interruptFirstReview = false;
+        throw new Error('Synthetic transient review outage');
+      }
       const comprehension = /reconstructing your final units/.test(last) || body.messages[0].content.includes('reader-comprehension');
       calls.push(comprehension ? 'comprehension' : 'fidelity');
       const units = tagged(all, 'review_units');
@@ -77,6 +99,8 @@ test('Mac production uses the repository funnel and reviews its output without a
     return Response.json({ id: 'synthetic-' + calls.length, model: 'gpt-6.1-sol', choices: [{ finish_reason: 'stop', message: { content } }],
       usage: { prompt_tokens: 100, completion_tokens: 100 } });
   };
+  await assert.rejects(runProductionDaily({ ...f, dataDir: path.join(root, 'state-data'), keyFile, fetchImpl }),
+    /reader-comprehension failed at response_headers: transport_error/);
   const result = await runProductionDaily({ ...f, dataDir: path.join(root, 'state-data'), keyFile, fetchImpl });
   assert.equal(result.pipeline, 'run-daily.mjs');
   assert.deepEqual(calls, ['screen', 'compose', 'comprehension', 'fidelity', 'comprehension', 'fidelity']);
@@ -88,4 +112,12 @@ test('Mac production uses the repository funnel and reviews its output without a
   const again = await runProductionDaily({ ...f, dataDir: path.join(root, 'state-data'), keyFile, fetchImpl });
   assert.equal(again.publication, result.publication);
   assert.equal(calls.length, 6);
+  // Operational review retries reuse only the byte-bound writer transcript.
+  // Every semantic review is freshly executed, never copied from an old attempt.
+  assert.equal(calls.filter(stage => stage === 'compose').length, 1);
+  const changed = JSON.parse(fs.readFileSync(path.join(f.runDir, 'prepared-topics.json')));
+  changed[0].material.title = 'Changed after composition';
+  fs.writeFileSync(path.join(f.runDir, 'prepared-topics.json'), JSON.stringify(changed));
+  assert.throws(() => resumeGeneratedDraft(f.runDir, sources.collectionId),
+    /Saved composer transcript no longer matches/);
 });
