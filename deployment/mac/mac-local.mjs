@@ -220,13 +220,17 @@ export async function main(args) {
     return sendFailureAlert(config, args[2], args[4]);
   }
   if (command === 'finalize') {
-    if (args[1] !== '--run' || !args[2] || (args.length !== 3 && !(args.length === 4 && args[3] === '--revision'))) {
-      throw new Error('Use local finalize --run RUN [--revision]');
+    const options = args.slice(3);
+    const revision = options[0] === '--revision';
+    if (revision) options.shift();
+    const resume = options[0] === '--resume' && options.length === 2 ? options[1] : undefined;
+    if (args[1] !== '--run' || !args[2] || (options.length && resume === undefined)) {
+      throw new Error('Use local finalize --run RUN [--revision] [--resume API_FINAL_DIR_NAME]');
     }
     const { finalizeOpenAI } = await import('./openai-final.mjs');
     const deployment = read(path.join(base, 'deployment.local.json'));
     return finalizeOpenAI({ runsDir: config.runsDir, runDir: args[2], ledgerDir: config.ledgerDir,
-      keyFile: deployment.model?.apiDraft?.keyFile, revision: args[3] === '--revision' });
+      keyFile: deployment.model?.apiDraft?.keyFile, revision, resume });
   }
   if (command === 'draft') {
     if (!args.includes('--run')) throw new Error('Use local draft --run RUN [--resume]');

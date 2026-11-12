@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { createHash } from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
 import { canonicalUrl, citedUrls, digestUrls, observedUrls, readPublicationFile } from '../../binding.mjs';
 import { coverageStatusLine, larkMarkdown, publicationGates } from '../../digest.mjs';
@@ -25,6 +26,7 @@ const asList = (items, limit) => Array.isArray(items) && items.length <= limit;
 const substantial = text => typeof text === 'string' && text.trim().length >= 8 && text.length <= 3000;
 const fields = ['problem', 'method', 'result', 'innovation'];
 const checkedAt = () => new Date().toISOString();
+const sha256 = value => createHash('sha256').update(value).digest('hex');
 
 function applyDispositionChanges(original, changes) {
   if (!Array.isArray(changes)) throw new Error('Disposition changes must be an array');
@@ -154,7 +156,9 @@ function validateReviewAnswer(answer, units, packet, invalidQuotes) {
         const sources = evidence.map(ref => packet.byId.get(ref.id));
         if ((['render', 'transport'].includes(unit.kind) || unit.text.includes('本次采集范围') ||
             (unit.kind === 'audit' && /覆盖|遍历|采集|未看到|截图/.test(unit.text))) && !sources.some(source => source.kind === 'coverage')) {
-          throw new Error('API review must check coverage against the coverage evidence');
+          if (!invalidQuotes) throw new Error('API review must check coverage against the coverage evidence');
+          invalidQuotes.set(unit.id, [accountingId]);
+          continue;
         }
         const links = unit.kind === 'main' || unit.kind === 'render' ? citedUrls(unit.text).map(canonicalUrl) : [];
         if (links.some(url => !sources.some(source => source.url && canonicalUrl(source.url) === url))) {
@@ -170,7 +174,7 @@ function validateReviewAnswer(answer, units, packet, invalidQuotes) {
 const comprehension = 'For each exact unit return {"units":[{"id":"…","status":"pass or fail","reconstruction":{"problem":"…","method":"…","result":"…","innovation":"…"},"notes":"…"}]}. Reconstruct the main point, mechanism, result, and contribution or limitation solely from the supplied final prose; for coverage, audit and transport units reconstruct their actual meaning and role. State what is missing rather than inventing it. Fail unclear or misleading units and explain the concrete defect. Use distinct, substantive explanations.';
 const fidelity = 'For each exact unit return {"units":[{"id":"…","status":"pass or fail","notes":"…","evidence":[{"id":"excerpt ID","quote":"verbatim substring of that excerpt\'s text field, at least 8 characters"}]}]}. Compare claims, dates, mechanism, results, comparisons and limitations with the supplied evidence. Give specific findings, fail material discrepancies or missing evidence. Cite evidence for every link in main and rendered Markdown units, coverage evidence for any coverage claims, render and transport, and the local disposition facts for any candidate counts. A URL alone is not evidence. A disposition reason records an editorial decision, not proof of which source bodies were read. For exact transport JSON check visible text, link grouping and any truncation against render; do not claim client UI readback.';
 
-export async function finalizeOpenAI({ runsDir, runDir, keyFile, ledgerDir, revision = false, fetchImpl = globalThis.fetch }) {
+export async function finalizeOpenAI({ runsDir, runDir, keyFile, ledgerDir, revision = false, resume, fetchImpl = globalThis.fetch }) {
   const { run, sources, sourcesText, sourcesPath = 'sources.json' } = frozenApiRun(runsDir, runDir);
   const read = file => readPublicationFile(runDir, file);
   const inputRaw = read(inputName);
@@ -194,16 +198,62 @@ export async function finalizeOpenAI({ runsDir, runDir, keyFile, ledgerDir, revi
   fs.mkdirSync(lock, { mode: 0o700 });
   try {
     if (fs.existsSync(resultPath)) throw new Error('API final already completed for this run');
+    let prior;
+    if (resume !== undefined) {
+      if (!/^api-final-[A-Za-z0-9]{6}$/.test(resume)) throw new Error('Resume requires an API final attempt directory name');
+      const folder = resume + '/attempt-1/';
+      const pending = JSON.parse(read(folder + 'review.pending.json'));
+      const auditPath = folder + 'audit-facts.json';
+      const verified = createReviewInput({
+        rootDir: runDir, digestPath: folder + 'digest.md', dispositionsPath: folder + 'dispositions.json',
+        sourcesPath, materialsPaths: [...packet.materialsPaths, auditPath], evidencePaths: packet.evidencePaths,
+        authorId: pending.authorId, reviewMode: 'self', transport: 'feishu-post-v1',
+        renderedMarkdown: read(folder + 'report.final.md'), now: pending.createdAt,
+      });
+      if (pending.status !== 'pending' || pending.snapshotSha256 !== verified.snapshotSha256) {
+        throw new Error('API final resume snapshot changed');
+      }
+      const usage = read(resume + '/api-usage.jsonl').trim().split('\n').map(JSON.parse);
+      prior = { pending: verified, usage, folder };
+    }
     const outDir = fs.mkdtempSync(path.join(runDir, 'api-final-'));
     const usagePath = path.join(outDir, 'api-usage.jsonl');
     const call = async (stage, messages, attempt) => {
-      const inputBytes = Buffer.byteLength(JSON.stringify(messages));
+      const serialized = JSON.stringify(messages);
+      const inputBytes = Buffer.byteLength(serialized);
+      const inputSha256 = sha256(serialized);
       if (inputBytes > 540000) throw new Error('API final request exceeds byte budget');
       const startedAt = checkedAt();
       const signal = AbortSignal.timeout(requestTimeoutMs);
       const log = (event, fields = {}) => fs.appendFileSync(usagePath, JSON.stringify({
-        attempt, stage, model, event, inputBytes, startedAt, ...fields,
+        attempt, stage, model, event, inputBytes, inputSha256, startedAt, ...fields,
       }) + '\n', { mode: 0o600 });
+      const decode = (content, id, actualModel, finishedAt) => {
+        let answer;
+        try { answer = JSON.parse(content); } catch { throw new Error('Invalid OpenAI JSON at ' + stage); }
+        if (!answer || Array.isArray(answer) || typeof answer !== 'object') throw new Error('OpenAI final result must be a JSON object');
+        write(path.join(outDir, attempt + '-' + stage + '.json'), content + '\n');
+        return { answer, content, id, actualModel, finishedAt };
+      };
+      if (prior && attempt === 1 && ['final', 'reader-comprehension', 'reader-fidelity'].includes(stage)) {
+        const rows = prior.usage.filter(row => row.attempt === attempt && row.stage === stage && row.event === 'response');
+        if (rows.length !== 1) throw new Error('API final resume is missing a complete response at ' + stage);
+        const saved = rows[0];
+        const raw = read(resume + '/' + attempt + '-' + stage + '.json');
+        const content = raw.slice(0, -1);
+        if (!raw.endsWith('\n') || saved.model !== model || saved.status !== 200 || saved.finishReason !== 'stop' ||
+            saved.inputBytes !== inputBytes || (saved.inputSha256 && saved.inputSha256 !== inputSha256) ||
+            (saved.responseSha256 && saved.responseSha256 !== sha256(content)) ||
+            !Number.isFinite(Date.parse(saved.finishedAt)) || typeof saved.actualModel !== 'string' ||
+            (saved.actualModel !== model && !saved.actualModel.startsWith(model + '-')) ||
+            typeof saved.requestId !== 'string' || !saved.requestId || content.includes(key) ||
+            (stage === 'final' && prior.pending.authorId !== 'openai-api:' + model + ':' + saved.requestId)) {
+          throw new Error('API final resume response or request binding differs at ' + stage);
+        }
+        const result = decode(content, saved.requestId, saved.actualModel, saved.finishedAt);
+        log('response', { ...saved, inputSha256, responseSha256: sha256(content), reusedFrom: resume });
+        return result;
+      }
       log('started', { timeoutMs: requestTimeoutMs });
       let response;
       let phase = 'response_headers';
@@ -233,26 +283,22 @@ export async function finalizeOpenAI({ runsDir, runDir, keyFile, ledgerDir, revi
       const actual = payload?.model;
       const usage = payload?.usage;
       const finishedAt = checkedAt();
+      const choice = payload?.choices?.[0];
+      const content = choice?.message?.content;
       log('response', {
         actualModel: actual, requestId: payload?.id, httpRequestId, status: response.status, headersAt, finishedAt,
-        finishReason: payload?.choices?.[0]?.finish_reason,
+        finishReason: choice?.finish_reason, responseSha256: typeof content === 'string' ? sha256(content) : undefined,
         serviceTier: payload?.service_tier, inputTokens: usage?.prompt_tokens, outputTokens: usage?.completion_tokens,
         cachedInputTokens: usage?.prompt_tokens_details?.cached_tokens,
         cacheWriteInputTokens: usage?.prompt_tokens_details?.cache_write_tokens,
         reasoningTokens: usage?.completion_tokens_details?.reasoning_tokens,
       });
-      const choice = payload?.choices?.[0];
-      const content = choice?.message?.content;
       if (!response.ok || typeof payload?.id !== 'string' ||
           (actual !== model && !actual?.startsWith(model + '-')) || choice?.finish_reason !== 'stop' ||
           typeof content !== 'string' || choice.message.refusal || content.includes(key)) {
         throw new Error('OpenAI API final rejected or incomplete at ' + stage + ' (HTTP ' + response.status + ')');
       }
-      let answer;
-      try { answer = JSON.parse(content); } catch { throw new Error('Invalid OpenAI JSON at ' + stage); }
-      if (!answer || Array.isArray(answer) || typeof answer !== 'object') throw new Error('OpenAI final result must be a JSON object');
-      write(path.join(outDir, attempt + '-' + stage + '.json'), content + '\n');
-      return { answer, content, id: payload.id, actualModel: actual, finishedAt };
+      return decode(content, payload.id, actual, finishedAt);
     };
     const checkFidelity = async (stage, messages, attempt, units, evidence, authorModel) => {
       const first = await call(stage, messages, attempt);
@@ -264,7 +310,7 @@ export async function finalizeOpenAI({ runsDir, runDir, keyFile, ledgerDir, revi
       const affected = units.filter(unit => invalidQuotes.has(unit.id));
       const errors = affected.map(unit => ({ unitId: unit.id, excerptIds: invalidQuotes.get(unit.id) }));
       const repair = message('user',
-        'Continue the same fidelity review. Return verdicts only for the listed repair units. The identified quotes were not exact substrings of their excerpt text. ' +
+        'Continue the same fidelity review. Return verdicts only for the listed repair units. Some required evidence was missing or a quote was not an exact substring. For any listed unit about collection or coverage, cite a verbatim quote from a coverage excerpt and preserve other relevant citations. ' +
         'Recheck the affected verdicts against the same evidence. Use short verbatim substrings of the supplied text, including any model version or qualifier that changes the claim. ' +
         'If the source does not support a claim, return fail and explain the discrepancy. ' +
         fidelity + '\n' + data('repair_units', affected) + '\n' + data('citation_errors', errors));
@@ -356,7 +402,12 @@ export async function finalizeOpenAI({ runsDir, runDir, keyFile, ledgerDir, revi
       };
       assertEvidenceUnchanged();
       const inputs = { rootDir: runDir, ...snapshotInputs, renderedMarkdown: gates.renderedMarkdown };
-      const pending = createReviewInput(inputs);
+      if (prior && attempt === 1 && (markdown !== read(prior.folder + 'digest.md') ||
+          JSON.stringify(dispositions) !== JSON.stringify(JSON.parse(read(prior.folder + 'dispositions.json'))) ||
+          gates.renderedMarkdown !== read(prior.folder + 'report.final.md'))) {
+        throw new Error('API final resume cannot change the reviewed artifact bytes');
+      }
+      const pending = createReviewInput({ ...inputs, now: attempt === 1 ? prior?.pending.createdAt : undefined });
       writeJson(path.join(folder, 'review.pending.json'), pending);
       write(path.join(folder, 'report.final.md'), gates.renderedMarkdown);
       const native = pending.units.find(unit => unit.kind === 'transport');
