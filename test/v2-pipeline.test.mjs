@@ -390,6 +390,7 @@ test('end-to-end runDailyV2 produces two-tier digest, blocks leaked pipeline jar
   const finalDigest = fs.readFileSync(result.digestPath, 'utf8');
   assert.match(finalDigest, /## Breakthrough Research/);
   assert.match(finalDigest, /## Quick Hits \/ 快讯速览/);
+  assert.ok(finalDigest.indexOf('## Quick Hits / 快讯速览') < finalDigest.indexOf('## Breakthrough Research'));
   assert.match(finalDigest, /### 运行自检 \[OK\]/);
   assert.ok(!/所给摘录/.test(finalDigest));
 
@@ -596,7 +597,7 @@ test('Mac Codex feedback regressions: unattempted sources warn in footer, >2h X+
   assert.match(finalMd, /原始入库 4 条 → 7日去重跳过 0 条 → 聚合 1 个话题 → 初筛入选 1 个 → 全文补齐 1\/1 → 成稿 1 条/);
 });
 
-test('selection balance & Quick Hits rules: 20 HF papers never drown out Infra/Products/Essays, papers never spill into Quick Hits, t.co HEAD resolution merges X posts, and Quick Hits always renders last', async t => {
+test('selection balance & Quick Hits rules: 20 HF papers never drown out Infra/Products/Essays, papers never spill into Quick Hits, t.co HEAD resolution merges X posts, and Quick Hits always renders first', async t => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'xdaily-v2-balance-'));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
 
@@ -676,24 +677,24 @@ test('selection balance & Quick Hits rules: 20 HF papers never drown out Infra/P
   assert.ok(quickTopics.every(tp => tp.category !== 'paper' && !tp.sources.includes('Hugging Face Daily Papers')),
     'Research papers must never spill into Quick Hits');
 
-  // 3. Even if a draft places Quick Hits at the top, normalizeDigestSectionOrder moves Quick Hits to the bottom!
+  // 3. Normalize a draft with Quick Hits below the deep sections.
   const misordered = [
     '# X AI 日报 2026-11-11',
-    '',
-    '## Quick Hits / 快讯速览',
-    '- **Claude MCP Apps**：网页端开放连接器预览。 [官方说明](https://claude.example/blog/mcp-apps-preview)',
     '',
     '## Breakthrough Research',
     '- **[Research Lab · Paper 1]：核心理论发现。** 正文解释。 [论文](https://arxiv.org/abs/2611.10000)',
     '',
     '## Frameworks / Infra',
     '- **[vLLM · v0.12.0]：FP8 算子提速。** 正文解释。 [Release](https://github.com/vllm-project/vllm/releases/tag/v0.12.0)',
+    '',
+    '## Quick Hits / 快讯速览',
+    '- **Claude MCP Apps**：网页端开放连接器预览。 [官方说明](https://claude.example/blog/mcp-apps-preview)',
   ].join('\n');
   const ordered = normalizeDigestSectionOrder(misordered);
   const infraPos = ordered.indexOf('## Frameworks / Infra');
   const researchPos = ordered.indexOf('## Breakthrough Research');
   const quickPos = ordered.indexOf('## Quick Hits / 快讯速览');
-  assert.ok(infraPos < researchPos && researchPos < quickPos, 'Canonical order: Infra -> Research -> Quick Hits last');
+  assert.ok(quickPos >= 0 && quickPos < infraPos && infraPos < researchPos, 'Canonical order: Quick Hits -> Infra -> Research');
 
   // 4. Host Agent custom topic override (--selected-topics) re-runs enrichment on chosen topics cleanly.
   const runDataDir = path.join(dir, 'run-data');
@@ -858,8 +859,38 @@ test('4-signal prior curation & rolling evergreen backlog: social metrics parsed
   assert.equal(anthropicTopic.fromBacklog, true);
   assert.equal(anthropicTopic.contentStatus, 'full_text', 'Cached full text reused without re-fetching');
 
-  // Day 9 (> 7 days later): unpicked backlog entries expire cleanly via maxAgeDays=7 TTL.
+  // An explicit short TTL still works for callers that configure it.
   const expiredCheck = loadBacklogPool(stateDir, { reportDate: '2026-11-19', maxAgeDays: 7 });
   assert.equal(expiredCheck.entries.length, 0);
   assert.equal(expiredCheck.expiredCount, 2);
+
+  const lastDay = '2027-11-10';
+  const yearOldPool = loadBacklogPool(stateDir, { reportDate: lastDay });
+  assert.equal(yearOldPool.entries.length, 2);
+  const recalled = [];
+  const recallStoreDir = path.join(dir, 'year-old-store');
+  mergeBacklogIntoTopics(recalled, yearOldPool.entries, recallStoreDir, { reportDate: lastDay });
+  assert.ok(recalled.some(topic => !topic.deferredByLlm && topic.priorScore < 5.5));
+  for (const topic of recalled) topic._storeDir = recallStoreDir;
+  assert.equal(saveBacklogPool(stateDir, { reportDate: lastDay, topics: recalled }).savedCount, 2);
+  const yearExpired = loadBacklogPool(stateDir, { reportDate: '2027-11-11' });
+  assert.equal(yearExpired.entries.length, 0);
+  assert.equal(yearExpired.expiredCount, 2);
+});
+
+test('backlog defaults to 1,000 candidates and retains the highest-scoring entries', t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'xdaily-v2-backlog-cap-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const reportDate = '2026-11-12';
+  const topics = Array.from({ length: 1001 }, (_, index) => ({
+    topicId: `topic-${index}`,
+    title: `Candidate ${index}`,
+    primaryUrl: `https://engineering.example/articles/${index}`,
+    priorScore: 6 + index / 1000,
+  }));
+  assert.equal(saveBacklogPool(dir, { reportDate, topics }).savedCount, 1000);
+  const { entries } = loadBacklogPool(dir, { reportDate });
+  assert.equal(entries.length, 1000);
+  assert.equal(entries[0].title, 'Candidate 1000');
+  assert.equal(entries.at(-1).title, 'Candidate 1');
 });

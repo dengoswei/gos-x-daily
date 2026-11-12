@@ -9,7 +9,7 @@
 //   (4) Noise penalties (commercial case studies, hiring/giveaway promos)
 // Stage 2 (LLM / Host Agent) then evaluates the shortlisted pool on Novel Insight,
 // Empirical Engineering Lesson, and Consequential Judgment, while unpicked high-value
-// runners-up persist into `state/backlog-pool.json` with signal accumulation & 7-day decay.
+// runners-up persist into `state/backlog-pool.json` with signal accumulation and daily ranking decay.
 import fs from 'node:fs';
 import path from 'node:path';
 import { randomUUID, createHash } from 'node:crypto';
@@ -18,6 +18,8 @@ import { canonicalUrl } from './binding.mjs';
 import { topicFingerprint } from './telemetry.mjs';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
+const DEFAULT_BACKLOG_MAX_AGE_DAYS = 365;
+const DEFAULT_BACKLOG_MAX_POOL_SIZE = 1000;
 const repoRoot = path.dirname(fileURLToPath(import.meta.url));
 const defaultTastePath = path.join(repoRoot, 'config', 'taste.json');
 
@@ -191,7 +193,7 @@ export function scoreTopicPrior(topic, taste = loadTasteConfig(), { reportDate =
 /**
  * Loads unexpired, unpublished items from `state/backlog-pool.json`.
  */
-export function loadBacklogPool(stateDir, { reportDate, softHistory = null, maxAgeDays = 7 } = {}) {
+export function loadBacklogPool(stateDir, { reportDate, softHistory = null, maxAgeDays = DEFAULT_BACKLOG_MAX_AGE_DAYS } = {}) {
   const poolFile = path.join(path.resolve(stateDir), 'backlog-pool.json');
   if (!fs.existsSync(poolFile)) return { poolFile, entries: [], expiredCount: 0 };
   let parsed;
@@ -398,8 +400,8 @@ export function saveBacklogPool(stateDir, {
   const cacheDir = path.join(rootState, 'backlog-articles');
   fs.mkdirSync(cacheDir, { recursive: true, mode: 0o700 });
 
-  const maxPoolSize = taste.backlog?.maxPoolSize ?? 40;
-  const maxAgeDays = taste.backlog?.maxAgeDays ?? 7;
+  const maxPoolSize = taste.backlog?.maxPoolSize ?? DEFAULT_BACKLOG_MAX_POOL_SIZE;
+  const maxAgeDays = taste.backlog?.maxAgeDays ?? DEFAULT_BACKLOG_MAX_AGE_DAYS;
   const minPrior = taste.backlog?.minPriorScoreToEnter ?? 5.5;
   const cutoff = new Date(Date.parse(reportDate) - maxAgeDays * DAY_MS).toISOString().slice(0, 10);
 
@@ -416,7 +418,8 @@ export function saveBacklogPool(stateDir, {
 
     const isDeferredByLlm = deferredTopicIds.has(tp.topicId) || Boolean(tp.deferredByLlm);
     const score = tp.priorScore ?? 0;
-    if (!isDeferredByLlm && score < minPrior) continue;
+    // Apply the score threshold only on admission. Age decay lowers recall rank.
+    if (!tp.fromBacklog && !isDeferredByLlm && score < minPrior) continue;
 
     // Persist any fetched or raw full text into durable backlog-articles cache so tomorrow needs 0 re-fetches!
     let cachedTextPath = null;
