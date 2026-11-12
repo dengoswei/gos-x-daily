@@ -7,8 +7,22 @@ import { effectiveSources } from '../source-config.mjs';
 import { runProductionDaily } from '../deployment/mac/daily.mjs';
 import { makeApiFinalFixture } from './helpers/api-final-fixture.mjs';
 import { main as cli } from '../cli.mjs';
+import { modelTopic } from '../model-input.mjs';
 
 const tagged = (text, name) => JSON.parse(text.split('<' + name + '>\n')[1].split('\n</' + name + '>')[0]);
+
+test('legacy and logged-in source bodies require public provenance before entering model packets', () => {
+  for (const kind of ['backlog', 'mail', 'xhs', 'substack']) {
+    assert.equal(modelTopic({ cards: [{ kind, text: 'private source', url: 'https://example.com/private' }] }), null);
+  }
+  const safe = modelTopic({ title: 'private title', primaryUrl: 'https://example.com/private',
+    allObservedUrls: ['https://example.com/private'], cards: [
+      { kind: 'xhs', title: 'private title', url: 'https://example.com/private' },
+      { kind: 'supplement', title: 'Public article', url: 'https://example.com/article', sourceLabel: 'Public source' },
+    ] });
+  assert.equal(safe.title, 'Public article');
+  assert.deepEqual(safe.allObservedUrls, ['https://example.com/article']);
+});
 
 test('public sources follow the release while private profiles and explicit source exclusions persist', () => {
   const defaults = { feeds: [{ name: 'New feed', url: 'https://example.com/rss' }], blogs: [{ name: 'Blog' }] };
@@ -22,6 +36,11 @@ test('Mac production uses the repository funnel and reviews its output without a
   const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'xdaily-unified-synthetic-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const f = await makeApiFinalFixture(root);
+  const sourcesPath = path.join(f.runDir, 'sources.json');
+  const sources = JSON.parse(fs.readFileSync(sourcesPath, 'utf8'));
+  sources.sources.substack.push({ url: 'https://example.com/private-subscription', text: 'PRIVATE-SUBSCRIPTION-MUST-STAY-LOCAL', publishedAt: sources.collectedAt });
+  sources.sources.xiaohongshu = [{ profileId: 'synthetic', notes: [{ url: 'https://example.com/private-note', text: 'PRIVATE-XHS-MUST-STAY-LOCAL' }] }];
+  fs.writeFileSync(sourcesPath, JSON.stringify(sources));
   fs.writeFileSync(path.join(f.runDir, 'sources.frozen.json'), JSON.stringify({ watchProfiles: [], blogs: [], feeds: [] }));
   const keyFile = path.join(root, 'synthetic-key');
   fs.writeFileSync(keyFile, 'CODEX_API_KEY=synthetic-placeholder\n');
@@ -33,6 +52,7 @@ test('Mac production uses the repository funnel and reviews its output without a
     const all = body.messages.map(row => row.content).join('\n');
     const last = body.messages.at(-1).content;
     assert.ok(!all.includes(f.secret));
+    assert.ok(!/PRIVATE-(SUBSCRIPTION|XHS)-MUST-STAY-LOCAL|private-subscription|private-note/.test(all));
     let content;
     if (!body.response_format && all.includes('two-stage curation')) {
       calls.push('screen');
