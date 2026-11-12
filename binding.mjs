@@ -90,7 +90,7 @@ export function digestUrls(markdown) {
 }
 
 // Each candidate with its own URL; thread contexts are discovery leads, not candidates.
-function candidates(collection) {
+export function candidateEntries(collection) {
   const sources = collection?.sources ?? {};
   const entries = [];
   for (const [group, items] of itemGroups(sources)) {
@@ -111,7 +111,7 @@ function candidates(collection) {
 }
 
 export function candidateKeys(collection) {
-  return [...new Set(candidates(collection).map(entry => entry.key))];
+  return [...new Set(candidateEntries(collection).map(entry => entry.key))];
 }
 
 const addUrl = (set, value) => {
@@ -211,7 +211,7 @@ export function validateDispositions(dispositions, collection, markdown, observe
   const missing = keys.filter(key => !seen.has(key));
   if (missing.length) throw new Error(`Missing disposition for ${missing.length} candidate(s): ${missing.slice(0, 5).join(', ')}`);
   const owners = new Map();
-  for (const { key, url } of candidates(collection)) {
+  for (const { key, url } of candidateEntries(collection)) {
     if (typeof url !== 'string') continue;
     let canonical;
     try { canonical = canonicalUrl(url); } catch { continue; }

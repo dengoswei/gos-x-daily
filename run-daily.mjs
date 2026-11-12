@@ -11,7 +11,7 @@ import { makeRuntime } from './runtime.mjs';
 import { collectionFromBrowserArtifacts, verifyEvidenceFiles } from './browser-artifacts.mjs';
 import { mergeFeedDocuments, verifyDocumentFiles } from './feed-import.mjs';
 import { fetchFeeds } from './tools/fetch-feeds.mjs';
-import { candidateKeys, canonicalUrl, citedUrls } from './binding.mjs';
+import { candidateKeys, candidateEntries, canonicalUrl, citedUrls } from './binding.mjs';
 import { bulletLine, renderLarkPost } from './lark-post.mjs';
 import { loadModels, tagged, modelJson, extractBlock, parseJsonBlock, usageLedger, budgetGuard, makeStageRunner, outputStore } from './prototype/run-packets.mjs';
 import {
@@ -752,6 +752,7 @@ export async function runDailyV2({
     const autoDispositions = buildAutoDispositions({
       collectionId: collection.collectionId,
       candidateKeys: candidateKeys(collection),
+      candidateEntries: candidateEntries(collection),
       topics: storeTopics,
       citedUrls: digestStats.citedUrls,
       bulletSectionsByUrl: digestStats.bulletSectionsByUrl,
