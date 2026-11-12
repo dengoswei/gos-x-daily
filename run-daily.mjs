@@ -35,6 +35,7 @@ import {
 import {
   loadTasteConfig,
   scoreTopicPrior,
+  isRoboticsEmbodiedTopic,
   loadBacklogPool,
   mergeBacklogIntoTopics,
   saveBacklogPool,
@@ -98,10 +99,17 @@ function sectionForTopic(topic) {
   return 'Applications / Products';
 }
 
-function isQuickHitEligible(topic) {
+function isQuickHitEligible(topic, { reportDate = null } = {}) {
   if (topic.category === 'paper') return false;
   if ((topic.sources ?? []).some(s => /daily\s*papers/i.test(s))) return false;
   if (/arxiv\.org|huggingface\.co\/papers|openreview\.net/i.test(topic.primaryUrl ?? '')) return false;
+  // Quick Hits are strictly for timely updates; never surface >7-day-old stale posts as Quick Hits.
+  if (reportDate && topic.publishedAt) {
+    const ageDays = (Date.parse(reportDate) - Date.parse(topic.publishedAt)) / (24 * 60 * 60 * 1000);
+    if (Number.isFinite(ageDays) && ageDays > 7) return false;
+  } else if ((topic.curationSignals?.ageDecay ?? 0) >= 4.0 && !topic.fromBacklog) {
+    return false;
+  }
   return ['product', 'open_source', 'general'].includes(topic.category);
 }
 
@@ -114,11 +122,11 @@ function isQuickHitEligible(topic) {
  * 4. Restricts `Quick Hits / 快讯速览` strictly to concise product updates, version releases,
  *    and brief ecosystem notes — research papers NEVER spill over into Quick Hits.
  */
-export function selectTopicsHeuristic(topics, { maxDeep = 7, maxQuick = 4, maxPerSource = 2, taste = null } = {}) {
+export function selectTopicsHeuristic(topics, { maxDeep = 7, maxQuick = 4, maxPerSource = 2, maxRoboticsDeep = 1, taste = null } = {}) {
   const activeTaste = taste ?? loadTasteConfig();
   const eligible = topics.filter(t => t.dedupStatus !== 'seen_recently' && t.category !== 'case_study_pr');
   const scoreTopic = t => {
-    // Category NEVER determines quality score; use the 4-signal Prior Score directly!
+    // Format/category NEVER determines quality score; use the calibrated Prior Score directly!
     if (Number.isFinite(t.priorScore)) return t.priorScore;
     return scoreTopicPrior(t, activeTaste).priorScore;
   };
@@ -127,6 +135,7 @@ export function selectTopicsHeuristic(topics, { maxDeep = 7, maxQuick = 4, maxPe
   const pickedIds = new Set();
   const sourceCounts = new Map();
   const deepSelected = [];
+  let roboticsCount = 0;
 
   const primaryFeedSource = t => (t.sources ?? []).find(s => s !== 'x' && !String(s).startsWith('watch:@')) ?? t.sources?.[0] ?? 'unknown';
   const vendorOf = t => {
@@ -144,6 +153,7 @@ export function selectTopicsHeuristic(topics, { maxDeep = 7, maxQuick = 4, maxPe
     const src = primaryFeedSource(t);
     pickedIds.add(t.topicId);
     sourceCounts.set(src, (sourceCounts.get(src) ?? 0) + 1);
+    if (isRoboticsEmbodiedTopic(t)) roboticsCount += 1;
     deepSelected.push({
       topicId: t.topicId,
       tier: 'deep',
@@ -153,7 +163,8 @@ export function selectTopicsHeuristic(topics, { maxDeep = 7, maxQuick = 4, maxPe
     });
   };
 
-  // Pass 1: Guarantee representation across each non-empty editorial section (up to initial bucket quota).
+  // Pass 1: Guarantee representation across each non-empty editorial section (up to initial bucket quota),
+  // preferring core non-robotics papers in Breakthrough Research before allowing at most `maxRoboticsDeep`.
   const sectionQuotas = [
     ['Frameworks / Infra', 2],
     ['Breakthrough Research', 2],
@@ -164,25 +175,32 @@ export function selectTopicsHeuristic(topics, { maxDeep = 7, maxQuick = 4, maxPe
 
   for (const [targetSection, quota] of sectionQuotas) {
     let count = 0;
-    for (const t of ranked) {
-      if (count >= quota || deepSelected.length >= maxDeep) break;
-      if (pickedIds.has(t.topicId)) continue;
-      if (sectionForTopic(t) !== targetSection) continue;
-      if (!canTakeFromSource(t, false)) continue;
-      // Avoid spending multiple Deep Dive slots on minor product launches from the same vendor.
-      const vendor = vendorOf(t);
-      if (t.category === 'product' && vendorDeepProduct.has(vendor)) continue;
-      if (t.category === 'product') vendorDeepProduct.add(vendor);
-      takeDeep(t, `Top signal in ${targetSection}`);
-      count += 1;
+    const isUnbackedStalePost = t => !t.fromBacklog && (t.curationSignals?.ageDecay ?? 0) >= 6.0;
+    for (const allowRoboticsInBucket of [false, true]) {
+      for (const t of ranked) {
+        if (count >= quota || deepSelected.length >= maxDeep) break;
+        if (pickedIds.has(t.topicId) || isUnbackedStalePost(t)) continue;
+        if (sectionForTopic(t) !== targetSection) continue;
+        const isRobotics = isRoboticsEmbodiedTopic(t);
+        if (isRobotics && (!allowRoboticsInBucket || roboticsCount >= maxRoboticsDeep)) continue;
+        if (!canTakeFromSource(t, false)) continue;
+        // Avoid spending multiple Deep Dive slots on minor product launches from the same vendor.
+        const vendor = vendorOf(t);
+        if (t.category === 'product' && vendorDeepProduct.has(vendor)) continue;
+        if (t.category === 'product') vendorDeepProduct.add(vendor);
+        takeDeep(t, `Top signal in ${targetSection}`);
+        count += 1;
+      }
     }
   }
 
-  // Pass 2: Fill remaining Deep Dive slots by overall score while respecting per-source diversity cap.
+  // Pass 2: Fill remaining Deep Dive slots by overall score while respecting per-source diversity and robotics cap.
+  const isUnbackedStale = t => !t.fromBacklog && (t.curationSignals?.ageDecay ?? 0) >= 6.0;
   for (const relax of [false, true]) {
     for (const t of ranked) {
       if (deepSelected.length >= maxDeep) break;
-      if (pickedIds.has(t.topicId)) continue;
+      if (pickedIds.has(t.topicId) || isUnbackedStale(t)) continue;
+      if (isRoboticsEmbodiedTopic(t) && roboticsCount >= maxRoboticsDeep) continue;
       if (!canTakeFromSource(t, relax)) continue;
       const vendor = vendorOf(t);
       if (t.category === 'product' && vendorDeepProduct.has(vendor)) continue;
@@ -191,7 +209,7 @@ export function selectTopicsHeuristic(topics, { maxDeep = 7, maxQuick = 4, maxPe
     }
   }
 
-  // Pass 3: Select Quick Hits strictly from concise product updates, SDK/tool releases, or brief notes (NEVER papers).
+  // Pass 3: Select Quick Hits strictly from concise product updates, SDK/tool releases, or brief notes (NEVER papers or stale posts).
   const quickSelected = [];
   for (const t of ranked) {
     if (quickSelected.length >= maxQuick) break;
@@ -208,6 +226,45 @@ export function selectTopicsHeuristic(topics, { maxDeep = 7, maxQuick = 4, maxPe
   }
 
   return [...deepSelected, ...quickSelected];
+}
+
+/**
+ * Builds the bounded Stage 2 LLM screening shortlist with "Hamming Open-Door" diversity protection:
+ * On high-volume days (e.g., 150 fresh topics + 350 recalled backlog topics), a flat `slice(0, 45)`
+ * can let historical backlog entries or framework-only items crowd out fresh arrivals, long-form
+ * intelligence/philosophy essays, world-impact product launches, or cross-domain structural gems.
+ */
+export function buildScreenShortlist(compactTopics, { limit = 48 } = {}) {
+  const eligible = compactTopics.filter(t => t.dedupStatus !== 'seen_recently' && t.category !== 'case_study_pr');
+  if (eligible.length <= limit) return eligible;
+
+  const chosenIds = new Set();
+  const chosen = [];
+  const takeMatching = (predicate, quota) => {
+    let count = 0;
+    for (const t of eligible) {
+      if (count >= quota || chosen.length >= limit) break;
+      if (chosenIds.has(t.topicId) || !predicate(t)) continue;
+      chosenIds.add(t.topicId);
+      chosen.push(t);
+      count += 1;
+    }
+  };
+  const nonRobotics = t => t.curationSignals?.domainTag !== 'robotics_embodied';
+  const notStaleWatch = t => !(!t.fromBacklog && (t.curationSignals?.ageDecay ?? 0) >= 6.0);
+
+  // 1. Protect fresh today/48h observations so a large historical backlog never monopolizes the shortlist.
+  takeMatching(t => !t.fromBacklog && nonRobotics(t) && notStaleWatch(t), 16);
+  // 2. Reserve seats across the 3 macro pillars + Open-Door long-form/cross-domain buckets.
+  takeMatching(t => ['infra_eng', 'open_source'].includes(t.category) && nonRobotics(t) && notStaleWatch(t), 8);
+  takeMatching(t => t.category === 'paper' && nonRobotics(t) && notStaleWatch(t), 8);
+  takeMatching(t => t.category === 'essay' && nonRobotics(t) && notStaleWatch(t), 6);
+  takeMatching(t => ['product', 'general'].includes(t.category) && nonRobotics(t) && notStaleWatch(t), 6);
+  // 3. Fill remaining capacity purely by calibrated `priorScore`.
+  takeMatching(t => notStaleWatch(t), limit);
+  takeMatching(() => true, limit);
+
+  return chosen.sort((a, b) => (b.priorScore ?? 0) - (a.priorScore ?? 0));
 }
 
 /**
@@ -593,8 +650,9 @@ export async function runDailyV2({
       const candidateTopicsPath = path.join(runDir, 'candidate-topics.json');
       const selectPromptPath = path.join(runDir, 'host-select-prompt.md');
       fs.writeFileSync(candidateTopicsPath, JSON.stringify(compactTopics, null, 2) + '\n', { mode: 0o600 });
-      // For LLM Stage 2 screening, pass top 45 candidates sorted by Stage 1 priorScore so context stays high-signal!
-      const screenShortlist = compactTopics.filter(t => t.dedupStatus !== 'seen_recently' && t.category !== 'case_study_pr').slice(0, 45);
+      // For LLM Stage 2 screening, pass a diversity-guarded top shortlist so AI Infra, Intelligence/Theory,
+      // World-Impact Products, and Hamming "Open-Door" essays/cross-domain leads all reach the Chief Editor.
+      const screenShortlist = buildScreenShortlist(compactTopics, { limit: 48 });
       fs.writeFileSync(selectPromptPath, `${readPrompt('v2-select-topics.md')}\n\n${tagged('topics_json', modelJson(screenShortlist))}\n`, { mode: 0o600 });
 
       const validTopicIds = new Set(selectableTopics.map(t => t.topicId));
@@ -607,7 +665,7 @@ export async function runDailyV2({
           stage: 'screen',
           label: 'v2-select-topics',
           system: readPrompt('v2-select-topics.md'),
-          prompt: tagged('topics_json', modelJson(screenShortlist.length ? screenShortlist : compactTopics.slice(0, 45))),
+          prompt: tagged('topics_json', modelJson(screenShortlist.length ? screenShortlist : compactTopics.slice(0, 48))),
           parse: text => parseSelectionResponse(text, validTopicIds),
         });
         deferredMap = selectedPlan.deferredMap ?? new Map();

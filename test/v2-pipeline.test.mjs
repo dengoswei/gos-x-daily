@@ -23,7 +23,7 @@ import {
 } from '../content-store.mjs';
 import { parseFeedDocument, mergeFeedDocuments } from '../feed-import.mjs';
 import { readFeedDom } from '../feed.mjs';
-import { scoreTopicPrior, loadBacklogPool, mergeBacklogIntoTopics, saveBacklogPool } from '../curation.mjs';
+import { scoreTopicPrior, isRoboticsEmbodiedTopic, loadBacklogPool, mergeBacklogIntoTopics, saveBacklogPool } from '../curation.mjs';
 import { collectionFromBrowserArtifacts } from '../browser-artifacts.mjs';
 import { compactCollection } from '../compose.mjs';
 import { validateDispositions, candidateEntries, candidateKeys, canonicalUrl } from '../binding.mjs';
@@ -41,7 +41,8 @@ test('auto dispositions retain cited browser-deep candidate ownership without a 
   assert.doesNotThrow(() => validateDispositions(dispositions, collection, markdown));
 });
 import { makeRuntime } from '../runtime.mjs';
-import { runDailyV2, validateV2Digest, selectTopicsHeuristic, normalizeDigestSectionOrder } from '../run-daily.mjs';
+import { runDailyV2, validateV2Digest, selectTopicsHeuristic, buildScreenShortlist, normalizeDigestSectionOrder } from '../run-daily.mjs';
+import { runEditorialBenchmarkSuite, evaluateDigestMarkdown } from '../editorial-eval.mjs';
 import { frozenApiRun } from '../deployment/mac/openai-draft.mjs';
 import { openRun } from '../prototype/run-packets.mjs';
 import { writeWorkerPackets } from '../worker-packets.mjs';
@@ -881,4 +882,186 @@ test('backlog defaults to 1,000 candidates and retains the highest-scoring entri
   assert.equal(entries.length, 1000);
   assert.equal(entries[0].title, 'Candidate 1000');
   assert.equal(entries.at(-1).title, 'Candidate 1');
+});
+
+test('reader domain calibration downweights robotics/embodied AI, avoids false positives, re-scores legacy backlog robotics, and caps Breakthrough Research robotics', t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'xdaily-v2-domain-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+
+  // 1. Robotics / VLA / Embodied AI receives explicit -3.5 penalty even if mentioning memory or RL keywords.
+  const vlaPaper = scoreTopicPrior({
+    title: 'Temporal Shortcut in RoboMME Memory-Augmented VLA Policies',
+    category: 'paper',
+    primaryUrl: 'https://huggingface.co/papers/2611.20001',
+    sources: ['Hugging Face Daily Papers'],
+    fanIn: 1,
+    metrics: { upvotes: 60 },
+    cards: [{ author: 'robotics_lab', tldr: 'Agent memory in bimanual manipulation policies fails under pause injection.' }],
+  });
+  assert.equal(vlaPaper.signals.domainTag, 'robotics_embodied');
+  assert.equal(vlaPaper.signals.domainAdjustment, -3.5);
+
+  const agentMemoryPaper = scoreTopicPrior({
+    title: 'WikiTrace: Linking Agent Memory Rules Back to Raw Execution Trajectories',
+    category: 'paper',
+    primaryUrl: 'https://huggingface.co/papers/2611.20002',
+    sources: ['Hugging Face Daily Papers'],
+    fanIn: 1,
+    metrics: { upvotes: 60 },
+    cards: [{ author: 'ml_lab', tldr: 'Agent memory with verifiable tool-use trajectories reduces memory-induced degradation.' }],
+  });
+  assert.equal(agentMemoryPaper.signals.domainTag, 'core_ml_systems');
+  assert.equal(agentMemoryPaper.signals.domainAdjustment, 1.2);
+  assert.ok(agentMemoryPaper.priorScore >= vlaPaper.priorScore + 4.5,
+    `Core agent/systems paper (${agentMemoryPaper.priorScore}) must clearly outrank equal-upvote VLA robotics paper (${vlaPaper.priorScore})`);
+
+  // 2. False-positive immunity: BotPsy, robots.txt, RoBERTa, robustness are NOT misclassified as robotics.
+  for (const nonRobotics of [
+    { title: 'BotPsy: 0.8B Personal Assistant Model for Edge Function Calling', cards: [{ tldr: 'Qwen3.5-0.8B assistant bot' }] },
+    { title: 'Respecting robots.txt in Distributed Web Crawlers', cards: [{ tldr: 'HTTP crawler politeness rules' }] },
+    { title: 'Robustness of RoBERTa Under Adversarial Token Perturbations', cards: [{ tldr: 'Masked LM evaluation' }] },
+  ]) {
+    assert.equal(isRoboticsEmbodiedTopic(nonRobotics), false, `Should not flag "${nonRobotics.title}" as robotics`);
+  }
+  assert.equal(isRoboticsEmbodiedTopic({ title: '具身智能双臂机械臂仿真迁移研究', cards: [{ tldr: '灵巧手抓取策略' }] }), true);
+
+  // 3. Legacy robotics items stored in backlog-pool.json with deferredByLlm:true lose llmCarryBonus and get -3.5 on recall.
+  const stateDir = path.join(dir, 'state');
+  fs.mkdirSync(stateDir, { recursive: true });
+  fs.writeFileSync(path.join(stateDir, 'backlog-pool.json'), JSON.stringify({
+    schemaVersion: 1,
+    date: '2026-11-11',
+    count: 1,
+    items: [{
+      id: 'legacy-robo-1',
+      title: 'RoboScript: World In-Context Learning on RoboTwin 2.0 Bimanual Manipulation',
+      author: 'lab',
+      category: 'paper',
+      primaryUrl: 'https://arxiv.org/abs/2611.19999',
+      allObservedUrls: ['https://arxiv.org/abs/2611.19999'],
+      publishedAt: '2026-11-09T00:00:00Z',
+      firstSeenDate: '2026-11-10',
+      fanIn: 1,
+      sources: ['Hugging Face Daily Papers'],
+      metrics: { upvotes: 80 },
+      priorScore: 7.5,
+      deferredByLlm: true,
+      deferredReason: 'Legacy uncalibrated deferral',
+      tldr: 'Sim-to-real bimanual manipulation rehearsal',
+      modelShareable: true,
+    }],
+  }, null, 2));
+
+  const loaded = loadBacklogPool(stateDir, { reportDate: '2026-11-12' });
+  const topics = [{
+    topicId: 'topic-fresh-rl',
+    title: 'GRPO Rollout Concurrency and Verifiable Reward Scaling',
+    category: 'paper',
+    primaryUrl: 'https://arxiv.org/abs/2611.20100',
+    allObservedUrls: ['https://arxiv.org/abs/2611.20100'],
+    sources: ['Hugging Face Daily Papers'],
+    fanIn: 1,
+    metrics: { upvotes: 25 },
+    dedupStatus: 'fresh',
+    cards: [{ author: 'rl_author', tldr: 'Distributed RL rollout scheduling for reasoning models' }],
+  }];
+  mergeBacklogIntoTopics(topics, loaded.entries, path.join(dir, 'store'), { reportDate: '2026-11-12' });
+  const recalledRobo = topics.find(tp => tp.title.includes('RoboScript'));
+  const freshRl = topics.find(tp => tp.title.includes('GRPO'));
+  assert.equal(recalledRobo.curationSignals.llmCarryBonus, undefined, 'Legacy deferredByLlm bonus suppressed for robotics');
+  assert.equal(recalledRobo.curationSignals.domainTag, 'robotics_embodied');
+  assert.ok(freshRl.priorScore > recalledRobo.priorScore, `Fresh RL paper (${freshRl.priorScore}) outranks recalled robotics paper (${recalledRobo.priorScore})`);
+
+  // 4. Heuristic selector prefers non-robotics research first and caps robotics at <= 1 even when flooded with robotics papers.
+  const floodedPool = [
+    ...Array.from({ length: 4 }, (_, i) => ({
+      topicId: `robo-${i + 1}`,
+      title: `Humanoid Dexterous Manipulation Policy ${i + 1}`,
+      category: 'paper',
+      primaryUrl: `https://arxiv.org/abs/2611.3000${i}`,
+      sources: [`Robotics Feed ${i + 1}`],
+      priorScore: 9.0 - i * 0.2,
+      dedupStatus: 'fresh',
+      cards: [{ author: 'robo_lab', tldr: 'Robot arm teleoperation and sim-to-real grasping' }],
+    })),
+    {
+      topicId: 'ml-paper-1',
+      title: 'Token Pooling-Aware Multi-Vector Retrieval Training',
+      category: 'paper',
+      primaryUrl: 'https://arxiv.org/abs/2611.30100',
+      sources: ['ML Feed'],
+      priorScore: 6.5,
+      dedupStatus: 'fresh',
+      cards: [{ author: 'ml_researcher', tldr: 'Straight-through estimator over hierarchical token clusters' }],
+    },
+  ];
+  const picked = selectTopicsHeuristic(floodedPool, { maxDeep: 5, maxQuick: 0, maxPerSource: 2 });
+  const pickedRobotics = picked.filter(p => p.topicId.startsWith('robo-'));
+  assert.ok(picked.some(p => p.topicId === 'ml-paper-1'), 'Core ML paper is selected ahead of extra robotics papers');
+  assert.equal(pickedRobotics.length, 1, 'At most 1 robotics paper can enter Deep Dive even under a robotics-heavy pool');
+});
+
+test('inline URLs in supplement/article bodies enter observedUrls, stale watch tweets decay, and Good/Bad editorial benchmark passes', t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'xdaily-v2-eval-suite-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+
+  // 1. Plain-text URLs inside a supplement body enter card.outboundUrls -> topic.allObservedUrls -> validateV2Digest allowlist!
+  const inlineScriptUrl = 'https://raw.githubusercontent.com/huggingface/sentence-transformers/main/examples/multi_vector_encoder/training/token_pooling/training_cached_contrastive.py';
+  const built = buildContentStore(
+    { schemaVersion: 1, collectionId: 'inline-url-col', date: '2026-11-12', sources: {} },
+    path.join(dir, 'store'),
+    {
+      supplements: [{
+        title: 'Token Pooling-Aware Training',
+        url: 'https://huggingface.co/blog/token-pooling',
+        text: `Full training recipe and script at ${inlineScriptUrl}.`,
+        publishedAt: '2026-11-11T10:00:00Z',
+        links: [],
+      }],
+    },
+  );
+  assert.ok(built.topics[0].allObservedUrls.includes(inlineScriptUrl), 'Inline body URL must be registered as observed');
+
+  // 2. Stale watch-profile tweet from months ago receives publication-age decay and never outranks fresh technical items.
+  const staleWatch = scoreTopicPrior({
+    title: 'Andrej Karpathy @karpathy · Jun 13 In awe of SpaceX',
+    category: 'general',
+    primaryUrl: 'https://x.com/karpathy/status/1',
+    publishedAt: '2026-06-13T17:45:00Z',
+    sources: ['watch:@karpathy'],
+    fanIn: 1,
+    metrics: { likes: 5000, bookmarks: 800 },
+    cards: [{ author: 'karpathy', tldr: 'Months-old tweet' }],
+  }, undefined, { reportDate: '2026-11-12' });
+  const freshTheory = scoreTopicPrior({
+    title: 'Scaling Laws and Optimization Dynamics Under Synthetic Data',
+    category: 'paper',
+    primaryUrl: 'https://arxiv.org/abs/2611.99999',
+    publishedAt: '2026-11-11T08:00:00Z',
+    sources: ['Hugging Face Daily Papers'],
+    fanIn: 1,
+    metrics: { upvotes: 35 },
+    cards: [{ author: 'theory_lab', tldr: 'Training dynamics and generalization' }],
+  }, undefined, { reportDate: '2026-11-12' });
+  assert.equal(staleWatch.signals.ageDecay, 15);
+  assert.equal(freshTheory.signals.domainTag, 'intelligence_theory');
+  assert.ok(freshTheory.priorScore > staleWatch.priorScore,
+    `Fresh training-theory paper (${freshTheory.priorScore}) must outrank 5-month-old watch tweet (${staleWatch.priorScore})`);
+
+  // 3. Good/Bad benchmark dataset (`examples/editorial-eval-cases.json`) passes 100% of assertions!
+  const bench = runEditorialBenchmarkSuite();
+  assert.equal(bench.allPassed, true, JSON.stringify(bench.results.filter(r => !r.passed), null, 2));
+  assert.ok(bench.total >= 9);
+
+  // 4. Digest-level evaluator catches excess robotics + strawman tails on uncalibrated drafts.
+  const badDigestEval = evaluateDigestMarkdown([
+    '# X AI 日报 2026-11-12',
+    '',
+    '## Breakthrough Research',
+    '- **[Lab A · Robo1]：双臂机器人抓取策略。** 11 月 10 日发布，在机械臂仿真环境中训练动作策略，成功率从 50% 提升到 80%，覆盖 50 项双臂操作任务与随机化照明条件，并在真机上做了初步演示。这只是功能开放，不代表效果已验证。 [论文](https://arxiv.org/abs/2611.00011)',
+    '- **[Lab B · Robo2]：人形机器人全身运动控制。** 11 月 10 日发布，在四足与人形机器人仿真中引入全身控制奖励，成功率提升 15 个百分点，覆盖楼梯与复杂地形测试，验证了多关节协同稳定性与零样本抗扰能力。 [论文](https://arxiv.org/abs/2611.00012)',
+  ].join('\n'));
+  assert.equal(badDigestEval.digestPassed, false);
+  assert.equal(badDigestEval.deepRoboticsCount, 2);
+  assert.ok(badDigestEval.digestIssues.some(i => i.startsWith('excess_robotics_in_deep')));
 });

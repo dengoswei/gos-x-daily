@@ -6,20 +6,32 @@ The installed Mac controller follows the user-authorized operating contract in `
 
 Read README.md and docs/RUNBOOK.md before a real run.
 
+## Target reader, 3 pillars and Hamming "Open-Door" calibration
+
+Write and curate for an **engineering-grounded Chinese AI systems and intelligence builder/thinker** (`以工程为主，但不局限于框架工程`). Anchor editorial judgment on **three pillars** plus an **open-door cross-domain window** inspired by Richard Hamming's *You and Your Research*:
+
+- **Three core pillars**:
+  1. **AI Infra & Systems (primary weight)**: Distributed training, RL / post-training systems, LLM inference and serving, compilers, GPU/TPU kernels and hardware efficiency, agent harnesses, and formal verification systems — prioritizing architectural bottlenecks and constraint inversions over routine framework flag churn.
+  2. **Intelligence: Algorithms, Training Theory & Philosophy**: Optimization and training dynamics, scaling laws, test-time compute, credit assignment, representation/memory geometry, generalization limits, mechanistic interpretability, and rigorous essays on the nature, limits, and philosophy of intelligence — including "little acorns" (clean early formulations or sharp counter-examples with high future leverage).
+  3. **World-Impact AI Products & Paradigms**: Models, products, APIs, or AI-for-Science/Math/Software deployments that materially shift real-world capability boundaries or unit economics, strictly excluding shallow wrappers, organizational/approval process talk, and customer case studies.
+- **Hamming "Open-Door" diversity vs. routine robotics**: Keep ~15–25% of Deep Dive attention open to adjacent or seemingly unrelated fields (compilers, databases/OS, information/coding/control theory, formal methods, physics/biology/economics, research-style essays) whose **underlying mechanism is structurally isomorphic (`表层无关，底层相通`)** to core problems in Infra, Intelligence, or World-Impact AI, while rejecting random "drunken-sailor" novelty lacking an actionable mechanism. Strongly downweight routine robotics, embodied AI, VLA manipulation, and sim-to-real locomotion (`robotics_embodied`): omit routine robotics papers and cap exceptional cross-domain mechanisms at no more than one item when core pillars are covered.
+- **Communication contract ("Fundamental Form, Not Penguin Trivia")**: Present each work's problem reformulation and mechanism in its clean, fundamental form without burying the essence in non-essential trivia, and **never invent cross-domain analogies or builder advice absent from the source**. Align code/kernel details, runtime/training configuration, hardware/data budget, and metric or theoretical premises. Skip textbook explanations of standard ML/systems/math terms (`MoE`, `FP8`, `KV cache`, `all-gather`, `RL rollout`, `KL`), but anchor any paper-specific codename, custom module, or benchmark mode via its functional role in 2–6 words on first mention. Use direct positive statements (`正面直述`) rather than jarring negative contrasts (`不是 X 而是 Y`, `容易混淆的是……`).
+
 ## Explain the actual idea
 
 Write for a Chinese technical reader who has not read the source. Give each story
-one central question and enough connected explanation to answer it. There is no
-sentence, word or article quota. Compact layout must not become compressed
+one central question and enough connected explanation to answer it without turning
+a single bullet into an unfocused wall of every secondary sub-topic in the post. There is no
+rigid sentence or article quota, but keep prose tight and scannable (typically 4–5 crisp sentences / ~180–280 Chinese characters for a standard Deep Dive). Compact layout must not become compressed
 reasoning. Separate unrelated papers rather than hiding them in a dense list.
 
-The bold opening should convey the idea or finding, not merely announce a release.
+The bold opening should convey the idea or finding in direct positive form, not merely announce a release.
 Explain the obstacle before the mechanism; show why that mechanism addresses the
 obstacle before introducing results. When an apparent contradiction is the point
 (for example, dependent predictions that are still computed in parallel), resolve
 it explicitly. A short concrete example is useful when it replaces an opaque
 abstraction. Label explanatory examples as illustrations rather than experiments.
-Do not assume that readers know a project's name, architecture or benchmark.
+Do not assume that readers know a project's newly coined name, custom submodule or benchmark mode.
 
 Make the central claim and reasoning reconstructable: what problem/baseline is
 addressed; what concrete method or mechanism is proposed; what conclusion, fair
@@ -27,8 +39,8 @@ comparison or innovation follows; and whether it is a measured result, capabilit
 hypothesis, interpretation, historical argument or opinion. These are editorial
 questions, not a rigid template. Mechanism insights need not have benchmark gains.
 Never invent baselines, improvements, causal links or practical advice to fill
-slots. Settings and metrics do not explain a method. Caveats should qualify, not
-bury, the main idea. The title and body must tell the same story. Keep direct URLs.
+slots, and explicitly acknowledge material unknowns when omitted by the source.
+Settings and metrics do not explain a method. State real validity conditions, ablation confounds, and simulation boundaries positively beside the claim they qualify; do not append defensive strawman disclaimers lecturing the reader against imaginary misreadings (such as warning not to multiply two separate workload metrics together after already naming both workloads). The title and body must tell the same story. Keep direct URLs.
 
 Use the result that best answers the story's question, with its relevant baseline
 and conditions. Additional settings and numbers belong in the material packet

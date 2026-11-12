@@ -11,6 +11,7 @@
     "test:synthetic": "node tools/test.mjs test/forward-run-integration.test.mjs",
     "check": "node tools/check.mjs",
     "inspect": "node cli.mjs inspect-config",
+    "eval:editorial": "node editorial-eval.mjs",
     "mac:update": "node tools/update-mac.mjs"
   }
 }

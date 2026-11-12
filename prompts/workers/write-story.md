@@ -13,12 +13,18 @@ inspect relevant figures when accessible through authorized tools. Keep failures
 and excerpts explicit. If a necessary source is unavailable, narrow or defer the
 claim rather than fill the gap from familiarity.
 
-Write connected Chinese prose: idea-led bold opening, obstacle, how the mechanism
-addresses it, then the useful result and interpretation. Explain the causal step
-a reader would otherwise have to guess. Use enough sentences; no 2-3 sentence
-target or item quota. Introduce unfamiliar terms through their role in the
-explanation. Use an illustrative example when helpful without inventing evidence.
-Preserve material comparison conditions, units, caveats and old publication dates.
+Write connected Chinese prose for an engineering-grounded AI systems & intelligence
+reader: direct, positive idea-led bold opening (`正面直述`, avoiding formulaic
+`不是 X 而是 Y`), concrete problem formulation / bottleneck (or theoretical assumption
+challenged), how the fundamental mechanism or argument addresses it (stripping away
+non-essential "penguin trivia" while never inventing unstated cross-domain claims),
+then the decisive controlled result or theoretical premise and positive validity
+condition. Explain the causal step a reader would otherwise have to guess, and keep
+one focused central question rather than summarizing peripheral sub-sections. Skip
+textbook definitions of standard ML/systems/math concepts, but introduce newly coined
+module names or benchmark modes through their functional role in 2–6 words on first
+mention. Preserve material comparison conditions, units, ablation confounds, explicit
+unknowns, and old publication dates without appending strawman negative disclaimers.
 Distinguish author claims from observations and inference. A repeated published
 URL needs an explicit 跟进 label and a verified new fact.
 

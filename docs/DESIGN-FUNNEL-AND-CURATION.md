@@ -75,14 +75,18 @@ To ensure zero data loss at ingestion while keeping screening lightweight and fi
 
 ## 4. Two-Stage Curation Rules (`config/taste.json` & `curation.mjs`)
 
-### Rule 0: Category Neutrality
-An item's format or category (`paper` vs `essay` vs `X thread`) **never** grants a quality advantage. A mediocre arXiv paper scores lower than an insightful practitioner postmortem or a high-signal researcher thread.
+### Rule 0: Format Neutrality, 3-Pillar Compass & Hamming "Open-Door" Calibration
+An item's **format** (`paper` vs `essay` vs `X thread`) **never** grants a quality advantage: a mediocre arXiv paper scores lower than an insightful practitioner postmortem or a high-signal researcher thread. At the same time, **domain relevance & intellectual diversity** are calibrated to the reader's 3-pillar compass plus Richard Hamming's *You and Your Research* "open-door" principle:
+- **AI Infra & Systems** receives the primary anchor boost (`+1.2`);
+- **Intelligence (Algorithms, Training Theory & Philosophy of Intelligence)** receives a close companion boost (`+1.0`) so narrow framework engineering never crowds out foundational algorithmic/theoretical "little acorns";
+- **World-Impact AI Products & Hamming "Open-Door" Cross-Domain Topics** stay unpenalized (`0.0`) and receive protected shortlist seats (`buildScreenShortlist` reserves fresh arrivals plus `essay`, `product/general`, `paper`, and `infra_eng` buckets inside the 48-item Stage 2 window) so structurally isomorphic ideas from adjacent fields reach semantic selection;
+- **Routine Robotics / Embodied AI / VLA Manipulation** receives an explicit downweight (`-3.5`) and a Stage 2 / heuristic cap (`0–1` item max).
 
-### Stage 1: Objective 4-Signal Prior Score ($S_{\text{prior}}$)
+### Stage 1: Objective Prior Score ($S_{\text{prior}}$)
 
 Configured declaratively in `config/taste.json`:
 
-$$S_{\text{prior}} = W_{\text{author}} + W_{\text{source}} + W_{\text{social}} + W_{\text{carry}} - P_{\text{noise}} - D_{\text{age}}$$
+$$S_{\text{prior}} = W_{\text{author}} + W_{\text{source}} + W_{\text{social}} + W_{\text{domain}} + W_{\text{carry}} - P_{\text{noise}} - D_{\text{age}}$$
 
 1. **Author Confidence ($W_{\text{author}}$)**:
    - **Tier-S (`+6.0`)**: Known high-signal researchers, systems authors, and essayists (e.g., `karpathy`, `srush_nlp`, `tri_dao`, `simonw`, `emollick`, `natolambert`, `rasbt`, `cHHillee`, `lianminzheng`, `woosuk_k`, `lilianweng`, etc.). Guaranteed entry into Stage 2 review even for standalone text threads.

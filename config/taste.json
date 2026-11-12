@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "description": "4-Signal Prior Curation Profile: (1) Author confidence, (2) Source SNR tier, (3) Social/engagement resonance, minus noise penalties. Article category determines display section only, never quality score.",
+  "description": "Prior Curation Profile: format-neutral quality signals (Author confidence, Source SNR tier, Social/engagement resonance) calibrated to a 3-pillar reader compass (AI Infra primary, Intelligence/Algorithms/Training Theory/Philosophy, World-Impact AI Products + Hamming Open-Door cross-domain structural isomorphisms; routine robotics/embodied AI downweighted) minus noise penalties.",
   "authors": {
     "tierS": {
       "boost": 6.0,
@@ -116,6 +116,11 @@
     "xEngagementLogScale": 1.6,
     "hfUpvotesLogScale": 2.0,
     "githubStarsLogScale": 1.2
+  },
+  "domainWeights": {
+    "aiInfraSystemsBoost": 1.2,
+    "intelligenceTheoryBoost": 1.0,
+    "roboticsEmbodiedPenalty": -3.5
   },
   "noisePenalties": {
     "caseStudyPr": -8.0,

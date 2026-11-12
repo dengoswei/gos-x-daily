@@ -94,6 +94,26 @@ function contentStatusOf(kind, text, item) {
 
 const NON_ARTICLE_HOSTS = /(^|\.)(x\.com|twitter\.com|t\.co|youtube\.com|youtu\.be|instagram\.com|facebook\.com|linkedin\.com)$/;
 const NON_FETCH_FINAL_HOSTS = /(^|\.)(x\.com|twitter\.com|youtube\.com|youtu\.be|instagram\.com|facebook\.com|linkedin\.com)$/;
+const INLINE_BODY_URL_RE = /https?:\/\/[^\s"'`<>)\]\\]+/g;
+const INLINE_URL_TRAILING = /[.,;:!?。，、)\]》」）】]+$/;
+
+function extractInlineBodyLinks(text = '', limit = 30) {
+  const out = [];
+  const seen = new Set();
+  for (const match of String(text ?? '').matchAll(INLINE_BODY_URL_RE)) {
+    const cleaned = match[0].replace(INLINE_URL_TRAILING, '');
+    const c = safeCanonical(cleaned);
+    if (!c || seen.has(c)) continue;
+    try {
+      const u = new URL(c);
+      if (u.protocol !== 'https:' || u.search) continue;
+      seen.add(c);
+      out.push({ href: cleaned, text: '' });
+      if (out.length >= limit) break;
+    } catch { /* ignore */ }
+  }
+  return out;
+}
 
 function xStatusKey(href) {
   if (typeof href !== 'string') return null;
@@ -339,7 +359,8 @@ export function buildContentStore(collection, storeDir, { softHistory = null, su
       ...list(ctx.quotedPosts).flatMap(q => [...(q?.url ? [{ href: q.url, text: 'quoted' }] : []), ...list(q?.links)]),
     ]);
 
-    const allLinkObjs = [...observations.flatMap(o => list(o.item?.links)), ...threadLinks]
+    const inlineBodyLinks = extractInlineBodyLinks(longestBody);
+    const allLinkObjs = [...observations.flatMap(o => list(o.item?.links)), ...threadLinks, ...inlineBodyLinks]
       .flatMap(recoverDisplayLink);
     const outboundUrls = [...new Set(
       auditDeepLinks([{ url: item.url, text: longestBody, links: allLinkObjs }], 0)
@@ -353,6 +374,13 @@ export function buildContentStore(collection, storeDir, { softHistory = null, su
     if (!attachedDeep) {
       for (const outUrl of outboundUrls) {
         if (deepByUrl.has(outUrl)) { attachedDeep = deepByUrl.get(outUrl); break; }
+      }
+    }
+
+    if (attachedDeep?.text) {
+      for (const deepLink of extractInlineBodyLinks(attachedDeep.text)) {
+        const dc = safeCanonical(deepLink.href);
+        if (dc && !outboundUrls.includes(dc)) outboundUrls.push(dc);
       }
     }
 

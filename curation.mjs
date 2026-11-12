@@ -1,12 +1,15 @@
 // Stage 1 Curation Prior Scorer + Cross-Day High-Value Backlog Pool (Evergreen Pool).
 //
-// Core principle: Article category (paper / infra / product / essay) ONLY determines
+// Core principle: Article format/category (paper / infra / product / essay) ONLY determines
 // which section an item renders under — NEVER its quality score.
-// Quality prior is driven by 4 objective signals:
+// Quality & reader-relevance prior is driven by:
 //   (1) Author confidence (known high-signal researchers / builders)
 //   (2) Source SNR tier (low-frequency high-density blogs vs high-volume aggregators)
 //   (3) Social & community endorsement (in-network fanIn, bookmarks, likes, reposts, HF upvotes)
-//   (4) Noise penalties (commercial case studies, hiring/giveaway promos)
+//   (4) Reader 3-pillar & Open-Door calibration (primary boost for AI Infra/systems, close boost for
+//       algorithms/training theory/philosophy of intelligence, neutral 0.0 open-door treatment for
+//       world-impact AI products & cross-domain structural insights, explicit penalty for routine robotics/embodied AI)
+//   (5) Noise penalties (commercial case studies, hiring/giveaway promos)
 // Stage 2 (LLM / Host Agent) then evaluates the shortlisted pool on Novel Insight,
 // Empirical Engineering Lesson, and Consequential Judgment, while unpicked high-value
 // runners-up persist into `state/backlog-pool.json` with signal accumulation and daily ranking decay.
@@ -81,9 +84,32 @@ export function aggregateTopicMetrics(cards = [], priorMetrics = null) {
   return merged;
 }
 
+const ROBOTICS_EMBODIED_RE = /\b(robot(?:ic|ics|s(?!\.txt))?|embodied\s+(?:ai|agent|agents|intelligence|reasoning|navigation|manipulation|control|learning)|vision-language-action|\bvla\b|visuomotor|manipulation\s+(?:polic(?:y|ies)|task|tasks|benchmark|learning)|dexterous\s+(?:hand|hands|manipulation|grasping)|humanoid|quadruped|locomotion|teleoperation|sim-to-real|bimanual|end-effector|gripper|robo(?:twin|mme|mimic|casa|suite|script|gen|bench|agent|mind|point|vlm|flamingo)[a-z0-9_-]*)\b|具身智能|具身\s*(?:Agent|大模型|智能|推理|导航|操作)|机械臂|双臂(?:机器人|操作|迁移)?|灵巧手|人形机器人|足式机器人|四足机器人|机器人(?:操作|抓取|控制|运动|导航|记忆|仿真|策略)/i;
+
+const CORE_ML_SYSTEMS_RE = /\b(distributed\s+training|megatron|deepspeed|fsdp|torchtitan|colossal|rlhf|ppo|grpo|dapo|reinforcement\s+learning|post-training|verifiable\s+reward|rollout|vllm|sglang|tensorrt|trt-llm|kv[\s-]?cache|paged\s*attention|flash\s*attention|speculative\s+decoding|prefill|disaggregated|megakernel|cuda|triton|pallas|cutlass|tilelang|nvfp4|mxfp4|fp8|fp4|int4|quantization|roofline|hbm\d*|all-reduce|all-gather|nccl|rdma|moe\b|mixture-of-experts|agent\s+harness|agent\s+memory|tool[\s-]use|formal\s+verification|lean\s*4)\b|分布式训练|强化学习|后训练|推理(?:优化|引擎|加速|系统)|投机解码|算子|张量并行|专家并行|流水线并行|显存带宽|形式化验证/i;
+
+const INTELLIGENCE_THEORY_RE = /\b(scaling\s+laws?|training\s+dynamics|optimization\s+(?:dynamics|landscape|theory)|loss\s+landscape|generalization|grokking|inductive\s+bias|credit\s+assignment|in-context\s+learning|continual\s+learning|meta-learning|world\s+models?|mechanistic\s+interpretability|sparse\s+autoencoders?|superposition|representation\s+(?:learning|geometry|collapse)|information\s+(?:theory|bottleneck)|coding\s+theory|minimum\s+description\s+length|kolmogorov|sample\s+complexity|convergence\s+rate|gradient\s+(?:noise|flow|variance)|curriculum\s+learning|test-time\s+(?:compute|training|scaling)|program\s+synthesis|neuro-?symbolic|arc-agi|philosophy\s+of\s+(?:ai|intelligence|mind)|nature\s+of\s+intelligence|bitter\s+lesson)\b|缩放定律|训练动力学|优化理论|泛化(?:能力|边界|理论)|归纳偏置|信用分配|上下文学习|持续学习|世界模型|机械可解释性|表征(?:学习|几何|坍缩)|信息论|编码理论|样本复杂度|测试时(?:计算|训练|扩展)|程序合成|智能(?:本质|哲学|边界)|苦涩的教训/i;
+
+function topicDomainText(topic) {
+  return `${topic?.title ?? ''} ${(topic?.entities ?? []).join(' ')} ${(topic?.cards ?? []).map(c => c.tldr ?? '').join(' ')}`;
+}
+
+/** Identifies robotics / embodied AI / VLA manipulation topics for reader-domain downweighting. */
+export function isRoboticsEmbodiedTopic(topic) {
+  return ROBOTICS_EMBODIED_RE.test(topicDomainText(topic));
+}
+
+export function isCoreMlSystemsTopic(topic) {
+  return CORE_ML_SYSTEMS_RE.test(topicDomainText(topic));
+}
+
+export function isIntelligenceTheoryTopic(topic) {
+  return INTELLIGENCE_THEORY_RE.test(topicDomainText(topic));
+}
+
 /**
- * Computes the transparent, category-neutral 4-signal Prior Score for a topic:
- *   priorScore = authorBoost + sourceBoost + socialBoost + noisePenalty - ageDecay
+ * Computes the transparent, format-neutral Prior Score for a topic:
+ *   priorScore = authorBoost + sourceBoost + socialBoost + domainAdjustment + llmCarryBonus + noisePenalty - ageDecay
  */
 export function scoreTopicPrior(topic, taste = loadTasteConfig(), { reportDate = null } = {}) {
   const tierSAuthors = new Set((taste.authors?.tierS?.handles ?? []).map(h => h.toLowerCase()));
@@ -152,7 +178,25 @@ export function scoreTopicPrior(topic, taste = loadTasteConfig(), { reportDate =
 
   const socialBoost = Number((fanInBoost + watchBoost + xMetricBoost + hfUpvotesBoost + ghStarsBoost).toFixed(2));
 
-  // (4) Noise penalties (commercial case studies, hiring/giveaways)
+  // (4) Reader 3-pillar & Open-Door domain alignment:
+  //   - AI Infra & Systems (engineering-primary anchor: +1.2)
+  //   - Intelligence: Algorithms, Training Theory & Philosophy (+1.0)
+  //   - World-Impact AI Products & Hamming Open-Door cross-domain topics (neutral 0.0: evaluated semantically)
+  //   - Routine Robotics / Embodied AI / VLA manipulation (-3.5)
+  let domainTag = 'general';
+  let domainAdjustment = 0;
+  if (isRoboticsEmbodiedTopic(topic)) {
+    domainTag = 'robotics_embodied';
+    domainAdjustment = taste.domainWeights?.roboticsEmbodiedPenalty ?? -3.5;
+  } else if (isCoreMlSystemsTopic(topic)) {
+    domainTag = 'core_ml_systems';
+    domainAdjustment = taste.domainWeights?.aiInfraSystemsBoost ?? taste.domainWeights?.coreMlSystemsBoost ?? 1.2;
+  } else if (isIntelligenceTheoryTopic(topic)) {
+    domainTag = 'intelligence_theory';
+    domainAdjustment = taste.domainWeights?.intelligenceTheoryBoost ?? 1.0;
+  }
+
+  // (5) Noise penalties (commercial case studies, hiring/giveaways)
   const textSample = `${topic.title ?? ''} ${(topic.cards ?? []).map(c => c.tldr ?? '').join(' ')}`;
   let noisePenalty = 0;
   if (topic.category === 'case_study_pr') {
@@ -162,17 +206,32 @@ export function scoreTopicPrior(topic, taste = loadTasteConfig(), { reportDate =
     noisePenalty += taste.noisePenalties?.purePromoOrHiring ?? -6.0;
   }
 
-  // Backlog age decay (if carried over from an earlier day WITHOUT new fresh observations today)
+  // Publication age decay:
+  // 1. Backlog age decay (carried over from an earlier day WITHOUT new fresh observations today)
+  // 2. Stale watch-profile / un-windowed post decay (e.g., an inactive watched account's 10 latest posts
+  //    from months ago should never outrank today's fresh technical items!)
   let ageDecay = 0;
-  if (topic.fromBacklog && !topic.refreshedToday && reportDate && topic.firstSeenDate && reportDate > topic.firstSeenDate) {
-    const daysHeld = Math.max(0, Math.round((Date.parse(reportDate) - Date.parse(topic.firstSeenDate)) / DAY_MS));
-    ageDecay = Number((daysHeld * (taste.backlog?.dailyDecay ?? 0.6)).toFixed(2));
+  if (reportDate) {
+    const reportMs = Date.parse(reportDate);
+    if (topic.fromBacklog && !topic.refreshedToday && topic.firstSeenDate && reportDate > topic.firstSeenDate) {
+      const daysHeld = Math.max(0, Math.round((reportMs - Date.parse(topic.firstSeenDate)) / DAY_MS));
+      ageDecay = Number((daysHeld * (taste.backlog?.dailyDecay ?? 0.6)).toFixed(2));
+    }
+    const pubMs = topic.publishedAt ? Date.parse(topic.publishedAt) : NaN;
+    if (Number.isFinite(pubMs) && Number.isFinite(reportMs)) {
+      const pubAgeDays = (reportMs - pubMs) / DAY_MS;
+      if (pubAgeDays > 7) {
+        const stalePenalty = Number(Math.min(15.0, (pubAgeDays - 4) * (taste.backlog?.dailyDecay ?? 0.6)).toFixed(2));
+        ageDecay = Math.max(ageDecay, stalePenalty);
+      }
+    }
   }
 
-  // Carry over prior LLM editorial boost when an already-vetted deferred gem returns on a quieter day.
-  const llmCarryBonus = topic.deferredByLlm ? 2.5 : 0;
+  // Carry over prior LLM editorial boost when an already-vetted deferred gem returns on a quieter day
+  // (suppressed for deprioritized robotics/embodied items so legacy backlog entries do not regain rank).
+  const llmCarryBonus = topic.deferredByLlm && domainTag !== 'robotics_embodied' ? 2.5 : 0;
 
-  const priorScore = Number((authorBoost + sourceBoost + socialBoost + llmCarryBonus + noisePenalty - ageDecay).toFixed(2));
+  const priorScore = Number((authorBoost + sourceBoost + socialBoost + domainAdjustment + llmCarryBonus + noisePenalty - ageDecay).toFixed(2));
 
   return {
     priorScore,
@@ -183,6 +242,7 @@ export function scoreTopicPrior(topic, taste = loadTasteConfig(), { reportDate =
       sourceBoost,
       fanIn: topic.fanIn ?? 1,
       socialBoost,
+      ...(domainAdjustment ? { domainTag, domainAdjustment } : {}),
       ...(Object.keys(m).length ? { metrics: m } : {}),
       ...(noisePenalty ? { noisePenalty } : {}),
       ...(ageDecay ? { ageDecay } : {}),

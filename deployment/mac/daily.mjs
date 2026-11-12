@@ -154,10 +154,17 @@ export async function runProductionDaily({ runDir, runsDir, dataDir, ledgerDir, 
   const previousKey = process.env.CODEX_API_KEY;
   const usagePath = path.join(runDir, 'daily-usage.jsonl');
   const log = value => fs.appendFileSync(usagePath, JSON.stringify({ at: new Date().toISOString(), ...value }) + '\n', { mode: 0o600 });
-  const role = name => ({ kind: 'openai', baseUrl: 'https://api.openai.com/v1', model: name,
-    apiKeyEnv: 'CODEX_API_KEY', maxTokens: 16000, maxTokensRetry: 24000, maxTokensParam: 'max_completion_tokens' });
+  const role = (name, maxTokens = 16000, maxTokensRetry = 24000, reasoningEffort = 'high') => ({
+    kind: 'openai', baseUrl: 'https://api.openai.com/v1', model: name,
+    apiKeyEnv: 'CODEX_API_KEY', maxTokens, maxTokensRetry, maxTokensParam: 'max_completion_tokens', reasoningEffort,
+  });
   const modelsFile = path.join(runDir, 'daily-models.json');
-  save(modelsFile, { roles: { screen: role(screenModel), compose: role(model) } });
+  save(modelsFile, {
+    roles: {
+      screen: role(screenModel, 8000, 16000, screenModel === 'gpt-6.1-terra' ? 'medium' : 'high'),
+      compose: role(model, 20000, 28000, 'high'),
+    },
+  });
   const supplementsPath = path.join(runDir, 'supplements.public.json');
   const supplements = fs.existsSync(supplementsPath) ? read(supplementsPath) : [];
   let generated;
@@ -178,9 +185,9 @@ export async function runProductionDaily({ runDir, runsDir, dataDir, ledgerDir, 
               if (url !== endpoint) return fetchImpl(url, init);
               const body = JSON.parse(init.body);
               if (init.method !== 'POST' || ![model, screenModel].includes(body.model) || body.tools) throw new Error('Unexpected daily model request');
-              log({ event: 'started', model: body.model, inputBytes: Buffer.byteLength(init.body) });
+              log({ event: 'started', model: body.model, reasoningEffort: body.reasoning_effort ?? 'high', inputBytes: Buffer.byteLength(init.body) });
               const response = await fetchImpl(endpoint, { ...init, redirect: 'error',
-                body: JSON.stringify({ ...body, reasoning_effort: 'high', service_tier: 'default', store: false }) });
+                body: JSON.stringify({ ...body, reasoning_effort: body.reasoning_effort ?? 'high', service_tier: 'default', store: false }) });
               const payload = await response.clone().json().catch(() => null);
               log({ event: 'response', status: response.status, requestId: payload?.id, model: payload?.model, usage: payload?.usage });
               if (response.ok && payload?.model !== body.model && !payload?.model?.startsWith(body.model + '-')) throw new Error('Unexpected daily model response');

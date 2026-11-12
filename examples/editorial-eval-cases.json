@@ -1,0 +1,255 @@
+{
+  "schemaVersion": 1,
+  "description": "Shared Good/Bad ground-truth benchmark for gos-x-daily reader alignment: 3 Pillars (AI Infra, Intelligence/Algorithms/Training Theory/Philosophy, World-Impact AI Products) + Hamming Open-Door cross-domain structural isomorphisms, robotics downweighting, stale watch decay, and positive concise prose.",
+  "curationCases": [
+    {
+      "id": "curation-01-robotics-flood-vs-3-pillars-and-open-door",
+      "description": "Under a pool flooded with high-upvote VLA/robotics papers and stale months-old watch tweets, curation prioritizes AI Infra, Intelligence/Training Theory, World-Impact Products, and a Hamming Open-Door compiler/hardware essay while capping robotics at <= 1 and demoting stale watch posts.",
+      "reportDate": "2026-11-12",
+      "maxDeep": 6,
+      "maxQuick": 2,
+      "maxRoboticsDeep": 1,
+      "topics": [
+        {
+          "topicId": "good-infra-megakernel",
+          "title": "Optimizing 816B MoE Decode with a Single 62-Layer Pallas Megakernel",
+          "category": "infra_eng",
+          "primaryUrl": "https://pytorch.org/blog/megakernel-moe",
+          "publishedAt": "2026-11-10T12:00:00Z",
+          "sources": ["PyTorch blog"],
+          "fanIn": 2,
+          "metrics": { "bookmarks": 80, "likes": 190 },
+          "dedupStatus": "fresh",
+          "cards": [{ "author": "PyTorch", "tldr": "Overlaps HBM weight DMA with cross-chip all-gather in speculative decoding." }]
+        },
+        {
+          "topicId": "good-intelligence-theory",
+          "title": "Rewriting Scaling Laws and Optimization Dynamics Under Synthetic Data Constraints",
+          "category": "paper",
+          "primaryUrl": "https://arxiv.org/abs/2611.90001",
+          "publishedAt": "2026-11-11T04:00:00Z",
+          "sources": ["Hugging Face Daily Papers"],
+          "fanIn": 1,
+          "metrics": { "upvotes": 45 },
+          "dedupStatus": "fresh",
+          "cards": [{ "author": "theory_lab", "tldr": "Proves generalization phase transition and gradient variance floor in iterative post-training." }]
+        },
+        {
+          "topicId": "good-world-impact-product",
+          "title": "AlphaProof Code: Machine-Checked Formal Verification for Production Cryptographic Implementations",
+          "category": "product",
+          "primaryUrl": "https://deepmind.google/blog/alphaproof-code",
+          "publishedAt": "2026-11-10T16:00:00Z",
+          "sources": ["Google DeepMind blog"],
+          "fanIn": 2,
+          "metrics": { "bookmarks": 95, "likes": 240 },
+          "dedupStatus": "fresh",
+          "cards": [{ "author": "GoogleDeepMind", "tldr": "Multi-agent Lean 4 proofs verify compiled protocol code and catch reintroduced real vulnerabilities." }]
+        },
+        {
+          "topicId": "good-hamming-open-door",
+          "title": "Zen 6 Microarchitecture & Branch Predictor State Compression",
+          "category": "essay",
+          "primaryUrl": "https://chipsandcheese.com/p/zen6-state-compression",
+          "publishedAt": "2026-11-11T08:00:00Z",
+          "sources": ["Chips and Cheese"],
+          "fanIn": 1,
+          "metrics": { "bookmarks": 40 },
+          "dedupStatus": "fresh",
+          "cards": [{ "author": "chipsandcheese", "tldr": "Hardware state indexing trade-offs structurally analogous to KV cache compression." }]
+        },
+        {
+          "topicId": "bad-stale-watch-june",
+          "title": "Andrej Karpathy @karpathy · Jun 13 In awe of SpaceX launch",
+          "category": "general",
+          "primaryUrl": "https://x.com/karpathy/status/100001",
+          "publishedAt": "2026-06-13T17:45:00Z",
+          "sources": ["watch:@karpathy"],
+          "fanIn": 1,
+          "metrics": { "likes": 5000, "bookmarks": 900 },
+          "dedupStatus": "fresh",
+          "cards": [{ "author": "karpathy", "tldr": "Five-month-old non-technical tweet captured from top-10 profile scrape." }]
+        },
+        {
+          "topicId": "bad-robotics-1",
+          "title": "RoboScript: Bimanual Robot Manipulation via Sim-to-Real Rehearsal",
+          "category": "paper",
+          "primaryUrl": "https://huggingface.co/papers/2611.90011",
+          "publishedAt": "2026-11-10T06:00:00Z",
+          "sources": ["Hugging Face Daily Papers"],
+          "fanIn": 1,
+          "metrics": { "upvotes": 95 },
+          "dedupStatus": "fresh",
+          "cards": [{ "author": "robo_lab_1", "tldr": "Sim-to-real bimanual robot arm manipulation on RoboTwin 2.0." }]
+        },
+        {
+          "topicId": "bad-robotics-2",
+          "title": "DexForesight: Dexterous Hand Grasping Policies with Spatial Foresight",
+          "category": "paper",
+          "primaryUrl": "https://huggingface.co/papers/2611.90012",
+          "publishedAt": "2026-11-10T07:00:00Z",
+          "sources": ["Hugging Face Daily Papers"],
+          "fanIn": 1,
+          "metrics": { "upvotes": 88 },
+          "dedupStatus": "fresh",
+          "cards": [{ "author": "robo_lab_2", "tldr": "Dexterous manipulation policy for multi-finger robot grippers." }]
+        },
+        {
+          "topicId": "bad-case-study-pr",
+          "title": "Customer Story: How Airline Boosted Support Tickets with ChatGPT",
+          "category": "case_study_pr",
+          "primaryUrl": "https://openai.com/index/airline-customer-story",
+          "publishedAt": "2026-11-11T09:00:00Z",
+          "sources": ["OpenAI News"],
+          "fanIn": 1,
+          "dedupStatus": "fresh",
+          "cards": [{ "author": "OpenAI", "tldr": "Enterprise customer case study." }]
+        }
+      ],
+      "expect": {
+        "mustSelect": [
+          "good-infra-megakernel",
+          "good-intelligence-theory",
+          "good-world-impact-product",
+          "good-hamming-open-door"
+        ],
+        "mustExclude": [
+          "bad-case-study-pr",
+          "bad-stale-watch-june"
+        ],
+        "maxRoboticsDeep": 1,
+        "scoreOrder": [
+          ["good-infra-megakernel", "bad-stale-watch-june"],
+          ["good-intelligence-theory", "bad-robotics-1"],
+          ["good-hamming-open-door", "bad-robotics-2"]
+        ]
+      }
+    },
+    {
+      "id": "curation-02-shortlist-open-door-protection-under-backlog-pressure",
+      "description": "When 45+ historical backlog items have moderately high scores, buildScreenShortlist still protects fresh arrivals, philosophy/theory essays, and world-impact products so Stage 2 never degenerates into a closed-door backlog echo chamber.",
+      "reportDate": "2026-11-12",
+      "shortlistLimit": 24,
+      "topics": [
+        {
+          "topicId": "fresh-intelligence-philosophy",
+          "title": "The Missing Quadrant in Machine Understanding and Agency",
+          "category": "essay",
+          "primaryUrl": "https://example.org/essays/intelligence-quadrant",
+          "publishedAt": "2026-11-11T15:00:00Z",
+          "fromBacklog": false,
+          "sources": ["Substack"],
+          "fanIn": 1,
+          "dedupStatus": "fresh",
+          "cards": [{ "author": "essayist", "tldr": "Philosophical analysis of nature of intelligence, agency, and world models." }]
+        },
+        {
+          "topicId": "fresh-world-product",
+          "title": "Gemini Decisions API: Single-Forward Calibrated Multimodal Scoring",
+          "category": "product",
+          "primaryUrl": "https://blog.google/decisions-api",
+          "publishedAt": "2026-11-11T12:00:00Z",
+          "fromBacklog": false,
+          "sources": ["Google AI blog"],
+          "fanIn": 1,
+          "dedupStatus": "fresh",
+          "cards": [{ "author": "Google", "tldr": "Scores 1,000 binary/choice questions in one forward pass at $0.10/1M input tokens." }]
+        },
+        { "topicId": "bg-01", "title": "Backlog Infra 01", "category": "infra_eng", "primaryUrl": "https://eng.example/1", "publishedAt": "2026-11-09T10:00:00Z", "firstSeenDate": "2026-11-11", "fromBacklog": true, "deferredByLlm": true, "sources": ["Anthropic Engineering"], "dedupStatus": "fresh", "cards": [{ "author": "a", "tldr": "CUDA kernel" }] },
+        { "topicId": "bg-02", "title": "Backlog Infra 02", "category": "infra_eng", "primaryUrl": "https://eng.example/2", "publishedAt": "2026-11-09T10:00:00Z", "firstSeenDate": "2026-11-11", "fromBacklog": true, "deferredByLlm": true, "sources": ["Anthropic Engineering"], "dedupStatus": "fresh", "cards": [{ "author": "a", "tldr": "CUDA kernel" }] },
+        { "topicId": "bg-03", "title": "Backlog Infra 03", "category": "infra_eng", "primaryUrl": "https://eng.example/3", "publishedAt": "2026-11-09T10:00:00Z", "firstSeenDate": "2026-11-11", "fromBacklog": true, "deferredByLlm": true, "sources": ["Anthropic Engineering"], "dedupStatus": "fresh", "cards": [{ "author": "a", "tldr": "CUDA kernel" }] },
+        { "topicId": "bg-04", "title": "Backlog Infra 04", "category": "infra_eng", "primaryUrl": "https://eng.example/4", "publishedAt": "2026-11-09T10:00:00Z", "firstSeenDate": "2026-11-11", "fromBacklog": true, "deferredByLlm": true, "sources": ["Anthropic Engineering"], "dedupStatus": "fresh", "cards": [{ "author": "a", "tldr": "CUDA kernel" }] },
+        { "topicId": "bg-05", "title": "Backlog Infra 05", "category": "infra_eng", "primaryUrl": "https://eng.example/5", "publishedAt": "2026-11-09T10:00:00Z", "firstSeenDate": "2026-11-11", "fromBacklog": true, "deferredByLlm": true, "sources": ["Anthropic Engineering"], "dedupStatus": "fresh", "cards": [{ "author": "a", "tldr": "CUDA kernel" }] },
+        { "topicId": "bg-06", "title": "Backlog Infra 06", "category": "infra_eng", "primaryUrl": "https://eng.example/6", "publishedAt": "2026-11-09T10:00:00Z", "firstSeenDate": "2026-11-11", "fromBacklog": true, "deferredByLlm": true, "sources": ["Anthropic Engineering"], "dedupStatus": "fresh", "cards": [{ "author": "a", "tldr": "CUDA kernel" }] },
+        { "topicId": "bg-07", "title": "Backlog Infra 07", "category": "infra_eng", "primaryUrl": "https://eng.example/7", "publishedAt": "2026-11-09T10:00:00Z", "firstSeenDate": "2026-11-11", "fromBacklog": true, "deferredByLlm": true, "sources": ["Anthropic Engineering"], "dedupStatus": "fresh", "cards": [{ "author": "a", "tldr": "CUDA kernel" }] },
+        { "topicId": "bg-08", "title": "Backlog Infra 08", "category": "infra_eng", "primaryUrl": "https://eng.example/8", "publishedAt": "2026-11-09T10:00:00Z", "firstSeenDate": "2026-11-11", "fromBacklog": true, "deferredByLlm": true, "sources": ["Anthropic Engineering"], "dedupStatus": "fresh", "cards": [{ "author": "a", "tldr": "CUDA kernel" }] },
+        { "topicId": "bg-09", "title": "Backlog Infra 09", "category": "infra_eng", "primaryUrl": "https://eng.example/9", "publishedAt": "2026-11-09T10:00:00Z", "firstSeenDate": "2026-11-11", "fromBacklog": true, "deferredByLlm": true, "sources": ["Anthropic Engineering"], "dedupStatus": "fresh", "cards": [{ "author": "a", "tldr": "CUDA kernel" }] },
+        { "topicId": "bg-10", "title": "Backlog Infra 10", "category": "infra_eng", "primaryUrl": "https://eng.example/10", "publishedAt": "2026-11-09T10:00:00Z", "firstSeenDate": "2026-11-11", "fromBacklog": true, "deferredByLlm": true, "sources": ["Anthropic Engineering"], "dedupStatus": "fresh", "cards": [{ "author": "a", "tldr": "CUDA kernel" }] },
+        { "topicId": "bg-11", "title": "Backlog Infra 11", "category": "infra_eng", "primaryUrl": "https://eng.example/11", "publishedAt": "2026-11-09T10:00:00Z", "firstSeenDate": "2026-11-11", "fromBacklog": true, "deferredByLlm": true, "sources": ["Anthropic Engineering"], "dedupStatus": "fresh", "cards": [{ "author": "a", "tldr": "CUDA kernel" }] },
+        { "topicId": "bg-12", "title": "Backlog Infra 12", "category": "infra_eng", "primaryUrl": "https://eng.example/12", "publishedAt": "2026-11-09T10:00:00Z", "firstSeenDate": "2026-11-11", "fromBacklog": true, "deferredByLlm": true, "sources": ["Anthropic Engineering"], "dedupStatus": "fresh", "cards": [{ "author": "a", "tldr": "CUDA kernel" }] },
+        { "topicId": "bg-13", "title": "Backlog Infra 13", "category": "infra_eng", "primaryUrl": "https://eng.example/13", "publishedAt": "2026-11-09T10:00:00Z", "firstSeenDate": "2026-11-11", "fromBacklog": true, "deferredByLlm": true, "sources": ["Anthropic Engineering"], "dedupStatus": "fresh", "cards": [{ "author": "a", "tldr": "CUDA kernel" }] },
+        { "topicId": "bg-14", "title": "Backlog Infra 14", "category": "infra_eng", "primaryUrl": "https://eng.example/14", "publishedAt": "2026-11-09T10:00:00Z", "firstSeenDate": "2026-11-11", "fromBacklog": true, "deferredByLlm": true, "sources": ["Anthropic Engineering"], "dedupStatus": "fresh", "cards": [{ "author": "a", "tldr": "CUDA kernel" }] },
+        { "topicId": "bg-15", "title": "Backlog Infra 15", "category": "infra_eng", "primaryUrl": "https://eng.example/15", "publishedAt": "2026-11-09T10:00:00Z", "firstSeenDate": "2026-11-11", "fromBacklog": true, "deferredByLlm": true, "sources": ["Anthropic Engineering"], "dedupStatus": "fresh", "cards": [{ "author": "a", "tldr": "CUDA kernel" }] },
+        { "topicId": "bg-16", "title": "Backlog Infra 16", "category": "infra_eng", "primaryUrl": "https://eng.example/16", "publishedAt": "2026-11-09T10:00:00Z", "firstSeenDate": "2026-11-11", "fromBacklog": true, "deferredByLlm": true, "sources": ["Anthropic Engineering"], "dedupStatus": "fresh", "cards": [{ "author": "a", "tldr": "CUDA kernel" }] },
+        { "topicId": "bg-17", "title": "Backlog Infra 17", "category": "infra_eng", "primaryUrl": "https://eng.example/17", "publishedAt": "2026-11-09T10:00:00Z", "firstSeenDate": "2026-11-11", "fromBacklog": true, "deferredByLlm": true, "sources": ["Anthropic Engineering"], "dedupStatus": "fresh", "cards": [{ "author": "a", "tldr": "CUDA kernel" }] },
+        { "topicId": "bg-18", "title": "Backlog Infra 18", "category": "infra_eng", "primaryUrl": "https://eng.example/18", "publishedAt": "2026-11-09T10:00:00Z", "firstSeenDate": "2026-11-11", "fromBacklog": true, "deferredByLlm": true, "sources": ["Anthropic Engineering"], "dedupStatus": "fresh", "cards": [{ "author": "a", "tldr": "CUDA kernel" }] },
+        { "topicId": "bg-19", "title": "Backlog Infra 19", "category": "infra_eng", "primaryUrl": "https://eng.example/19", "publishedAt": "2026-11-09T10:00:00Z", "firstSeenDate": "2026-11-11", "fromBacklog": true, "deferredByLlm": true, "sources": ["Anthropic Engineering"], "dedupStatus": "fresh", "cards": [{ "author": "a", "tldr": "CUDA kernel" }] },
+        { "topicId": "bg-20", "title": "Backlog Infra 20", "category": "infra_eng", "primaryUrl": "https://eng.example/20", "publishedAt": "2026-11-09T10:00:00Z", "firstSeenDate": "2026-11-11", "fromBacklog": true, "deferredByLlm": true, "sources": ["Anthropic Engineering"], "dedupStatus": "fresh", "cards": [{ "author": "a", "tldr": "CUDA kernel" }] },
+        { "topicId": "bg-21", "title": "Backlog Infra 21", "category": "infra_eng", "primaryUrl": "https://eng.example/21", "publishedAt": "2026-11-09T10:00:00Z", "firstSeenDate": "2026-11-11", "fromBacklog": true, "deferredByLlm": true, "sources": ["Anthropic Engineering"], "dedupStatus": "fresh", "cards": [{ "author": "a", "tldr": "CUDA kernel" }] },
+        { "topicId": "bg-22", "title": "Backlog Infra 22", "category": "infra_eng", "primaryUrl": "https://eng.example/22", "publishedAt": "2026-11-09T10:00:00Z", "firstSeenDate": "2026-11-11", "fromBacklog": true, "deferredByLlm": true, "sources": ["Anthropic Engineering"], "dedupStatus": "fresh", "cards": [{ "author": "a", "tldr": "CUDA kernel" }] },
+        { "topicId": "bg-23", "title": "Backlog Infra 23", "category": "infra_eng", "primaryUrl": "https://eng.example/23", "publishedAt": "2026-11-09T10:00:00Z", "firstSeenDate": "2026-11-11", "fromBacklog": true, "deferredByLlm": true, "sources": ["Anthropic Engineering"], "dedupStatus": "fresh", "cards": [{ "author": "a", "tldr": "CUDA kernel" }] },
+        { "topicId": "bg-24", "title": "Backlog Infra 24", "category": "infra_eng", "primaryUrl": "https://eng.example/24", "publishedAt": "2026-11-09T10:00:00Z", "firstSeenDate": "2026-11-11", "fromBacklog": true, "deferredByLlm": true, "sources": ["Anthropic Engineering"], "dedupStatus": "fresh", "cards": [{ "author": "a", "tldr": "CUDA kernel" }] }
+      ],
+      "expect": {
+        "mustReachShortlist": [
+          "fresh-intelligence-philosophy",
+          "fresh-world-product"
+        ]
+      }
+    }
+  ],
+  "proseCases": [
+    {
+      "id": "prose-good-01-infra-megakernel",
+      "label": "GOOD: AI Infra Deep Dive — positive framing, anchored DFlash2 verify role, tight ~295 chars, positive validity condition",
+      "tier": "deep",
+      "expectPass": true,
+      "bullet": "- **[PyTorch / SGLang-TorchTPU · Muse Spark Open 推理优化]：将 62 层 MoE 合并为单个 Pallas megakernel，重叠权重预取与跨芯通信，把低并发解码压近带宽下限。** 11 月 10 日发布的实践针对四芯片 TPU v7（八路张量并行、NVFP4 专家权重 + FP8 计算）部署 816B／激活 42B MoE 的小 batch 场景：逐层 kernel 与通信边界打断权重流，使投机解码草稿验证阶段（DFlash2 verify）耗时达权重流式读取下限的 2.9 倍。新实现用单次 Pallas 调用跑完 62 层，以多路 DMA 预取权重并与 all-gather 分片到达流水交叠，同时利用该模型 QK 归一化的分数上界 43.8 省去防溢出 running max。在同用 DFlash2 的 GSM8K 评测中，单请求每输出 token 耗时从 3.78ms 降至 1.95ms（1.94x），配套主机 L2 HiCache 在多轮 agent 流量下最高提升吞吐 77%（去 running max 依赖模型具备可证明的分数上界）。 [原文](https://pytorch.org/blog/optimizing-muse-spark-open-on-tpu-v7-with-sglang-torchtpu/) · [代码](https://github.com/sgl-project/sglang-torchtpu)"
+    },
+    {
+      "id": "prose-good-02-intelligence-theory",
+      "label": "GOOD: Intelligence / Training Theory Deep Dive — problem inversion, clean fundamental form, explicit premise",
+      "tier": "deep",
+      "expectPass": true,
+      "bullet": "- **[HF Papers · Post-Training Weight Pruning]：在后训练阶段按梯度信噪比裁剪小幅更新参数，降低微调遗忘并提升域外泛化。** 11 月 10 日提交的研究针对指令与推理微调中的分布漂移瓶颈：全参数微调在拟合窄域格式时，大量低信噪比梯度更新会覆盖预训练形成的基础表征。作者在每次检查点后保留累积曲率贡献最高的稀疏增量，将其余接近随机游走的参数回滚至预训练权重，无需额外正则超参。在 7B 与 32B 模型的数学与代码后训练对照中，回滚 60% 低信噪比增量使目标任务准确率持平微增（MATH +1.4），同时将通用知识基准 MMLU-Pro 的退化幅度压缩逾一半（结论基于单阶段 SFT/GRPO 实验，持续多轮在线学习的累积效应尚未验证）。 [论文](https://arxiv.org/abs/2611.00001) · [代码](https://github.com/example/weight-delete)"
+    },
+    {
+      "id": "prose-good-03-hamming-open-door-essay",
+      "label": "GOOD: Hamming Open-Door Cross-Domain Essay — real-system calibration loop, anchored Smithy API model",
+      "tier": "deep",
+      "expectPass": true,
+      "bullet": "- **[AWS / Swami Sivasubramanian · AWS Emulator]：先用真实云服务校准端到端行为测试，再驱动 agent 实现本地仿真，为自动生成代码建立可执行正确性判据。** 11 月 11 日发布的工程复盘针对大规模服务仿真的语义缺口：仅靠输入输出类型签名无法刻画可见性超时、并发状态转换与错误语义，而人工维护数百项服务测试环境成本过高。系统从 AWS 接口定义模型（Smithy API 模型）自动生成行为测试，先在真实 AWS 上运行修正直至通过（如核验 SQS 消息在可见性超时前对其他消费者隐藏），再让编码 agent 实现本地服务直至通过同一测试集与多安全 agent 合并门禁。发布版以 CC0 协议免费开放离线运行，覆盖逾 200 项服务，尚未与真实云对齐的边界持续公开在仓库 `things-that-do-not-work` 清单中。 [原文](https://www.allthingsdistributed.com/2026/11/aws-emulator-and-the-engineers-job-when-agents-write-the-code.html)"
+    },
+    {
+      "id": "prose-good-04-quick-hit",
+      "label": "GOOD: Concise Quick Hit — 2 crisp sentences with concrete spec and pricing",
+      "tier": "quick",
+      "expectPass": true,
+      "bullet": "- **Google · Gemini Decisions API**：11 月 11 日上线，由 `gemini-decision-1` 对最长 256K token 的共享多模态输入做单次前向评分，最多并行返回 1,000 个独立是非／多选题的概率与置信度；定价为每百万输入 token 0.10 美元且免输出 token 费用。 [官方介绍](https://blog.google/innovation-and-ai/technology/developers-tools/gemini-decisions-api/)"
+    },
+    {
+      "id": "prose-bad-01-bloated-cold-jargon-and-strawman-tail",
+      "label": "BAD (from 11-12 baseline): >450 chars wall of text + cold unanchored 'verify耗时' + strawman negative disclaimer tail",
+      "tier": "deep",
+      "expectPass": false,
+      "expectIssues": [
+        "bloated_length",
+        "strawman_disclaimer_tail",
+        "cold_unanchored_jargon"
+      ],
+      "bullet": "- **[SGLang-TorchTPU · Muse Spark Open 推理优化]：用覆盖 62 层的整步 megakernel 重叠权重读取、KV 访问与跨设备通信，显著缩短低并发解码时间。** PyTorch 11 月 10 日的工程文章展示了如何在单台四芯片 TPU v7 主机上部署 816B 参数、每 token 约激活 42B 参数的 MoE：四颗芯片暴露为八个设备，采用八路张量并行、NVFP4 专家权重与 FP8 计算。小 batch 下的主要瓶颈是权重流被逐层 kernel 和通信边界打断；原生路径虽已有算子融合，verify 耗时仍达权重读取理论下限的 2.9 倍。新实现让每个设备用一个 Pallas 程序执行全部 62 层，通过多路 DMA 预取权重、直接向远端设备写入部分结果，并把后续投影计算与 all-gather 的分片到达过程交叠。注意力还有一项模型专属优化：利用 QK 归一化给出的分数绝对值上界 43.8，移除用于防溢出的 running max，使不同 KV 块可以独立流水执行。在较早 Muse Spark checkpoint 的 GSM8K 测试中，两条路径均使用 DFlash2，单请求每输出 token 耗时从 3.78ms 降至 1.95ms，约快 1.94 倍；双请求为 1.85 倍，并发升高后收益收窄。容量侧，sequence-on-lane 布局让 FP8 KV 真正减半，主机内存 L2 HiCache 在 agent 流量上最高提升吞吐 77%。这些结果分别对应低并发解码和多轮缓存负载，不能合并为一个统一加速倍数；无 running max 的实现也依赖该模型可证明的分数上界。 [原文](https://pytorch.org/blog/optimizing-muse-spark-open-on-tpu-v7-with-sglang-torchtpu/)"
+    },
+    {
+      "id": "prose-bad-02-jarring-negative-contrast-and-pipeline-jargon",
+      "label": "BAD: Jarring negative framing ('不是 X 而是 Y' / '容易混淆的是') + leaked pipeline phrasing ('所给摘录')",
+      "tier": "deep",
+      "expectPass": false,
+      "expectIssues": [
+        "jarring_negative_contrast",
+        "pipeline_jargon"
+      ],
+      "bullet": "- **[Lab · AgentMem]：不是简单做向量检索，而是把经验变成图结构。** 11 月 11 日发布的研究针对长程任务退化，容易混淆的是它并不修改模型权重，而是通过三层索引回查历史记录，平均得分从 79.5 升至 90.2；但所给摘录没有说明在线写入延迟。 [论文](https://arxiv.org/abs/2611.14320)"
+    },
+    {
+      "id": "prose-bad-03-product-strawman-disclaimer-and-missing-bracket-lead",
+      "label": "BAD: Missing [Entity · Project] bracket lead + hollow product strawman disclaimer",
+      "tier": "deep",
+      "expectPass": false,
+      "expectIssues": [
+        "missing_entity_bracket_bold_lead",
+        "strawman_disclaimer_tail"
+      ],
+      "bullet": "- **AlphaProof Code 形式化验证发布**：11 月 10 日 Google DeepMind 发布多智能体形式化证明工具，用 Gemini Carbon 驱动的智能体在四周内生成超过 600 万行 Lean 代码验证 Signal 核心加密协议，并在隔离测试中找回两处历史已修复漏洞。这只是功能开放，不代表效果已验证，不能将其扩展为整个应用的安全保证。 [原文](https://deepmind.google/blog/introducing-alphaproof-code/)"
+    }
+  ]
+}

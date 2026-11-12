@@ -100,17 +100,21 @@ async function postJson(fetchImpl, url, headers, body) {
 }
 
 // Covers OpenAI, DeepSeek and any OpenAI-compatible gateway; prefix caching there is automatic.
+const REASONING_EFFORTS = ['low', 'medium', 'high'];
 function openaiProvider(spec, fetchImpl) {
   if (typeof spec.baseUrl !== 'string' || typeof spec.model !== 'string') throw new Error('openai provider needs baseUrl and model');
   const tokenParam = spec.maxTokensParam ?? 'max_tokens';
   if (!TOKEN_PARAMS.includes(tokenParam)) throw new Error(`maxTokensParam must be one of: ${TOKEN_PARAMS.join(', ')}`);
+  if (spec.reasoningEffort !== undefined && !REASONING_EFFORTS.includes(spec.reasoningEffort)) {
+    throw new Error(`reasoningEffort must be one of: ${REASONING_EFFORTS.join(', ')}`);
+  }
   return async ({ system, prompt, maxTokens }) => {
     const key = apiKey(spec);
     const started = Date.now();
     const limit = maxTokens ?? spec.maxTokens;
     const messages = [...(system ? [{ role: 'system', content: system }] : []), { role: 'user', content: prompt }];
     const payload = await postJson(fetchImpl, `${trimSlash(spec.baseUrl)}/chat/completions`, { authorization: `Bearer ${key}` },
-      { model: spec.model, messages, ...(limit ? { [tokenParam]: limit } : {}) });
+      { model: spec.model, messages, ...(limit ? { [tokenParam]: limit } : {}), ...(spec.reasoningEffort ? { reasoning_effort: spec.reasoningEffort } : {}) });
     const choice = payload?.choices?.[0];
     if (choice?.finish_reason === 'content_filter') throw new Error('Model response was filtered');
     const content = choice?.message?.content;
@@ -179,7 +183,7 @@ export function createProvider(spec, runtime = {}) {
     if (spec.kind === 'exec') throw new Error('maxTokensRetry needs an openai or anthropic provider; an exec command sets its own limit');
     if (Number.isInteger(spec.maxTokens) && spec.maxTokensRetry <= spec.maxTokens) throw new Error('maxTokensRetry must be larger than maxTokens');
   }
-  const describe = () => ({ kind: spec.kind, ...(spec.model ? { model: spec.model } : {}), ...(spec.kind === 'exec' ? { command: spec.command[0], parse: spec.parse ?? 'text' } : { baseUrl: trimSlash(spec.baseUrl ?? 'https://api.anthropic.com') }) });
+  const describe = () => ({ kind: spec.kind, ...(spec.model ? { model: spec.model } : {}), ...(spec.reasoningEffort ? { reasoningEffort: spec.reasoningEffort } : {}), ...(spec.kind === 'exec' ? { command: spec.command[0], parse: spec.parse ?? 'text' } : { baseUrl: trimSlash(spec.baseUrl ?? 'https://api.anthropic.com') }) });
   return {
     kind: spec.kind, concurrency,
     maxTokens: Number.isInteger(spec.maxTokens) ? spec.maxTokens : null,

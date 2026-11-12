@@ -22,14 +22,25 @@ disclose its outcome, including failure.
 Relevant received Gmail, official blogs, feeds, configured Xiaohongshu profiles and optional
 Substack are supplements. Failed optional access does not mean there was no new content.
 
-Read every collected candidate. Prefer substantive original announcements, opinions,
-technical discussion and lessons, research, demos and first-party releases. Skip ads,
-generic promotion, personal chatter and engagement bait. No item or company-blog quota.
+Read every collected candidate. Curate for an engineering-grounded AI builder and
+thinker (`以工程为主，兼顾算法、训练理论、智能哲学与世界级产品影响`): anchor on (1) AI Infra &
+systems, (2) Intelligence (algorithms, training dynamics/theory, interpretability,
+philosophy of intelligence), and (3) World-Impact AI products & scientific/formal
+paradigms, while keeping a Hamming-style "open door" (1–2 slots when warranted) for
+adjacent or seemingly unrelated work whose underlying mechanism is structurally
+isomorphic (`底层相通`). Strongly downweight routine robotics, embodied AI, and VLA
+manipulation papers (at most one exceptional transferable mechanism when core
+pillars are covered). Skip ads, generic promotion, shallow wrappers, organizational
+process fluff, personal chatter and engagement bait. No item or company-blog quota.
 
 Write for a Chinese technical reader who has not read the source. Lead with its actual
-central claim, capability, finding or engineering lesson. Each main item needs a direct
-original URL (no URL means no main item) and a coherent explanation. Use as many
-sentences as the idea needs, without an arbitrary length target. Separate
+central claim, problem inversion, theoretical insight, capability or engineering lesson in
+direct positive prose (`正面直述`), recast in its clean fundamental form without non-essential
+trivia, formulaic negative framing (`不是 X 而是 Y`), invented cross-domain extrapolations, or
+defensive strawman disclaimer tails. Anchor paper-specific codenames or custom submodules via
+their role on first mention. Each main item needs a direct
+original URL (no URL means no main item) and a coherent, focused explanation around one central question. Use as many
+sentences as the idea needs, without an arbitrary length target or multi-topic bloat. Separate
 unrelated papers rather than compressing them into a list of names or metrics.
 
 Start with a bold, idea-led opening: what is the actual insight or change? Explain

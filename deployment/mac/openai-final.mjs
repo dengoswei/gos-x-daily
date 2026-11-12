@@ -248,7 +248,6 @@ export async function finalizeOpenAI({ runsDir, runDir, keyFile, ledgerDir, revi
       const inputSha256 = sha256(serialized);
       if (inputBytes > 1200000) throw new Error('API final request exceeds byte budget');
       const startedAt = checkedAt();
-      const signal = AbortSignal.timeout(requestTimeoutMs);
       const log = (event, fields = {}) => fs.appendFileSync(usagePath, JSON.stringify({
         attempt, stage, model, event, inputBytes, inputSha256, startedAt, ...fields,
       }) + '\n', { mode: 0o600 });
@@ -278,31 +277,47 @@ export async function finalizeOpenAI({ runsDir, runDir, keyFile, ledgerDir, revi
         log('response', { ...saved, inputSha256, responseSha256: sha256(content), reusedFrom: resume });
         return result;
       }
-      log('started', { timeoutMs: requestTimeoutMs });
+      const maxCompletionTokens = /fidelity/.test(stage) ? 28000 : 20000;
+      const maxTransportAttempts = 2;
       let response;
       let phase = 'response_headers';
       let payload;
       let headersAt;
       let httpRequestId;
-      try {
-        response = await fetchImpl(endpoint, {
-          method: 'POST', redirect: 'error', signal,
-          headers: { authorization: 'Bearer ' + key, 'content-type': 'application/json' },
-          body: JSON.stringify({ model, messages, reasoning_effort: 'high', service_tier: 'default',
-            max_completion_tokens: 20000, response_format: { type: 'json_object' }, store: false }),
-        });
-        headersAt = checkedAt();
-        httpRequestId = response.headers.get('x-request-id') ?? undefined;
-        phase = 'response_body';
-        payload = await response.json();
-      } catch (error) {
-        const failure = signal.aborted ? 'deadline_exceeded' :
-          error instanceof SyntaxError ? 'invalid_json' : 'transport_error';
-        const code = error.cause?.code;
-        log('failed', { phase, failure, headersAt, httpRequestId, status: response?.status,
-          code: typeof code === 'string' && /^[A-Z0-9_]{1,40}$/.test(code) ? code : undefined,
-          finishedAt: checkedAt() });
-        throw new Error(`OpenAI API final ${stage} failed at ${phase}: ${failure}${response ? ' (HTTP ' + response.status + ')' : ''}`);
+      for (let netAttempt = 1; netAttempt <= maxTransportAttempts; netAttempt++) {
+        phase = 'response_headers';
+        response = undefined;
+        payload = undefined;
+        headersAt = undefined;
+        httpRequestId = undefined;
+        const attemptSignal = AbortSignal.timeout(requestTimeoutMs);
+        log('started', { timeoutMs: requestTimeoutMs, ...(netAttempt > 1 ? { retryAttempt: netAttempt } : {}) });
+        try {
+          response = await fetchImpl(endpoint, {
+            method: 'POST', redirect: 'error', signal: attemptSignal,
+            headers: { authorization: 'Bearer ' + key, 'content-type': 'application/json' },
+            body: JSON.stringify({ model, messages, reasoning_effort: 'high', service_tier: 'default',
+              max_completion_tokens: maxCompletionTokens, response_format: { type: 'json_object' }, store: false }),
+          });
+          headersAt = checkedAt();
+          httpRequestId = response.headers.get('x-request-id') ?? undefined;
+          if ([408, 429, 500, 502, 503, 504].includes(response.status) && netAttempt < maxTransportAttempts) {
+            log('retrying_transient_http', { status: response.status, httpRequestId, headersAt, retryAttempt: netAttempt });
+            await delay(1500);
+            continue;
+          }
+          phase = 'response_body';
+          payload = await response.json();
+          break;
+        } catch (error) {
+          const failure = attemptSignal.aborted ? 'deadline_exceeded' :
+            error instanceof SyntaxError ? 'invalid_json' : 'transport_error';
+          const code = error.cause?.code;
+          log('failed', { phase, failure, headersAt, httpRequestId, status: response?.status,
+            code: typeof code === 'string' && /^[A-Z0-9_]{1,40}$/.test(code) ? code : undefined,
+            finishedAt: checkedAt() });
+          throw new Error(`OpenAI API final ${stage} failed at ${phase}: ${failure}${response ? ' (HTTP ' + response.status + ')' : ''}`);
+        }
       }
       const actual = payload?.model;
       const usage = payload?.usage;
