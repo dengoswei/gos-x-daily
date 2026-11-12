@@ -65,6 +65,10 @@ only after the verified production send. Its default pool is 1,000 entries and
 The obsolete `local draft` and `local finalize` commands are disabled. Do not
 manually repair dispositions: the shared pipeline maps cited URLs to every
 original candidate owner, including browser deep reads attached to topic cards.
+Review receives the same preserved text and source dates used for composition;
+companion URLs are identified as link-only discovery unless their body was read.
+An interrupted review may resume the original composer transcript only when its
+draft, selected materials and collection still match. All review calls run again.
 Do not use prototype orchestration for a daily occurrence. Use the reviewed publication
 returned by `local daily` with `local publish --publication PATH`.
 For an explicitly authorized replacement of today's accepted report, first
