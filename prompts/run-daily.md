@@ -66,7 +66,11 @@ attempts, invoke a retired workspace workflow or change sending identity.
 After importing browser and feed bundles into RUN/sources.merged.json, save public
 supplemental originals as RUN/supplements.public.json. Each array entry has title,
 url, text, publishedAt, sourceLabel and reading limits. Private mail bodies remain
-local discovery evidence. Use their public originals as supplements.
+local discovery evidence. Use their public originals as supplements. The model
+projection also excludes logged-in Xiaohongshu and subscription-page bodies.
+Their public original papers/articles can enter as verified public supplements.
+Do not place private snippets in the public-supplement file. Legacy backlog
+bodies without recorded public provenance stay local until publicly reverified.
 
 Run `local daily --run RUN` through the provisioned wrapper. It directly calls
 `runDailyV2` in `run-daily.mjs` with the frozen sources and authoritative

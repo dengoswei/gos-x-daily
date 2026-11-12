@@ -11,6 +11,7 @@
 // Empirical Engineering Lesson, and Consequential Judgment, while unpicked high-value
 // runners-up persist into `state/backlog-pool.json` with signal accumulation and daily ranking decay.
 import fs from 'node:fs';
+import { isModelShareableCard } from './model-input.mjs';
 import path from 'node:path';
 import { randomUUID, createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
@@ -344,6 +345,7 @@ export function mergeBacklogIntoTopics(topics, backlogEntries, storeDir, { taste
         candidateKeys: [],
         ...(rawTextRel ? {
           fetchedArticle: {
+            modelShareable: entry.cachedModelShareable === true,
             url: entry.fetchedUrl ?? entry.primaryUrl,
             title: entry.title,
             charCount: cachedLen,
@@ -355,6 +357,7 @@ export function mergeBacklogIntoTopics(topics, backlogEntries, storeDir, { taste
         cards: [{
           id: `${topicId}-card`,
           kind: 'backlog',
+          modelShareable: entry.modelShareable === true,
           author: entry.author ?? 'unknown',
           sourceLabel: (entry.sources ?? ['backlog'])[0],
           url: entry.primaryUrl,
@@ -472,6 +475,8 @@ export function saveBacklogPool(stateDir, {
       deferredReason: deferredTopicIds.get(tp.topicId) ?? tp.deferredReason ?? null,
       tldr: card0.tldr ?? tp.title ?? '',
       cardText,
+      modelShareable: isModelShareableCard(card0),
+      cachedModelShareable: tp.fetchedArticle ? tp.fetchedArticle.modelShareable === true : isModelShareableCard(card0),
       ...(cachedTextPath ? { cachedTextPath } : {}),
     });
   }

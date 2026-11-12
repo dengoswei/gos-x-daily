@@ -41,6 +41,7 @@ import {
 } from './curation.mjs';
 
 import { DEEP_SECTION_ORDER as CANONICAL_DEEP_ORDER, digestLayoutPrompt, QUICK_SECTION, assertDigestLayout } from './digest-layout.mjs';
+import { modelTopic } from './model-input.mjs';
 
 const repoRoot = path.dirname(fileURLToPath(import.meta.url));
 const readPrompt = name => fs.readFileSync(path.join(repoRoot, 'prompts', name), 'utf8');
@@ -565,7 +566,8 @@ export async function runDailyV2({
         runStage = makeStageRunner({ roles, store: stageStore, usage, budget: budgetGuard(loaded.budget) });
       }
 
-      const sortedForSelection = storeTopics.slice().sort((a, b) => (b.priorScore ?? 0) - (a.priorScore ?? 0));
+      const selectableTopics = modelsFile ? storeTopics.map(modelTopic).filter(Boolean) : storeTopics;
+      const sortedForSelection = selectableTopics.slice().sort((a, b) => (b.priorScore ?? 0) - (a.priorScore ?? 0));
       const compactTopics = sortedForSelection.map(t => ({
         topicId: t.topicId,
         title: t.title,
@@ -595,7 +597,7 @@ export async function runDailyV2({
       const screenShortlist = compactTopics.filter(t => t.dedupStatus !== 'seen_recently' && t.category !== 'case_study_pr').slice(0, 45);
       fs.writeFileSync(selectPromptPath, `${readPrompt('v2-select-topics.md')}\n\n${tagged('topics_json', modelJson(screenShortlist))}\n`, { mode: 0o600 });
 
-      const validTopicIds = new Set(storeTopics.map(t => t.topicId));
+      const validTopicIds = new Set(selectableTopics.map(t => t.topicId));
       if (selectedTopicsPath) {
         const customRaw = JSON.parse(fs.readFileSync(selectedTopicsPath, 'utf8'));
         selectedPlan = parseSelectedPlanPayload(customRaw, validTopicIds);
@@ -610,7 +612,7 @@ export async function runDailyV2({
         });
         deferredMap = selectedPlan.deferredMap ?? new Map();
       } else {
-        selectedPlan = selectTopicsHeuristic(storeTopics, { taste });
+        selectedPlan = selectTopicsHeuristic(selectableTopics, { taste });
       }
 
       if (!selectedPlan.length) {
@@ -632,7 +634,7 @@ export async function runDailyV2({
           };
 
       // Assemble complete L0 materials & full observed URL allowlist
-      const topicById = new Map(storeTopics.map(t => [t.topicId, t]));
+      const topicById = new Map((modelsFile ? storeTopics.map(modelTopic).filter(Boolean) : storeTopics).map(t => [t.topicId, t]));
       const selectedMaterials = selectedPlan.map(plan => ({
         ...plan,
         material: loadTopicFullMaterial(topicById.get(plan.topicId), storeDir),

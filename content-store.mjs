@@ -499,6 +499,8 @@ export function buildContentStore(collection, storeDir, { softHistory = null, su
       cards: sorted.map(c => ({
         id: c.id,
         candidateKey: c.candidateKey,
+        title: c.title,
+        outboundUrls: c.outboundUrls,
         kind: c.kind,
         author: c.author,
         sourceLabel: c.sourceLabel,
@@ -686,6 +688,7 @@ export async function enrichTopicsWithFullText(topics, storeDir, {
 
       const relPath = path.relative(root, extractedPath);
       topic.fetchedArticle = {
+        modelShareable: true,
         url: finalResponse.finalUrl,
         title: parsed.title,
         charCount: parsed.text.length,
