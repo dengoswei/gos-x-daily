@@ -30,11 +30,19 @@ import {
   sendViaLarkCli,
 } from './telemetry.mjs';
 import {
+  resolveCollectionShortlinks,
   buildContentStore,
   enrichTopicsWithFullText,
   loadTopicFullMaterial,
   buildAutoDispositions,
 } from './content-store.mjs';
+import {
+  loadTasteConfig,
+  scoreTopicPrior,
+  loadBacklogPool,
+  mergeBacklogIntoTopics,
+  saveBacklogPool,
+} from './curation.mjs';
 
 const repoRoot = path.dirname(fileURLToPath(import.meta.url));
 const readPrompt = name => fs.readFileSync(path.join(repoRoot, 'prompts', name), 'utf8');
@@ -45,15 +53,16 @@ const safeCanonical = href => {
 };
 
 const FORBIDDEN_JARGON = /所给摘录|提供的材料|摘录(?:没有|未|中)|候选键/;
-const DEEP_SECTIONS = new Set(['Frameworks / Infra', 'Breakthrough Research', 'Applications / Products', 'Long-form / Essays']);
+const CANONICAL_DEEP_ORDER = ['Frameworks / Infra', 'Breakthrough Research', 'Applications / Products', 'Long-form / Essays'];
+const DEEP_SECTIONS = new Set(CANONICAL_DEEP_ORDER);
 const QUICK_SECTION = 'Quick Hits / 快讯速览';
 
-function parseSelectionResponse(text, validTopicIds) {
-  const payload = parseJsonBlock(text);
-  if (!Array.isArray(payload?.selected)) throw new Error('Expected {"selected": [...]}');
+export function parseSelectedPlanPayload(payload, validTopicIds) {
+  const list = Array.isArray(payload) ? payload : payload?.selected;
+  if (!Array.isArray(list)) throw new Error('Expected {"selected": [...]}');
   const seen = new Set();
   const out = [];
-  for (const row of payload.selected) {
+  for (const row of list) {
     if (!row || typeof row !== 'object') continue;
     if (!validTopicIds.has(row.topicId) || seen.has(row.topicId)) continue;
     if (!['deep', 'quick'].includes(row.tier)) continue;
@@ -70,46 +79,180 @@ function parseSelectionResponse(text, validTopicIds) {
     });
   }
   if (!out.length) throw new Error('Topic selector returned 0 selected topics');
+  const deferred = new Map();
+  for (const d of Array.isArray(payload?.deferred) ? payload.deferred : []) {
+    if (d && validTopicIds.has(d.topicId) && !seen.has(d.topicId)) {
+      deferred.set(d.topicId, String(d.reason ?? 'High-value runner-up deferred for backlog').trim());
+    }
+  }
+  out.deferredMap = deferred;
   return out;
 }
 
-/** Deterministic heuristic topic selector when running offline/without a separate screen model. */
-export function selectTopicsHeuristic(topics, { maxDeep = 6, maxQuick = 4 } = {}) {
+function parseSelectionResponse(text, validTopicIds) {
+  return parseSelectedPlanPayload(parseJsonBlock(text), validTopicIds);
+}
+
+function sectionForTopic(topic) {
+  if (['infra_eng', 'open_source'].includes(topic.category)) return 'Frameworks / Infra';
+  if (topic.category === 'paper') return 'Breakthrough Research';
+  if (topic.category === 'essay') return 'Long-form / Essays';
+  return 'Applications / Products';
+}
+
+function isQuickHitEligible(topic) {
+  if (topic.category === 'paper') return false;
+  if ((topic.sources ?? []).some(s => /daily\s*papers/i.test(s))) return false;
+  if (/arxiv\.org|huggingface\.co\/papers|openreview\.net/i.test(topic.primaryUrl ?? '')) return false;
+  return ['product', 'open_source', 'general'].includes(topic.category);
+}
+
+/**
+ * Balanced, diversity-guarded heuristic topic selector:
+ * 1. Reserves slots across all 4 Deep Dive sections (Infra, Research, Products, Essays) so
+ *    a high-volume paper feed never crowds out Infra, Product launches, or Long-form essays.
+ * 2. Caps any single feed/source (e.g., HF Daily Papers) at `maxPerSource` (default 2) in Deep Dive.
+ * 3. Rewards cross-source/community resonance (`fanIn >= 2` or watch-account signals).
+ * 4. Restricts `Quick Hits / 快讯速览` strictly to concise product updates, version releases,
+ *    and brief ecosystem notes — research papers NEVER spill over into Quick Hits.
+ */
+export function selectTopicsHeuristic(topics, { maxDeep = 7, maxQuick = 4, maxPerSource = 2, taste = null } = {}) {
+  const activeTaste = taste ?? loadTasteConfig();
   const eligible = topics.filter(t => t.dedupStatus !== 'seen_recently' && t.category !== 'case_study_pr');
   const scoreTopic = t => {
-    const catWeight = { paper: 5, infra_eng: 5, open_source: 4, essay: 3, general: 2, product: 1 }[t.category] ?? 1;
-    const depthBonus = t.contentStatus === 'full_text' ? 2 : t.contentStatus === 'abstract_only' ? 1 : 0;
-    return catWeight * 2 + Math.min(t.fanIn ?? 1, 4) + depthBonus;
+    // Category NEVER determines quality score; use the 4-signal Prior Score directly!
+    if (Number.isFinite(t.priorScore)) return t.priorScore;
+    return scoreTopicPrior(t, activeTaste).priorScore;
   };
-  const ranked = eligible.slice().sort((a, b) => scoreTopic(b) - scoreTopic(a));
-  const selected = [];
-  const vendorProductCount = new Map();
 
-  for (const topic of ranked) {
-    const vendor = topic.entities?.[0] ?? topic.sources?.[0] ?? 'other';
-    if (topic.category === 'product') {
-      const seenVendor = vendorProductCount.get(vendor) ?? 0;
-      if (seenVendor >= 1 && selected.filter(s => s.tier === 'quick').length < maxQuick) {
-        selected.push({ topicId: topic.topicId, tier: 'quick', section: QUICK_SECTION, followUp: topic.dedupStatus === 'follow_up_candidate', reason: 'Folded secondary product update into Quick Hits' });
-        vendorProductCount.set(vendor, seenVendor + 1);
-        continue;
-      }
-      vendorProductCount.set(vendor, seenVendor + 1);
+  const ranked = eligible.slice().sort((a, b) => scoreTopic(b) - scoreTopic(a));
+  const pickedIds = new Set();
+  const sourceCounts = new Map();
+  const deepSelected = [];
+
+  const primaryFeedSource = t => (t.sources ?? []).find(s => s !== 'x' && !String(s).startsWith('watch:@')) ?? t.sources?.[0] ?? 'unknown';
+  const vendorOf = t => {
+    const entityRoot = String(t.entities?.[0] ?? '').split(/[\s-]/)[0].trim();
+    if (entityRoot) return entityRoot.toLowerCase();
+    try { return new URL(t.primaryUrl).hostname.replace(/^www\./, '').toLowerCase(); } catch { return primaryFeedSource(t); }
+  };
+  const canTakeFromSource = (t, relaxCap = false) => {
+    const src = primaryFeedSource(t);
+    if (src === 'x') return true;
+    const limit = relaxCap ? maxPerSource + 1 : maxPerSource;
+    return (sourceCounts.get(src) ?? 0) < limit;
+  };
+  const takeDeep = (t, reason) => {
+    const src = primaryFeedSource(t);
+    pickedIds.add(t.topicId);
+    sourceCounts.set(src, (sourceCounts.get(src) ?? 0) + 1);
+    deepSelected.push({
+      topicId: t.topicId,
+      tier: 'deep',
+      section: sectionForTopic(t),
+      followUp: t.dedupStatus === 'follow_up_candidate',
+      reason,
+    });
+  };
+
+  // Pass 1: Guarantee representation across each non-empty editorial section (up to initial bucket quota).
+  const sectionQuotas = [
+    ['Frameworks / Infra', 2],
+    ['Breakthrough Research', 2],
+    ['Applications / Products', 1],
+    ['Long-form / Essays', 1],
+  ];
+  const vendorDeepProduct = new Set();
+
+  for (const [targetSection, quota] of sectionQuotas) {
+    let count = 0;
+    for (const t of ranked) {
+      if (count >= quota || deepSelected.length >= maxDeep) break;
+      if (pickedIds.has(t.topicId)) continue;
+      if (sectionForTopic(t) !== targetSection) continue;
+      if (!canTakeFromSource(t, false)) continue;
+      // Avoid spending multiple Deep Dive slots on minor product launches from the same vendor.
+      const vendor = vendorOf(t);
+      if (t.category === 'product' && vendorDeepProduct.has(vendor)) continue;
+      if (t.category === 'product') vendorDeepProduct.add(vendor);
+      takeDeep(t, `Top signal in ${targetSection}`);
+      count += 1;
     }
-    const deepCount = selected.filter(s => s.tier === 'deep').length;
-    const quickCount = selected.filter(s => s.tier === 'quick').length;
-    if (topic.category !== 'product' && deepCount < maxDeep) {
-      const section = topic.category === 'paper' ? 'Breakthrough Research'
-        : ['infra_eng', 'open_source'].includes(topic.category) ? 'Frameworks / Infra'
-        : topic.category === 'essay' ? 'Long-form / Essays'
-        : 'Applications / Products';
-      selected.push({ topicId: topic.topicId, tier: 'deep', section, followUp: topic.dedupStatus === 'follow_up_candidate', reason: 'Top technical signal' });
-    } else if (quickCount < maxQuick) {
-      selected.push({ topicId: topic.topicId, tier: 'quick', section: QUICK_SECTION, followUp: topic.dedupStatus === 'follow_up_candidate', reason: 'Concise update' });
-    }
-    if (selected.length >= maxDeep + maxQuick) break;
   }
-  return selected;
+
+  // Pass 2: Fill remaining Deep Dive slots by overall score while respecting per-source diversity cap.
+  for (const relax of [false, true]) {
+    for (const t of ranked) {
+      if (deepSelected.length >= maxDeep) break;
+      if (pickedIds.has(t.topicId)) continue;
+      if (!canTakeFromSource(t, relax)) continue;
+      const vendor = vendorOf(t);
+      if (t.category === 'product' && vendorDeepProduct.has(vendor)) continue;
+      if (t.category === 'product') vendorDeepProduct.add(vendor);
+      takeDeep(t, 'High cross-source/technical signal');
+    }
+  }
+
+  // Pass 3: Select Quick Hits strictly from concise product updates, SDK/tool releases, or brief notes (NEVER papers).
+  const quickSelected = [];
+  for (const t of ranked) {
+    if (quickSelected.length >= maxQuick) break;
+    if (pickedIds.has(t.topicId)) continue;
+    if (!isQuickHitEligible(t)) continue;
+    pickedIds.add(t.topicId);
+    quickSelected.push({
+      topicId: t.topicId,
+      tier: 'quick',
+      section: QUICK_SECTION,
+      followUp: t.dedupStatus === 'follow_up_candidate',
+      reason: 'Concise release or product update suitable for Quick Hits',
+    });
+  }
+
+  return [...deepSelected, ...quickSelected];
+}
+
+/**
+ * Reorders `## ` sections into canonical reader order:
+ * Frameworks / Infra -> Breakthrough Research -> Applications / Products -> Long-form / Essays ->
+ * any custom deep sections -> Quick Hits / 快讯速览 (always last before telemetry footer).
+ */
+export function normalizeDigestSectionOrder(markdown) {
+  const lines = String(markdown ?? '').trim().split(/\r?\n/);
+  if (!lines.length || !lines[0].startsWith('# ')) return String(markdown ?? '').trim();
+  const headerLines = [];
+  const sections = [];
+  let current = null;
+
+  for (const line of lines) {
+    const h2 = line.trim().match(/^##\s+(.+)$/);
+    if (h2) {
+      current = { name: h2[1].trim(), heading: `## ${h2[1].trim()}`, lines: [] };
+      sections.push(current);
+    } else if (current) {
+      current.lines.push(line);
+    } else {
+      headerLines.push(line);
+    }
+  }
+  if (sections.length <= 1) return lines.join('\n').trim();
+
+  const rankOf = name => {
+    if (name === QUICK_SECTION || /quick\s*hits|快讯/i.test(name)) return 100;
+    const idx = CANONICAL_DEEP_ORDER.indexOf(name);
+    return idx >= 0 ? idx : 50;
+  };
+  const ordered = sections
+    .map((sec, idx) => ({ ...sec, idx, rank: rankOf(sec.name) }))
+    .sort((a, b) => a.rank - b.rank || a.idx - b.idx);
+
+  const out = [...headerLines.filter((l, i) => i === 0 || l.trim())];
+  for (const sec of ordered) {
+    const body = sec.lines.join('\n').trim();
+    if (!body) continue;
+    out.push('', sec.heading, '', body);
+  }
+  return out.join('\n').trim();
 }
 
 /**
@@ -198,17 +341,20 @@ export async function runDailyV2({
   runDir: existingRunDir = null,
   sourcesConfig = null,
   sourcesFile = null,
+  tasteFile = null,
   modelsFile = null,
   browserArtifactsPath = null,
   feedArtifactsPath = null,
   premergedSourcesPath = null,
   supplements = [],
   prepareOnly = false,
+  selectedTopicsPath = null,
   finalizeDigestPath = null,
   larkConfig = null,
   lookbackHours = 48,
   fetchFeedsOnline = false,
   fetchFullTextOnline = true,
+  resolveShortlinksOnline = null,
   allowSend = false,
   runtimeHooks = {},
 } = {}) {
@@ -244,6 +390,7 @@ export async function runDailyV2({
       ?? (sourcesFile && fs.existsSync(sourcesFile)
         ? JSON.parse(fs.readFileSync(sourcesFile, 'utf8'))
         : JSON.parse(fs.readFileSync(path.join(repoRoot, 'config', 'sources.json'), 'utf8')));
+    const taste = loadTasteConfig(tasteFile);
 
     const usage = usageLedger();
     let collection = null;
@@ -253,18 +400,18 @@ export async function runDailyV2({
     let storeTopics = null;
     let trackedSources = null;
     let selectedPlan = null;
+    let deferredMap = new Map();
+    let backlogStats = { recalledStandalone: 0, accumulatedWithFresh: 0 };
     let deepFetchStats = null;
     let observedUrlSet = null;
     let warnings = [];
     let draftMarkdown = null;
 
-    const resumingPreparedRun = Boolean(
-      existingRunDir &&
-      finalizeDigestPath &&
-      fs.existsSync(path.join(existingRunDir, 'prepare-state.json')),
-    );
+    const hasPreparedState = Boolean(existingRunDir && fs.existsSync(path.join(existingRunDir, 'prepare-state.json')));
+    const resumingFinalize = Boolean(hasPreparedState && finalizeDigestPath);
+    const reselectingPreparedRun = Boolean(hasPreparedState && selectedTopicsPath && !finalizeDigestPath);
 
-    if (resumingPreparedRun) {
+    if (resumingFinalize) {
       currentStage = 'load_prepared_run';
       lock.heartbeat(currentStage);
       runDir = path.resolve(existingRunDir);
@@ -276,114 +423,148 @@ export async function runDailyV2({
       storeCounts = saved.counts;
       storeTopics = saved.topics;
       selectedPlan = saved.selectedPlan;
+      deferredMap = new Map(saved.deferredEntries ?? []);
+      backlogStats = saved.backlogStats ?? backlogStats;
       deepFetchStats = saved.deepFetchStats;
       observedUrlSet = new Set(saved.observedUrls ?? []);
       warnings = saved.warnings ?? [];
       draftMarkdown = fs.readFileSync(finalizeDigestPath, 'utf8');
     } else {
-      const stampSuffix = new Date().toISOString().replace(/[:.]/g, '-');
-      runDir = existingRunDir
-        ? path.resolve(existingRunDir)
-        : fs.mkdtempSync(path.join(workspace.runsDir, `${today}-${stampSuffix.slice(11, 19)}-`));
-      fs.mkdirSync(runDir, { recursive: true, mode: 0o700 });
-      const runId = path.basename(runDir).replace(/[^a-zA-Z0-9-]/g, '-').slice(0, 80);
-      const runtime = makeRuntime({ dataDir: workspace.root, lookbackHours, sources: resolvedSources }, { runId });
-
-      // Stage 1: Collect / Import Browser + Feeds (with graceful degradation & cross-window skew tolerance)
-      currentStage = 'collect_and_import';
-      lock.heartbeat(currentStage);
-
-      if (premergedSourcesPath) {
-        collection = JSON.parse(fs.readFileSync(premergedSourcesPath, 'utf8'));
+      if (reselectingPreparedRun) {
+        currentStage = 'reselect_prepared_run';
+        lock.heartbeat(currentStage);
+        runDir = path.resolve(existingRunDir);
+        storeDir = path.join(runDir, 'store');
+        collection = JSON.parse(fs.readFileSync(path.join(runDir, 'sources.merged.json'), 'utf8'));
+        const saved = JSON.parse(fs.readFileSync(path.join(runDir, 'prepare-state.json'), 'utf8'));
+        reportDate = saved.reportDate || collection.date || today;
+        trackedSources = saved.trackedSources;
+        storeCounts = saved.counts;
+        storeTopics = saved.topics;
+        backlogStats = saved.backlogStats ?? backlogStats;
+        warnings = saved.warnings ?? [];
       } else {
-        if (browserArtifactsPath && fs.existsSync(browserArtifactsPath)) {
-          try {
-            const bundle = JSON.parse(fs.readFileSync(browserArtifactsPath, 'utf8'));
-            verifyEvidenceFiles(bundle, path.dirname(path.resolve(browserArtifactsPath)));
-            collection = collectionFromBrowserArtifacts(runtime, bundle);
-          } catch (err) {
-            warnings.push(`Browser capture import degraded (${err.message}); continuing with remaining sources`);
+        const stampSuffix = new Date().toISOString().replace(/[:.]/g, '-');
+        runDir = existingRunDir
+          ? path.resolve(existingRunDir)
+          : fs.mkdtempSync(path.join(workspace.runsDir, `${today}-${stampSuffix.slice(11, 19)}-`));
+        fs.mkdirSync(runDir, { recursive: true, mode: 0o700 });
+        const runId = path.basename(runDir).replace(/[^a-zA-Z0-9-]/g, '-').slice(0, 80);
+        const runtime = makeRuntime({ dataDir: workspace.root, lookbackHours, sources: resolvedSources }, { runId });
+
+        // Stage 1: Collect / Import Browser + Feeds (with graceful degradation & cross-window skew tolerance)
+        currentStage = 'collect_and_import';
+        lock.heartbeat(currentStage);
+
+        if (premergedSourcesPath) {
+          collection = JSON.parse(fs.readFileSync(premergedSourcesPath, 'utf8'));
+        } else {
+          if (browserArtifactsPath && fs.existsSync(browserArtifactsPath)) {
+            try {
+              const bundle = JSON.parse(fs.readFileSync(browserArtifactsPath, 'utf8'));
+              verifyEvidenceFiles(bundle, path.dirname(path.resolve(browserArtifactsPath)));
+              collection = collectionFromBrowserArtifacts(runtime, bundle);
+            } catch (err) {
+              warnings.push(`Browser capture import degraded (${err.message}); continuing with remaining sources`);
+            }
+          }
+
+          let activeFeedBundlePath = feedArtifactsPath;
+          if (!activeFeedBundlePath && fetchFeedsOnline && Array.isArray(resolvedSources.feeds) && resolvedSources.feeds.length > 0) {
+            try {
+              const fetched = await fetchFeeds(resolvedSources, runDir, { fetchImpl, clock: () => nowDate });
+              activeFeedBundlePath = fetched.output;
+            } catch (err) {
+              warnings.push(`Live feed fetch degraded (${err.message})`);
+            }
+          }
+
+          if (activeFeedBundlePath && fs.existsSync(activeFeedBundlePath)) {
+            try {
+              const feedBundle = JSON.parse(fs.readFileSync(activeFeedBundlePath, 'utf8'));
+              const baseDir = path.dirname(path.resolve(activeFeedBundlePath));
+              verifyDocumentFiles(feedBundle, baseDir);
+              collection = mergeFeedDocuments(runtime, collection, feedBundle, baseDir, {
+                maxText: Infinity,
+                maxSkewHours: lookbackHours,
+              });
+            } catch (err) {
+              warnings.push(`Feed merge degraded (${err.message})`);
+            }
           }
         }
 
-        let activeFeedBundlePath = feedArtifactsPath;
-        if (!activeFeedBundlePath && fetchFeedsOnline && Array.isArray(resolvedSources.feeds) && resolvedSources.feeds.length > 0) {
-          try {
-            const fetched = await fetchFeeds(resolvedSources, runDir, { fetchImpl, clock: () => nowDate });
-            activeFeedBundlePath = fetched.output;
-          } catch (err) {
-            warnings.push(`Live feed fetch degraded (${err.message})`);
-          }
+        if (!collection && supplements.length > 0) {
+          collection = {
+            schemaVersion: 1,
+            collectionId: runId,
+            digestMarker: `<!-- x-daily-collection: ${runId} -->`,
+            date: today,
+            collectedAt: nowDate.toISOString(),
+            checks: {},
+            warnings,
+            sources: { xFollowing: [], substack: [], watchProfiles: [], feeds: [], blogs: [], xiaohongshu: [], deepArticles: [] },
+            stats: {},
+          };
         }
 
-        if (activeFeedBundlePath && fs.existsSync(activeFeedBundlePath)) {
-          try {
-            const feedBundle = JSON.parse(fs.readFileSync(activeFeedBundlePath, 'utf8'));
-            const baseDir = path.dirname(path.resolve(activeFeedBundlePath));
-            verifyDocumentFiles(feedBundle, baseDir);
-            collection = mergeFeedDocuments(runtime, collection, feedBundle, baseDir, {
-              maxText: Infinity,
-              maxSkewHours: lookbackHours,
-            });
-          } catch (err) {
-            warnings.push(`Feed merge degraded (${err.message})`);
-          }
+        if (!collection) {
+          throw new Error('No usable source inputs were collected (both browser capture and feeds failed or were empty)');
         }
-      }
 
-      if (!collection && supplements.length > 0) {
-        collection = {
-          schemaVersion: 1,
-          collectionId: runId,
-          digestMarker: `<!-- x-daily-collection: ${runId} -->`,
-          date: today,
-          collectedAt: nowDate.toISOString(),
-          checks: {},
-          warnings,
-          sources: { xFollowing: [], substack: [], watchProfiles: [], feeds: [], blogs: [], xiaohongshu: [], deepArticles: [] },
-          stats: {},
-        };
-      }
+        // Pre-resolve `t.co` shortlinks before building the store so X discussions sharing the same
+        // external blog/paper/repo cluster together instead of staying fragmented as `fanIn = 1`.
+        const shouldResolveShortlinks = resolveShortlinksOnline ?? fetchFullTextOnline;
+        if (shouldResolveShortlinks) {
+          currentStage = 'resolve_shortlinks';
+          lock.heartbeat(currentStage);
+          await resolveCollectionShortlinks(collection, { fetchImpl });
+        }
 
-      if (!collection) {
-        throw new Error('No usable source inputs were collected (both browser capture and feeds failed or were empty)');
-      }
+        reportDate = collection.date || today;
+        fs.writeFileSync(path.join(runDir, 'sources.merged.json'), JSON.stringify(collection, null, 2) + '\n', { mode: 0o600 });
 
-      reportDate = collection.date || today;
-      fs.writeFileSync(path.join(runDir, 'sources.merged.json'), JSON.stringify(collection, null, 2) + '\n', { mode: 0o600 });
+        // Stage 2: Build Dual-Layer Content Store + Merge Rolling Backlog + 7-Day Soft Deduplication
+        currentStage = 'build_content_store';
+        lock.heartbeat(currentStage);
+        const softHistory = loadSoftHistory(workspace.historyFile, { before: reportDate, days: 7 });
+        warnings.push(...softHistory.warnings);
 
-      // Stage 2: Build Dual-Layer Content Store + 7-Day Soft Deduplication
-      currentStage = 'build_content_store';
-      lock.heartbeat(currentStage);
-      const softHistory = loadSoftHistory(workspace.historyFile, { before: reportDate, days: 7 });
-      warnings.push(...softHistory.warnings);
+        storeDir = path.join(runDir, 'store');
+        const storeResult = buildContentStore(collection, storeDir, { softHistory, supplements, taste });
+        storeCounts = storeResult.counts;
+        storeTopics = storeResult.topics;
 
-      storeDir = path.join(runDir, 'store');
-      const storeResult = buildContentStore(collection, storeDir, { softHistory, supplements });
-      storeCounts = storeResult.counts;
-      storeTopics = storeResult.topics;
-
-      const sourceRows = collectSourceStatuses(collection, {
-        configuredSources: resolvedSources,
-        extraSources: supplements.length
-          ? [{ id: 'supplements', label: 'Supplemental Mail/Docs', kind: 'mail', status: 'ok', items: supplements.length }]
-          : [],
-      });
-      trackedSources = updateSourceHealth(workspace.healthFile, sourceRows, { date: reportDate });
-
-      if (storeTopics.length === 0) {
-        telemetry = buildTelemetry({
-          date: reportDate,
-          sources: trackedSources,
-          funnel: { rawItems: storeCounts.rawItems, dedupSkipped7d: storeCounts.dedupSkipped7d, clusteredTopics: 0, screenSelectedTopics: 0, publishedTotal: 0 },
-          warnings,
-          reclaimedLocks,
+        const loadedBacklog = loadBacklogPool(workspace.stateDir, {
+          reportDate,
+          softHistory,
+          maxAgeDays: taste.backlog?.maxAgeDays ?? 7,
         });
-        fs.writeFileSync(path.join(runDir, 'telemetry.json'), JSON.stringify(telemetry, null, 2) + '\n', { mode: 0o600 });
-        throw new Error('All collected sources yielded 0 candidate topics');
+        backlogStats = mergeBacklogIntoTopics(storeTopics, loadedBacklog.entries, storeDir, { taste, reportDate });
+        storeCounts.topics = storeTopics.length;
+
+        const sourceRows = collectSourceStatuses(collection, {
+          configuredSources: resolvedSources,
+          extraSources: supplements.length
+            ? [{ id: 'supplements', label: 'Supplemental Mail/Docs', kind: 'mail', status: 'ok', items: supplements.length }]
+            : [],
+        });
+        trackedSources = updateSourceHealth(workspace.healthFile, sourceRows, { date: reportDate });
+
+        if (storeTopics.length === 0) {
+          telemetry = buildTelemetry({
+            date: reportDate,
+            sources: trackedSources,
+            funnel: { rawItems: storeCounts.rawItems, dedupSkipped7d: storeCounts.dedupSkipped7d, clusteredTopics: 0, screenSelectedTopics: 0, publishedTotal: 0 },
+            warnings,
+            reclaimedLocks,
+          });
+          fs.writeFileSync(path.join(runDir, 'telemetry.json'), JSON.stringify(telemetry, null, 2) + '\n', { mode: 0o600 });
+          throw new Error('All collected sources yielded 0 candidate topics');
+        }
       }
 
-      // Stage 3: Topic Selection (Model-driven when modelsFile provided and not prepareOnly, else deterministic heuristic)
+      // Stage 3: Topic Selection (Explicit file -> Model-driven -> Balanced bucketed heuristic)
       currentStage = 'select_topics';
       lock.heartbeat(currentStage);
       let runStage = null;
@@ -396,31 +577,52 @@ export async function runDailyV2({
         runStage = makeStageRunner({ roles, store: stageStore, usage, budget: budgetGuard(loaded.budget) });
       }
 
+      const sortedForSelection = storeTopics.slice().sort((a, b) => (b.priorScore ?? 0) - (a.priorScore ?? 0));
+      const compactTopics = sortedForSelection.map(t => ({
+        topicId: t.topicId,
+        title: t.title,
+        category: t.category,
+        priorScore: t.priorScore ?? 0,
+        curationSignals: t.curationSignals ?? null,
+        fromBacklog: Boolean(t.fromBacklog),
+        firstSeenDate: t.firstSeenDate ?? null,
+        entities: t.entities,
+        fanIn: t.fanIn,
+        sources: t.sources,
+        publishedAt: t.publishedAt,
+        contentStatus: t.contentStatus,
+        dedupStatus: t.dedupStatus,
+        previouslyPublishedDate: t.previouslyPublishedDate ?? null,
+        primaryUrl: t.primaryUrl,
+        discussionUrls: (t.discussionUrls ?? []).slice(0, 3),
+        tldr: t.cards?.[0]?.tldr ?? '',
+      }));
+
+      // Always write candidate-topics.json + host-select-prompt.md so a local host agent (Codex)
+      // can inspect ALL clustered topics across X + Feeds and override selection if desired.
+      const candidateTopicsPath = path.join(runDir, 'candidate-topics.json');
+      const selectPromptPath = path.join(runDir, 'host-select-prompt.md');
+      fs.writeFileSync(candidateTopicsPath, JSON.stringify(compactTopics, null, 2) + '\n', { mode: 0o600 });
+      // For LLM Stage 2 screening, pass top 45 candidates sorted by Stage 1 priorScore so context stays high-signal!
+      const screenShortlist = compactTopics.filter(t => t.dedupStatus !== 'seen_recently' && t.category !== 'case_study_pr').slice(0, 45);
+      fs.writeFileSync(selectPromptPath, `${readPrompt('v2-select-topics.md')}\n\n${tagged('topics_json', modelJson(screenShortlist))}\n`, { mode: 0o600 });
+
       const validTopicIds = new Set(storeTopics.map(t => t.topicId));
-      if (runStage && roles?.screen) {
-        const compactTopics = storeTopics.map(t => ({
-          topicId: t.topicId,
-          title: t.title,
-          category: t.category,
-          entities: t.entities,
-          fanIn: t.fanIn,
-          sources: t.sources,
-          publishedAt: t.publishedAt,
-          contentStatus: t.contentStatus,
-          dedupStatus: t.dedupStatus,
-          previouslyPublishedDate: t.previouslyPublishedDate ?? null,
-          primaryUrl: t.primaryUrl,
-          tldr: t.cards?.[0]?.tldr ?? '',
-        }));
+      if (selectedTopicsPath) {
+        const customRaw = JSON.parse(fs.readFileSync(selectedTopicsPath, 'utf8'));
+        selectedPlan = parseSelectedPlanPayload(customRaw, validTopicIds);
+        deferredMap = selectedPlan.deferredMap ?? new Map();
+      } else if (runStage && roles?.screen) {
         selectedPlan = await runStage({
           stage: 'screen',
           label: 'v2-select-topics',
           system: readPrompt('v2-select-topics.md'),
-          prompt: tagged('topics_json', modelJson(compactTopics)),
+          prompt: tagged('topics_json', modelJson(screenShortlist.length ? screenShortlist : compactTopics.slice(0, 45))),
           parse: text => parseSelectionResponse(text, validTopicIds),
         });
+        deferredMap = selectedPlan.deferredMap ?? new Map();
       } else {
-        selectedPlan = selectTopicsHeuristic(storeTopics);
+        selectedPlan = selectTopicsHeuristic(storeTopics, { taste });
       }
 
       if (!selectedPlan.length) {
@@ -472,6 +674,8 @@ export async function runDailyV2({
         counts: storeCounts,
         topics: storeTopics,
         selectedPlan,
+        deferredEntries: [...deferredMap.entries()],
+        backlogStats,
         deepFetchStats,
         observedUrls: [...observedUrlSet],
         warnings,
@@ -483,9 +687,13 @@ export async function runDailyV2({
           date: reportDate,
           runDir,
           storeDir,
+          candidateTopicsPath,
+          selectPromptPath,
           preparedTopicsPath,
           composePromptPath,
           rawItems: storeCounts.rawItems,
+          backlogRecalled: backlogStats.recalledStandalone,
+          backlogAccumulated: backlogStats.accumulatedWithFresh,
           clusteredTopics: storeCounts.topics,
           selectedTopics: selectedPlan.length,
           deepFetch: deepFetchStats,
@@ -545,9 +753,10 @@ export async function runDailyV2({
 
     currentStage = 'validate_digest';
     lock.heartbeat(currentStage);
+    draftMarkdown = normalizeDigestSectionOrder(draftMarkdown);
     const digestStats = validateV2Digest(draftMarkdown, { date: reportDate, observedUrlSet });
 
-    // Stage 7: Auto-generate dispositions + Self-Check Telemetry Panel
+    // Stage 7: Auto-generate dispositions + Update Rolling High-Value Backlog + Self-Check Telemetry Panel
     currentStage = 'finalize_artifacts';
     lock.heartbeat(currentStage);
     const autoDispositions = buildAutoDispositions({
@@ -559,11 +768,37 @@ export async function runDailyV2({
     });
     fs.writeFileSync(path.join(runDir, 'dispositions.json'), JSON.stringify(autoDispositions, null, 2) + '\n', { mode: 0o600 });
 
+    const citedCanonicalSet = new Set(digestStats.citedUrls.map(safeCanonical).filter(Boolean));
+    const publishedFromBacklog = storeTopics.filter(tp =>
+      tp.fromBacklog &&
+      [tp.primaryUrl, ...(tp.discussionUrls ?? []), ...(tp.allObservedUrls ?? [])]
+        .filter(Boolean)
+        .some(u => citedCanonicalSet.has(safeCanonical(u))),
+    ).length;
+
+    const persistBacklog = Boolean((allowSend && larkConfig?.enabled === true) || runtimeHooks.recordHistoryOnLocalRun || runtimeHooks.persistBacklogOnLocalRun !== false);
+    let savedBacklogCount = 0;
+    if (persistBacklog) {
+      for (const tp of storeTopics) tp._storeDir = storeDir;
+      const savedPool = saveBacklogPool(workspace.stateDir, {
+        reportDate,
+        topics: storeTopics,
+        citedUrls: digestStats.citedUrls,
+        deferredTopicIds: deferredMap,
+        taste,
+      });
+      for (const tp of storeTopics) delete tp._storeDir;
+      savedBacklogCount = savedPool.savedCount;
+    }
+
     telemetry = buildTelemetry({
       date: reportDate,
       sources: trackedSources,
       funnel: {
         rawItems: storeCounts.rawItems,
+        backlogRecalled: backlogStats.recalledStandalone,
+        backlogAccumulated: backlogStats.accumulatedWithFresh,
+        backlogSaved: savedBacklogCount,
         dedupSkipped7d: storeCounts.dedupSkipped7d,
         dedupFollowUps: storeCounts.dedupFollowUps,
         clusteredTopics: storeCounts.topics,
@@ -571,6 +806,7 @@ export async function runDailyV2({
         deepFetch: deepFetchStats,
         publishedDeepDive: digestStats.deepDiveCount,
         publishedQuickHits: digestStats.quickHitsCount,
+        publishedFromBacklog,
         publishedTotal: digestStats.bulletsCount,
       },
       stageUsage: usage.report(),
@@ -665,7 +901,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   };
   if (argv.includes('--help') || argv.includes('-h')) {
     console.log(JSON.stringify({
-      usage: 'node run-daily.mjs [--data-dir ./data] [--run-dir EXISTING_RUN] [--sources config/sources.json] [--models models.json] [--browser-artifacts browser-capture.json] [--feed-artifacts feed-capture.json] [--fetch-feeds] [--no-fetch-fulltext] [--prepare-only] [--finalize-digest draft.md] [--lark-config runtime.local.json] [--allow-send]',
+      usage: 'node run-daily.mjs [--data-dir ./data] [--run-dir EXISTING_RUN] [--sources config/sources.json] [--models models.json] [--browser-artifacts browser-capture.json] [--feed-artifacts feed-capture.json] [--fetch-feeds] [--no-fetch-fulltext] [--prepare-only] [--selected-topics selected.json] [--finalize-digest draft.md] [--lark-config runtime.local.json] [--allow-send]',
     }, null, 2));
     process.exit(0);
   }
@@ -682,6 +918,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
       browserArtifactsPath: flagValue('--browser-artifacts'),
       feedArtifactsPath: flagValue('--feed-artifacts'),
       prepareOnly: argv.includes('--prepare-only'),
+      selectedTopicsPath: flagValue('--selected-topics'),
       finalizeDigestPath: flagValue('--finalize-digest'),
       fetchFeedsOnline: argv.includes('--fetch-feeds'),
       fetchFullTextOnline: !argv.includes('--no-fetch-fulltext'),

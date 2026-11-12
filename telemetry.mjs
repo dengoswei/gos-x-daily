@@ -499,6 +499,9 @@ export function buildTelemetry({ date = shanghaiDate(), sources = [], funnel = {
     sources,
     funnel: {
       rawItems: funnel.rawItems ?? 0,
+      backlogRecalled: funnel.backlogRecalled ?? 0,
+      backlogAccumulated: funnel.backlogAccumulated ?? 0,
+      backlogSaved: funnel.backlogSaved ?? 0,
       dedupSkipped7d: funnel.dedupSkipped7d ?? 0,
       dedupFollowUps: funnel.dedupFollowUps ?? 0,
       clusteredTopics: funnel.clusteredTopics ?? 0,
@@ -506,6 +509,7 @@ export function buildTelemetry({ date = shanghaiDate(), sources = [], funnel = {
       deepFetch,
       publishedDeepDive: funnel.publishedDeepDive ?? 0,
       publishedQuickHits: funnel.publishedQuickHits ?? 0,
+      publishedFromBacklog: funnel.publishedFromBacklog ?? 0,
       publishedTotal,
     },
     recommendations,
@@ -555,7 +559,13 @@ export function renderTelemetryMarkdown(telemetry) {
     ? ` → 全文补齐 ${df.fullText ?? 0}/${df.attempted}${df.snippetOnly ? ` (${df.snippetOnly} 篇仅摘要/截断)` : ''}${df.failed ? ` (${df.failed} 篇抓取失败)` : ''}`
     : '';
   const pubBreakdown = (funnel.publishedDeepDive || funnel.publishedQuickHits)
-    ? `（深度 ${funnel.publishedDeepDive ?? 0} + 快讯 ${funnel.publishedQuickHits ?? 0}）`
+    ? `（深度 ${funnel.publishedDeepDive ?? 0} + 快讯 ${funnel.publishedQuickHits ?? 0}${funnel.publishedFromBacklog ? `，含捞回遗珠 ${funnel.publishedFromBacklog}` : ''}）`
+    : '';
+  const backlogIn = (funnel.backlogRecalled || funnel.backlogAccumulated)
+    ? `（另遗珠池召回 ${funnel.backlogRecalled ?? 0}、跨日累加 ${funnel.backlogAccumulated ?? 0}）`
+    : '';
+  const backlogOut = (funnel.backlogSaved ?? 0) > 0
+    ? ` → 遗珠池留存 ${funnel.backlogSaved} 条`
     : '';
 
   const unattemptedRows = sources.filter(s => s.status === 'unattempted');
@@ -570,7 +580,7 @@ export function renderTelemetryMarkdown(telemetry) {
   const lines = [
     `### 运行自检 [${overallHealth}]`,
     `- **${statusHeader}**：${statusDetail}`,
-    `- **漏斗统计**：原始入库 ${funnel.rawItems} 条 → 7日去重跳过 ${funnel.dedupSkipped7d} 条 → 聚合 ${funnel.clusteredTopics} 个话题 → 初筛入选 ${funnel.screenSelectedTopics} 个${deepText} → 成稿 ${funnel.publishedTotal} 条${pubBreakdown}`,
+    `- **漏斗统计**：原始入库 ${funnel.rawItems} 条${backlogIn} → 7日去重跳过 ${funnel.dedupSkipped7d} 条 → 聚合 ${funnel.clusteredTopics} 个话题 → 初筛入选 ${funnel.screenSelectedTopics} 个${deepText} → 成稿 ${funnel.publishedTotal} 条${pubBreakdown}${backlogOut}`,
   ];
 
   if (recommendations.length) {

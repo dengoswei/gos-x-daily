@@ -7,6 +7,7 @@ import { canonicalUrl, watchGroups } from './binding.mjs';
 import { itemKey, canonicalLink, publicUrlRefusal, auditDeepLinks } from './feed.mjs';
 import { htmlToText, htmlElements, extractHtmlLinks } from './feed-import.mjs';
 import { topicFingerprint } from './telemetry.mjs';
+import { aggregateTopicMetrics, scoreTopicPrior, loadTasteConfig } from './curation.mjs';
 
 const FETCH_TIMEOUT_MS = 18000;
 const MAX_FETCH_BYTES = 4 * 1024 * 1024;
@@ -34,14 +35,26 @@ function writeJson(file, value) {
   fs.writeFileSync(file, JSON.stringify(value, null, 2) + '\n', { mode: 0o600 });
 }
 
-function classifyHeuristic({ url = '', title = '', text = '' }) {
-  const combined = `${title}\n${text}\n${url}`;
-  if (/customer\s+story|case\s+study|客户案例|成功案例|customers?\//i.test(combined)) return 'case_study_pr';
-  if (/arxiv\.org|huggingface\.co\/papers|openreview\.net|\bpaper\b|论文|定理|theorem|ablation/i.test(combined)) return 'paper';
-  if (/github\.com\/[^/]+\/[^/]+\/releases|release\s+notes|\bv\d+\.\d+|开源|open-?weight|model\s+card/i.test(combined)) return 'open_source';
-  if (/\b(CUDA|Triton|vLLM|SGLang|kernel|latency|throughput|distributed|megatron|rollout|compiler|infra)\b/i.test(combined)) return 'infra_eng';
-  if (/substack\.com|latent\.space|interconnects\.ai|lilianweng|pragmaticengineer|essay|长文/i.test(combined)) return 'essay';
-  if (/\b(beta|launch|introducing|available\s+in|pricing|plan|workspace|sheets|connector)\b/i.test(combined)) return 'product';
+function classifyHeuristic({ url = '', title = '', text = '', sourceLabel = '' }) {
+  const combined = `${title}\n${text}\n${url}\n${sourceLabel}`;
+  if (/customer\s+story|case\s+study|客户案例|成功案例|\/customers?\//i.test(combined)) return 'case_study_pr';
+  // GitHub releases and version changelogs are software releases first.
+  if (/github\.com\/[^/]+\/[^/]+\/releases|\brelease\s+notes\b|\bchangelog\b/i.test(combined)) return 'open_source';
+  // Long-form essay / practitioner blog hosts take precedence even when referencing an arXiv paper inside.
+  if (/substack\.com|latent\.space|interconnects\.ai|lilianweng\.github\.io|pragmaticengineer|simonwillison\.net|chipsandcheese\.com|semianalysis\.com|\bessay\b|长文|复盘/i.test(combined)) {
+    return 'essay';
+  }
+  // Systems / compiler / inference / PyTorch / quantization kernels route to infra_eng (even if backed by an arXiv paper).
+  const isInfra = /\b(CUDA|Triton|vLLM|SGLang|Megatron|TensorRT|PyTorch|torch\w*|kernel|FP8|FP4|MXFP4|INT4|quantization|speculative\s+decoding|KV[\s-]?cache|serving|throughput|latency|compiler|distributed|RDMA|NCCL|ROCm|TPU)\b|算子|量化|推理引擎|投机解码|吞吐|延迟/i.test(combined);
+  const isPaperHost = /arxiv\.org|huggingface\.co\/papers|openreview\.net/i.test(url) || /daily\s*papers/i.test(sourceLabel);
+  if (isInfra && (!isPaperHost || /\b(vLLM|SGLang|CUDA|Triton|PyTorch|torch|MXFP4|FP8|FP4|kernel|serving)\b/i.test(title + ' ' + text.slice(0, 500)))) {
+    return 'infra_eng';
+  }
+  if (isPaperHost || /\b(arXiv:\d{4}\.\d{4,5}|preprint|theorem|ablation)\b|论文/i.test(combined)) return 'paper';
+  if (/\b(open-?source|open-?weight|apache[\s-]2\.0|mit\s+license|weights?\s+released|huggingface\.co\/[^/]+\/[^/]+)\b|开源权重|开源模型/i.test(combined)) return 'open_source';
+  if (/\b(beta|launch(?:ed|ing)?|introducing|rolling\s+out|available\s+(?:in|on|to|for)|workspace|sheets|connector|plugin|desktop\s+app|pricing|api\s+update|preview)\b|正式推出|上线|开放\s*beta|新功能/i.test(combined)) {
+    return 'product';
+  }
   return 'general';
 }
 
@@ -157,13 +170,106 @@ function primarySubjectUrls(card) {
 }
 
 /**
+ * Lightweight pre-clustering redirect resolver for `t.co` shortlinks inside a collection.
+ * Since each X post gets a unique `t.co/xyz` wrapper even when sharing the exact same blog/paper,
+ * expanding `t.co` Location headers BEFORE `buildContentStore` allows X discussions and RSS/Blogs
+ * to cluster into unified `fanIn >= 2` topics and get properly categorized.
+ */
+export async function resolveCollectionShortlinks(collection, {
+  fetchImpl = globalThis.fetch,
+  concurrency = 8,
+  maxLinks = 160,
+  timeoutMs = 6000,
+} = {}) {
+  if (!collection?.sources) return { attempted: 0, resolved: 0, map: {} };
+  const sources = collection.sources;
+  const linkHolders = [
+    ...list(sources.xFollowing),
+    ...list(sources.substack),
+    ...watchGroups(sources).flatMap(g => g.items),
+    ...list(sources.threadContexts).flatMap(ctx => [ctx, ...list(ctx?.quotedPosts)]),
+  ].filter(Boolean);
+
+  const shortUrls = new Set();
+  for (const item of linkHolders) {
+    for (const l of list(item.links)) {
+      try {
+        const u = new URL(l?.href ?? '');
+        if (u.protocol === 'https:' && u.hostname === 't.co' && u.pathname.length > 1) {
+          shortUrls.add(u.href);
+          if (shortUrls.size >= maxLinks) break;
+        }
+      } catch { /* ignore */ }
+    }
+    if (shortUrls.size >= maxLinks) break;
+  }
+
+  const targets = [...shortUrls];
+  if (!targets.length) return { attempted: 0, resolved: 0, map: {} };
+
+  const resolvedMap = new Map();
+  let cursor = 0;
+  const resolveOne = async startHref => {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      let current = new URL(startHref);
+      for (let hop = 0; hop < MAX_REDIRECTS; hop++) {
+        if (publicUrlRefusal(current)) return;
+        const res = await fetchImpl(current.href, {
+          method: 'HEAD',
+          redirect: 'manual',
+          signal: controller.signal,
+          headers: { 'User-Agent': USER_AGENT },
+        });
+        if ([301, 302, 303, 307, 308].includes(res.status)) {
+          const loc = res.headers.get('location');
+          if (!loc) break;
+          current = new URL(loc, current);
+          if (current.hostname !== 't.co') {
+            if (!publicUrlRefusal(current)) resolvedMap.set(startHref, current.href);
+            return;
+          }
+          continue;
+        }
+        break;
+      }
+    } catch { /* best-effort; unresolvable t.co stays as-is */ }
+    finally { clearTimeout(timer); }
+  };
+
+  await Promise.all(Array.from({ length: Math.min(concurrency, targets.length) }, async () => {
+    while (cursor < targets.length) {
+      const idx = cursor++;
+      await resolveOne(targets[idx]);
+    }
+  }));
+
+  if (resolvedMap.size > 0) {
+    for (const item of linkHolders) {
+      if (!Array.isArray(item.links)) continue;
+      const expanded = [];
+      for (const l of item.links) {
+        expanded.push(l);
+        const dest = resolvedMap.get(l?.href);
+        if (dest && !item.links.some(existing => existing?.href === dest)) {
+          expanded.push({ href: dest, text: l?.text || 'expanded' });
+        }
+      }
+      item.links = expanded;
+    }
+  }
+  return { attempted: targets.length, resolved: resolvedMap.size, map: Object.fromEntries(resolvedMap) };
+}
+
+/**
  * Ingests an imported collection + optional supplemental markdown/mail files into
  * the unified dual-layer store:
  * - store/raw/<itemId>/item.json + body.txt (untruncated L0 raw archive)
  * - store/cards/<itemId>.json (lightweight L1 index card for screening & clustering)
  * - store/topics/<topicId>.json (cross-source clustered topics with 7-day soft dedup tags)
  */
-export function buildContentStore(collection, storeDir, { softHistory = null, supplements = [] } = {}) {
+export function buildContentStore(collection, storeDir, { softHistory = null, supplements = [], taste = loadTasteConfig() } = {}) {
   const root = path.resolve(storeDir);
   const rawDir = path.join(root, 'raw');
   const cardsDir = path.join(root, 'cards');
@@ -267,19 +373,23 @@ export function buildContentStore(collection, storeDir, { softHistory = null, su
     });
 
     const author = xHandle(item.url) ?? item.author ?? item.feedName ?? item.blog ?? primary.profileName ?? primary.watchedHandle ?? 'unknown';
-    const category = classifyHeuristic({ url: item.url, title: item.title, text: fullText });
+    const sourceLabel = item.feedName ?? item.blog ?? (primary.watchedHandle ? `watch:@${primary.watchedHandle}` : primary.kind);
+    const linkHints = outboundUrls.join(' ');
+    const category = classifyHeuristic({ url: `${item.url ?? ''} ${linkHints}`, title: item.title, text: fullText, sourceLabel });
     const contentStatus = attachedDeep ? 'full_text' : contentStatusOf(primary.kind, longestBody, item);
+    const obsMetrics = aggregateTopicMetrics(observations.map(o => o.item));
     const card = {
       id,
       candidateKey: key,
       kind: primary.kind,
-      sourceLabel: item.feedName ?? item.blog ?? (primary.watchedHandle ? `watch:@${primary.watchedHandle}` : primary.kind),
+      sourceLabel,
       author,
       url: item.url ?? null,
       canonicalUrl: safeCanonical(item.url),
       title: item.title ?? null,
       publishedAt: item.publishedAt ?? null,
       ...(item.paperPublishedAt ? { paperPublishedAt: item.paperPublishedAt } : {}),
+      ...(Object.keys(obsMetrics).length ? { metrics: obsMetrics } : {}),
       outboundUrls,
       rawLinks: allLinkObjs.map(l => ({ href: l?.href ?? '', text: l?.text ?? '' })).filter(l => l.href),
       contentStatus,
@@ -337,7 +447,11 @@ export function buildContentStore(collection, storeDir, { softHistory = null, su
     const allCandidateKeys = sorted.map(c => c.candidateKey);
     const allUrls = [...new Set(sorted.flatMap(c => [c.url, ...c.outboundUrls]).filter(Boolean))];
     const discussionUrls = sorted.filter(c => ['x', 'watch'].includes(c.kind) && c.url).map(c => c.url);
+    const nonShortExternal = sorted
+      .flatMap(c => c.outboundUrls ?? [])
+      .find(u => { try { return new URL(u).hostname !== 't.co'; } catch { return false; } });
     const primaryArticleUrl = sorted.find(c => !['x', 'watch'].includes(c.kind) && c.url)?.url
+      ?? nonShortExternal
       ?? lead.outboundUrls[0]
       ?? lead.url;
 
@@ -362,6 +476,7 @@ export function buildContentStore(collection, storeDir, { softHistory = null, su
       : sorted.some(c => c.contentStatus === 'abstract_only') ? 'abstract_only'
       : 'snippet_only';
 
+    const mergedMetrics = aggregateTopicMetrics(sorted);
     const topic = {
       topicId,
       leadCardId: lead.id,
@@ -373,8 +488,10 @@ export function buildContentStore(collection, storeDir, { softHistory = null, su
       allObservedUrls: allUrls,
       publishedAt: lead.publishedAt ?? sorted.find(c => c.publishedAt)?.publishedAt ?? null,
       ...(lead.paperPublishedAt ? { paperPublishedAt: lead.paperPublishedAt } : {}),
+      firstSeenDate: collection?.date ?? null,
       fanIn: sorted.length,
       sources: [...new Set(sorted.map(c => c.sourceLabel))],
+      ...(Object.keys(mergedMetrics).length ? { metrics: mergedMetrics } : {}),
       contentStatus: bestStatus,
       dedupStatus,
       ...(priorDate ? { previouslyPublishedDate: priorDate } : {}),
@@ -386,12 +503,16 @@ export function buildContentStore(collection, storeDir, { softHistory = null, su
         sourceLabel: c.sourceLabel,
         url: c.url,
         publishedAt: c.publishedAt,
+        ...(c.metrics ? { metrics: c.metrics } : {}),
         contentStatus: c.contentStatus,
         charCount: c.charCount,
         tldr: c.tldr,
         rawBodyPath: c.rawBodyPath,
       })),
     };
+    const prior = scoreTopicPrior(topic, taste, { reportDate: collection?.date ?? null });
+    topic.priorScore = prior.priorScore;
+    topic.curationSignals = prior.signals;
     writeJson(path.join(topicsDir, `${topicId}.json`), topic);
     topics.push(topic);
   }
@@ -622,8 +743,12 @@ export function loadTopicFullMaterial(topic, storeDir) {
     topicId: topic.topicId,
     title: topic.title,
     category: topic.category,
+    priorScore: topic.priorScore ?? null,
+    curationSignals: topic.curationSignals ?? null,
     publishedAt: topic.publishedAt,
     paperPublishedAt: topic.paperPublishedAt ?? null,
+    firstSeenDate: topic.firstSeenDate ?? null,
+    fromBacklog: Boolean(topic.fromBacklog),
     dedupStatus: topic.dedupStatus,
     previouslyPublishedDate: topic.previouslyPublishedDate ?? null,
     primaryUrl: topic.primaryUrl,

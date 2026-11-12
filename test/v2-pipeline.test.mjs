@@ -16,17 +16,20 @@ import {
   sendViaLarkCli,
 } from '../telemetry.mjs';
 import {
+  resolveCollectionShortlinks,
   buildContentStore,
   enrichTopicsWithFullText,
   loadTopicFullMaterial,
   buildAutoDispositions,
 } from '../content-store.mjs';
 import { parseFeedDocument, mergeFeedDocuments } from '../feed-import.mjs';
+import { readFeedDom } from '../feed.mjs';
+import { scoreTopicPrior, loadBacklogPool, mergeBacklogIntoTopics, saveBacklogPool } from '../curation.mjs';
 import { collectionFromBrowserArtifacts } from '../browser-artifacts.mjs';
 import { compactCollection } from '../compose.mjs';
 import { validateDispositions } from '../binding.mjs';
 import { makeRuntime } from '../runtime.mjs';
-import { runDailyV2, validateV2Digest } from '../run-daily.mjs';
+import { runDailyV2, validateV2Digest, selectTopicsHeuristic, normalizeDigestSectionOrder } from '../run-daily.mjs';
 import { frozenApiRun } from '../deployment/mac/openai-draft.mjs';
 import { openRun } from '../prototype/run-packets.mjs';
 import { writeWorkerPackets } from '../worker-packets.mjs';
@@ -344,7 +347,7 @@ test('end-to-end runDailyV2 produces two-tier digest, blocks leaked pipeline jar
     const body = JSON.parse(init.body);
     const sys = body.messages?.[0]?.content ?? '';
     let replyText;
-    if (sys.includes('Stage contract: topic selection (v2)')) {
+    if (sys.includes('two-stage curation & editorial selection (v2)')) {
       replyText = '```json\n{"selected":[{"topicId":"topic-0001","tier":"deep","section":"Breakthrough Research","followUp":false,"reason":"Verifiable MoE ZK proof"},{"topicId":"topic-0002","tier":"quick","section":"Quick Hits / 快讯速览","followUp":false,"reason":"Minor product beta"}]}\n```';
     } else if (sys.includes('Stage contract: source-faithful technical digest composition (v2)')) {
       replyText = [
@@ -536,9 +539,12 @@ test('Mac Codex feedback regressions: unattempted sources warn in footer, >2h X+
   };
 
   let publicArticleFetches = 0;
-  const publicFetchMock = async url => {
-    // Only public article fetch is allowed; zero calls to api.openai.com!
+  const publicFetchMock = async (url, init) => {
+    // Only public article fetch or t.co HEAD resolution is allowed; zero calls to api.openai.com!
     assert.ok(!String(url).includes('openai.com'));
+    if (init?.method === 'HEAD') {
+      return new Response(null, { status: 301, headers: { location: 'https://kernelforge.example/v1' } });
+    }
     publicArticleFetches += 1;
     return new Response(
       `<html><head><title>KernelForge v1</title></head><body><article><p>${'KernelForge FP8 persistent MoE kernel design and H100 benchmarks. '.repeat(25)}</p><a href="https://github.com/org/kernelforge">GitHub</a></article></body></html>`,
@@ -588,4 +594,272 @@ test('Mac Codex feedback regressions: unattempted sources warn in footer, >2h X+
   const finalMd = fs.readFileSync(finalized.digestPath, 'utf8');
   assert.match(finalMd, /信源状态 \(3\/3 可用\)/);
   assert.match(finalMd, /原始入库 4 条 → 7日去重跳过 0 条 → 聚合 1 个话题 → 初筛入选 1 个 → 全文补齐 1\/1 → 成稿 1 条/);
+});
+
+test('selection balance & Quick Hits rules: 20 HF papers never drown out Infra/Products/Essays, papers never spill into Quick Hits, t.co HEAD resolution merges X posts, and Quick Hits always renders last', async t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'xdaily-v2-balance-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+
+  // 1. Pre-resolving distinct t.co URLs pointing to the same Latent Space essay merges two X tweets into fanIn=2 and classifies as essay!
+  const col = {
+    schemaVersion: 1,
+    collectionId: 'balance-col-1',
+    date: '2026-11-11',
+    sources: {
+      xFollowing: [
+        { url: 'https://x.com/u1/status/1', text: 'Great latency post on token/s vs wall-clock!', publishedAt: '2026-11-10T10:00:00Z', links: [{ href: 'https://t.co/abc111', text: 'https://t.co/abc111' }] },
+        { url: 'https://x.com/u2/status/2', text: 'Long reasoning tails eat throughput gains.', publishedAt: '2026-11-10T11:00:00Z', links: [{ href: 'https://t.co/xyz222', text: 'https://t.co/xyz222' }] },
+        { url: 'https://x.com/u3/status/3', text: 'Claude Sheets beta launched today for collaborative editing.', publishedAt: '2026-11-10T12:00:00Z', links: [{ href: 'https://claude.example/blog/sheets-beta', text: 'blog' }] },
+        { url: 'https://x.com/u4/status/4', text: 'Claude MCP Apps interactive connectors preview.', publishedAt: '2026-11-10T12:30:00Z', links: [{ href: 'https://claude.example/blog/mcp-apps-preview', text: 'blog' }] },
+      ],
+      feeds: [
+        // 15 pure research papers from Hugging Face Daily Papers + 2 systems/quantization papers + 1 vLLM release
+        ...Array.from({ length: 15 }, (_, i) => ({
+          url: `https://huggingface.co/papers/2611.100${String(i).padStart(2, '0')}`,
+          title: `Pure Theory Paper ${i + 1}`,
+          text: 'A theoretical theorem and ablation on synthetic graphs '.repeat(8),
+          publishedAt: '2026-11-10T08:00:00Z',
+          feedName: 'Hugging Face Daily Papers',
+          links: [{ href: `https://arxiv.org/abs/2611.100${String(i).padStart(2, '0')}`, text: 'arXiv' }],
+        })),
+        {
+          url: 'https://huggingface.co/papers/2611.10649',
+          title: 'MACaQ: Layer-wise MXFP4 Quantization on vLLM',
+          text: 'MXFP4 quantization kernel benchmarked on vLLM with 2.3% overhead '.repeat(8),
+          publishedAt: '2026-11-10T08:30:00Z',
+          feedName: 'Hugging Face Daily Papers',
+          links: [{ href: 'https://arxiv.org/abs/2611.10649', text: 'arXiv' }],
+        },
+        {
+          url: 'https://github.com/vllm-project/vllm/releases/tag/v0.12.0',
+          title: 'vLLM v0.12.0 Release Notes',
+          text: 'Faster FP8 MoE kernels and pipeline parallelism improvements.',
+          publishedAt: '2026-11-10T09:00:00Z',
+          feedName: 'vLLM releases',
+          links: [],
+        },
+      ],
+    },
+  };
+
+  const resolved = await resolveCollectionShortlinks(col, {
+    fetchImpl: async url => {
+      if (url === 'https://t.co/abc111' || url === 'https://t.co/xyz222') {
+        return new Response(null, { status: 301, headers: { location: 'https://www.latent.space/p/latency-tails' } });
+      }
+      return new Response(null, { status: 200 });
+    },
+  });
+  assert.equal(resolved.resolved, 2);
+
+  const built = buildContentStore(col, path.join(dir, 'store'));
+  const latentTopic = built.topics.find(tp => tp.primaryUrl === 'https://latent.space/p/latency-tails');
+  assert.ok(latentTopic, 't.co shortlinks resolved to the same Latent Space essay and clustered');
+  assert.equal(latentTopic.fanIn, 2);
+  assert.equal(latentTopic.category, 'essay');
+
+  // MACaQ (vLLM MXFP4 paper) is classified as infra_eng rather than swallowed into generic research!
+  const macaqTopic = built.topics.find(tp => tp.title.includes('MACaQ'));
+  assert.equal(macaqTopic.category, 'infra_eng');
+
+  // 2. Heuristic selection preserves all 4 Deep Dive sections, caps Daily Papers, and puts ZERO papers in Quick Hits!
+  const selected = selectTopicsHeuristic(built.topics, { maxDeep: 7, maxQuick: 4, maxPerSource: 2 });
+  const deepSections = new Set(selected.filter(s => s.tier === 'deep').map(s => s.section));
+  assert.ok(deepSections.has('Frameworks / Infra'));
+  assert.ok(deepSections.has('Breakthrough Research'));
+  assert.ok(deepSections.has('Applications / Products'));
+  assert.ok(deepSections.has('Long-form / Essays'));
+
+  const topicMap = new Map(built.topics.map(tp => [tp.topicId, tp]));
+  const quickTopics = selected.filter(s => s.tier === 'quick').map(s => topicMap.get(s.topicId));
+  assert.ok(quickTopics.length >= 1, 'Concise product updates enter Quick Hits');
+  assert.ok(quickTopics.every(tp => tp.category !== 'paper' && !tp.sources.includes('Hugging Face Daily Papers')),
+    'Research papers must never spill into Quick Hits');
+
+  // 3. Even if a draft places Quick Hits at the top, normalizeDigestSectionOrder moves Quick Hits to the bottom!
+  const misordered = [
+    '# X AI 日报 2026-11-11',
+    '',
+    '## Quick Hits / 快讯速览',
+    '- **Claude MCP Apps**：网页端开放连接器预览。 [官方说明](https://claude.example/blog/mcp-apps-preview)',
+    '',
+    '## Breakthrough Research',
+    '- **[Research Lab · Paper 1]：核心理论发现。** 正文解释。 [论文](https://arxiv.org/abs/2611.10000)',
+    '',
+    '## Frameworks / Infra',
+    '- **[vLLM · v0.12.0]：FP8 算子提速。** 正文解释。 [Release](https://github.com/vllm-project/vllm/releases/tag/v0.12.0)',
+  ].join('\n');
+  const ordered = normalizeDigestSectionOrder(misordered);
+  const infraPos = ordered.indexOf('## Frameworks / Infra');
+  const researchPos = ordered.indexOf('## Breakthrough Research');
+  const quickPos = ordered.indexOf('## Quick Hits / 快讯速览');
+  assert.ok(infraPos < researchPos && researchPos < quickPos, 'Canonical order: Infra -> Research -> Quick Hits last');
+
+  // 4. Host Agent custom topic override (--selected-topics) re-runs enrichment on chosen topics cleanly.
+  const runDataDir = path.join(dir, 'run-data');
+  const prep1 = await runDailyV2({
+    dataDir: runDataDir,
+    sourcesConfig: { xFollowing: false, watchProfiles: [], blogs: [], xiaohongshuProfiles: [], feeds: [] },
+    premergedSourcesPath: (() => {
+      const p = path.join(dir, 'premerged.json');
+      fs.writeFileSync(p, JSON.stringify(col, null, 2));
+      return p;
+    })(),
+    prepareOnly: true,
+    fetchFullTextOnline: false,
+    runtimeHooks: { now: '2026-11-11T09:00:00Z' },
+  });
+  assert.ok(fs.existsSync(prep1.candidateTopicsPath));
+
+  const customSelectionFile = path.join(prep1.runDir, 'host-selected.json');
+  fs.writeFileSync(customSelectionFile, JSON.stringify({
+    selected: [
+      { topicId: latentTopic.topicId, tier: 'deep', section: 'Long-form / Essays', followUp: false, reason: 'Community-discussed latency analysis' },
+    ],
+  }, null, 2));
+
+  const prep2 = await runDailyV2({
+    dataDir: runDataDir,
+    runDir: prep1.runDir,
+    selectedTopicsPath: customSelectionFile,
+    prepareOnly: true,
+    fetchFullTextOnline: false,
+    runtimeHooks: { now: '2026-11-11T09:02:00Z' },
+  });
+  assert.equal(prep2.selectedTopics, 1);
+  const preparedMaterials = JSON.parse(fs.readFileSync(prep2.preparedTopicsPath, 'utf8'));
+  assert.equal(preparedMaterials[0].topicId, latentTopic.topicId);
+  assert.equal(preparedMaterials[0].section, 'Long-form / Essays');
+});
+
+test('4-signal prior curation & rolling evergreen backlog: social metrics parsed, Tier-S author/source outranks low-vote paper, unpicked gems persist with cached full text, accumulate cross-day signals, and surface on quieter days', async t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'xdaily-v2-backlog-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+
+  // 1. Verify readFeedDom extracts X engagement metrics (replies, reposts, likes, bookmarks, views)
+  const prevDoc = globalThis.document, prevLoc = globalThis.location, prevWin = globalThis.window;
+  t.after(() => {
+    Object.defineProperty(globalThis, 'document', { configurable: true, value: prevDoc });
+    Object.defineProperty(globalThis, 'location', { configurable: true, value: prevLoc });
+    Object.defineProperty(globalThis, 'window', { configurable: true, value: prevWin });
+  });
+  Object.defineProperty(globalThis, 'document', {
+    configurable: true,
+    value: {
+      querySelectorAll: () => [{
+        innerText: 'Deep dive into KV cache paged attention latency.',
+        querySelectorAll: sel => sel === 'a[href]' ? [{ innerText: 'Post', href: 'https://x.com/tri_dao/status/9001' }] : [],
+        querySelector: sel => {
+          if (sel === 'time') return { getAttribute: n => n === 'datetime' ? '2026-11-10T10:00:00Z' : null, closest: () => ({ href: 'https://x.com/tri_dao/status/9001' }) };
+          if (sel === '[role="group"][aria-label]') return { getAttribute: () => '18 replies, 95 reposts, 620 likes, 410 bookmarks, 48.5K views' };
+          return null;
+        },
+        closest: () => null,
+      }],
+      querySelector: () => null,
+      body: { innerText: 'Feed' },
+      documentElement: { scrollHeight: 1500 },
+    },
+  });
+  Object.defineProperty(globalThis, 'location', { configurable: true, value: { pathname: '/home' } });
+  Object.defineProperty(globalThis, 'window', { configurable: true, value: { scrollY: 0, innerHeight: 800 } });
+  const domResult = readFeedDom('x');
+  assert.deepEqual(domResult.items[0].metrics, { replies: 18, reposts: 95, likes: 620, bookmarks: 410, views: 48500 });
+
+  // 2. Verify HF Daily Papers parses upvotes, comments, and githubStars
+  const [hfPaper] = parseFeedDocument(JSON.stringify([{
+    numComments: 12,
+    paper: { id: '2611.77777', title: 'High-Vote Paper', summary: 'Summary', upvotes: 145, githubStars: 820, submittedOnDailyAt: '2026-11-10T06:00:00Z' },
+  }]), 'hf-daily-papers', 'HF', { includeLinks: true });
+  assert.deepEqual(hfPaper.metrics, { upvotes: 145, comments: 12, githubStars: 820 });
+
+  // 3. Verify 4-signal Prior Scorer: Tier-S author/blog easily outranks a 1-upvote generic Daily Paper (category neutrality!)
+  const lowSignalPaper = scoreTopicPrior({
+    title: 'Generic Incremental Paper',
+    category: 'paper',
+    primaryUrl: 'https://huggingface.co/papers/2611.00001',
+    sources: ['Hugging Face Daily Papers'],
+    fanIn: 1,
+    metrics: { upvotes: 1 },
+    cards: [{ author: 'unknown_user', tldr: 'Incremental study' }],
+  });
+  const tierSEssay = scoreTopicPrior({
+    title: 'Why GPU Memory Bandwidth Dictates Agentic Throughput',
+    category: 'essay',
+    primaryUrl: 'https://semianalysis.com/p/gpu-bandwidth-agents',
+    sources: ['SemiAnalysis'],
+    fanIn: 2,
+    metrics: { bookmarks: 120, likes: 240 },
+    cards: [{ author: 'dylan522p', tldr: 'Deep hardware bottleneck breakdown' }],
+  });
+  assert.ok(tierSEssay.priorScore > lowSignalPaper.priorScore + 10,
+    `Tier-S author/source (${tierSEssay.priorScore}) must score far above 1-upvote paper (${lowSignalPaper.priorScore})`);
+
+  // 4. Rolling Evergreen Backlog across Busy Day 1 -> Quiet Day 2 (with signal accumulation & zero re-fetch!)
+  const stateDir = path.join(dir, 'state');
+  fs.mkdirSync(stateDir, { recursive: true });
+  const day1StoreDir = path.join(dir, 'day1-store');
+
+  const day1Collection = {
+    schemaVersion: 1,
+    collectionId: 'day1-busy',
+    date: '2026-11-10',
+    sources: {
+      xFollowing: [
+        { url: 'https://x.com/simonw/status/701', text: 'Published a detailed breakdown on local SQLite vector indexing.', publishedAt: '2026-11-10T08:00:00Z', metrics: { likes: 180, bookmarks: 95 }, links: [{ href: 'https://simonwillison.net/2026/Nov/10/sqlite-vec', text: 'blog' }] },
+        { url: 'https://x.com/karpathy/status/702', text: 'Minimal C/CUDA LLM training loop walkthrough.', publishedAt: '2026-11-10T09:00:00Z', metrics: { likes: 950, bookmarks: 600 }, links: [{ href: 'https://karpathy.example/llm-c-walkthrough', text: 'post' }] },
+      ],
+      feeds: [
+        { url: 'https://anthropic.com/engineering/agent-sandboxes', title: 'Engineering Isolated Agent Sandboxes', text: 'Full engineering architecture post '.repeat(45), publishedAt: '2026-11-10T07:00:00Z', feedName: 'Anthropic Engineering', links: [] },
+      ],
+    },
+  };
+
+  const day1Built = buildContentStore(day1Collection, day1StoreDir);
+  // Suppose on Day 1 layout only published Karpathy's walkthrough, leaving Simon Willison + Anthropic Engineering unpicked!
+  for (const tp of day1Built.topics) tp._storeDir = day1StoreDir;
+  const savedDay1 = saveBacklogPool(stateDir, {
+    reportDate: '2026-11-10',
+    topics: day1Built.topics,
+    citedUrls: ['https://karpathy.example/llm-c-walkthrough'],
+    deferredTopicIds: new Map([[day1Built.topics.find(x => x.primaryUrl.includes('anthropic.com')).topicId, 'Deferred due to tight Day 1 layout']]),
+  });
+  for (const tp of day1Built.topics) delete tp._storeDir;
+  assert.equal(savedDay1.savedCount, 2, 'Both high-prior unpicked gems are saved into backlog-pool.json');
+
+  // Day 2: Quiet day! Anthropic Engineering is NOT in Day 2's fresh feed at all (recalled standalone with cached full text),
+  // while Simon Willison's post gets 1 new X discussion tweet on Day 2 (cross-day signal accumulation: fanIn 1 -> 2!).
+  const day2StoreDir = path.join(dir, 'day2-store');
+  const day2Collection = {
+    schemaVersion: 1,
+    collectionId: 'day2-quiet',
+    date: '2026-11-11',
+    sources: {
+      xFollowing: [
+        { url: 'https://x.com/dev_reader/status/801', text: 'Benchmarked Simon Willison sqlite-vec recipe on 5M rows, works great!', publishedAt: '2026-11-11T05:00:00Z', metrics: { likes: 45, bookmarks: 30 }, links: [{ href: 'https://simonwillison.net/2026/Nov/10/sqlite-vec', text: 'blog' }] },
+      ],
+      feeds: [],
+    },
+  };
+
+  const day2Built = buildContentStore(day2Collection, day2StoreDir);
+  const loadedPool = loadBacklogPool(stateDir, { reportDate: '2026-11-11' });
+  assert.equal(loadedPool.entries.length, 2);
+
+  const mergedStats = mergeBacklogIntoTopics(day2Built.topics, loadedPool.entries, day2StoreDir, { reportDate: '2026-11-11' });
+  assert.equal(mergedStats.recalledStandalone, 1, 'Anthropic Engineering recalled standalone from backlog');
+  assert.equal(mergedStats.accumulatedWithFresh, 1, 'Simon Willison post accumulated new Day 2 X observation');
+
+  const sqliteTopic = day2Built.topics.find(tp => tp.primaryUrl.includes('simonwillison.net'));
+  assert.equal(sqliteTopic.fanIn, 2, 'Cross-day fanIn accumulated from 1 to 2');
+  assert.equal(sqliteTopic.metrics.bookmarks, 95, 'Peak bookmarks preserved across days');
+
+  const anthropicTopic = day2Built.topics.find(tp => tp.primaryUrl.includes('anthropic.com/engineering'));
+  assert.equal(anthropicTopic.fromBacklog, true);
+  assert.equal(anthropicTopic.contentStatus, 'full_text', 'Cached full text reused without re-fetching');
+
+  // Day 9 (> 7 days later): unpicked backlog entries expire cleanly via maxAgeDays=7 TTL.
+  const expiredCheck = loadBacklogPool(stateDir, { reportDate: '2026-11-19', maxAgeDays: 7 });
+  assert.equal(expiredCheck.entries.length, 0);
+  assert.equal(expiredCheck.expiredCount, 2);
 });

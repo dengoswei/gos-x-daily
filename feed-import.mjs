@@ -279,6 +279,7 @@ export function parseFeedDocument(text, kind, label = kind, { maxText = MAX_TEXT
       const when = paper.submittedOnDailyAt ?? entry.publishedAt ?? paper.publishedAt ?? null;
       const original = paper.publishedAt ?? entry.publishedAt ?? null;
       const extraLinks = [];
+      const metrics = {};
       if (includeLinks) {
         if (/^\d{4}\.\d{4,5}(?:v\d+)?$/.test(paper.id)) extraLinks.push({ href: `https://arxiv.org/abs/${paper.id}`, text: 'arXiv' });
         if (typeof paper.githubRepo === 'string') {
@@ -287,11 +288,18 @@ export function parseFeedDocument(text, kind, label = kind, { maxText = MAX_TEXT
         if (typeof paper.projectPage === 'string') {
           try { const pp = https(paper.projectPage, label); extraLinks.push({ href: pp.href, text: 'Project' }); } catch {}
         }
+        const upvotes = paper.upvotes ?? entry.upvotes;
+        const comments = entry.numComments ?? paper.numComments;
+        const stars = paper.githubStars ?? entry.githubStars;
+        if (Number.isFinite(upvotes) && upvotes >= 0) metrics.upvotes = upvotes;
+        if (Number.isFinite(comments) && comments >= 0) metrics.comments = comments;
+        if (Number.isFinite(stars) && stars >= 0) metrics.githubStars = stars;
       }
       // JSON fields are plain text: "<10%" or "$a<b$" is content, never markup.
       return { ...feedItem({ url: `https://huggingface.co/papers/${paper.id}`, title: squash(String(paper.title ?? entry.title ?? '')),
         text: squash(String(paper.summary ?? '')), publishedAt: when == null ? null : stamp(when, label),
         ...(includeLinks ? { links: extraLinks } : {}) }, label, maxText),
+      ...(Object.keys(metrics).length ? { metrics } : {}),
       paperPublishedAt: original == null ? null : stamp(original, label) };
     });
   }
