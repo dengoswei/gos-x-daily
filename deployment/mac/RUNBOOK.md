@@ -63,7 +63,9 @@ only after the verified production send. Its default pool is 1,000 entries and
 365 days, controlled by config/taste.json.
 
 The obsolete `local draft` and `local finalize` commands are disabled. Do not
-use prototype orchestration for a daily occurrence. Use the reviewed publication
+manually repair dispositions: the shared pipeline maps cited URLs to every
+original candidate owner, including browser deep reads attached to topic cards.
+Do not use prototype orchestration for a daily occurrence. Use the reviewed publication
 returned by `local daily` with `local publish --publication PATH`.
 For an explicitly authorized replacement of today's accepted report, first
 reconcile the original receipt, then use `local start-run --revision-of MESSAGE_ID`.

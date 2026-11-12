@@ -26,7 +26,20 @@ import { readFeedDom } from '../feed.mjs';
 import { scoreTopicPrior, loadBacklogPool, mergeBacklogIntoTopics, saveBacklogPool } from '../curation.mjs';
 import { collectionFromBrowserArtifacts } from '../browser-artifacts.mjs';
 import { compactCollection } from '../compose.mjs';
-import { validateDispositions } from '../binding.mjs';
+import { validateDispositions, candidateEntries, candidateKeys, canonicalUrl } from '../binding.mjs';
+
+test('auto dispositions retain cited browser-deep candidate ownership without a standalone topic card', () => {
+  const url = 'https://www.example.com/article';
+  const collection = { collectionId: 'synthetic-deep-owner', sources: { deepArticles: [{ url }] } };
+  const section = 'Long-form / Essays';
+  const markdown = `## ${section}\n\n- Article [Original](https://example.com/article)\n\n## 差异补充\nAudit`;
+  const dispositions = buildAutoDispositions({ collectionId: collection.collectionId,
+    candidateKeys: candidateKeys(collection), candidateEntries: candidateEntries(collection),
+    topics: [], citedUrls: ['https://example.com/article'],
+    bulletSectionsByUrl: new Map([[canonicalUrl(url), section]]) });
+  assert.equal(dispositions.items[0].disposition, 'included');
+  assert.doesNotThrow(() => validateDispositions(dispositions, collection, markdown));
+});
 import { makeRuntime } from '../runtime.mjs';
 import { runDailyV2, validateV2Digest, selectTopicsHeuristic, normalizeDigestSectionOrder } from '../run-daily.mjs';
 import { frozenApiRun } from '../deployment/mac/openai-draft.mjs';

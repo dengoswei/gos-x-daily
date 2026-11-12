@@ -776,10 +776,20 @@ export function loadTopicFullMaterial(topic, storeDir) {
  * Deterministically builds a complete `dispositions.json` from screening + composition
  * results so the model never has to output 200+ disposition rows by hand.
  */
-export function buildAutoDispositions({ collectionId, candidateKeys = [], topics = [], citedUrls = [], bulletSectionsByUrl = new Map() }) {
+export function buildAutoDispositions({ collectionId, candidateKeys = [], candidateEntries = [], topics = [], citedUrls = [], bulletSectionsByUrl = new Map() }) {
   const citedCanonical = new Set(citedUrls.map(safeCanonical).filter(Boolean));
   const items = [];
   const handled = new Set();
+
+  // Every original candidate owns its URL even when its article text was attached
+  // to another topic/card (for example a browser deep read discovered from X).
+  for (const { key, url } of candidateEntries) {
+    const canonical = safeCanonical(url);
+    if (!candidateKeys.includes(key) || handled.has(key) || !citedCanonical.has(canonical)) continue;
+    items.push({ key, disposition: 'included', url,
+      section: bulletSectionsByUrl.get(canonical) ?? 'Frameworks / Infra' });
+    handled.add(key);
+  }
 
   for (const topic of topics) {
     const keys = (topic.candidateKeys ?? []).filter(k => candidateKeys.includes(k) && !handled.has(k));
