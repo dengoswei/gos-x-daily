@@ -45,6 +45,19 @@ function applyDispositionChanges(original, changes) {
   return { ...original, items: [...items, ...changes] };
 }
 
+function restoreObservedLinkSpelling(markdown, allowed) {
+  let result = markdown;
+  for (const url of citedUrls(markdown)) {
+    if (allowed.has(url) || /[?#]/.test(url)) continue;
+    const observed = url.endsWith('/') ? url.slice(0, -1) : url + '/';
+    if (allowed.has(observed)) {
+      result = result.replaceAll('](' + url + ')', '](' + observed + ')')
+        .replaceAll('](<' + url + '>)', '](<' + observed + '>)');
+    }
+  }
+  return result;
+}
+
 function loadPacket(root, sources, raw, sourcesPath = 'sources.json') {
   if (Buffer.byteLength(raw) > 350000) throw new Error('API final evidence manifest exceeds byte budget');
   const packet = JSON.parse(raw);
@@ -269,7 +282,8 @@ export async function finalizeOpenAI({ runsDir, runDir, keyFile, ledgerDir, revi
       fs.mkdirSync(folder, { mode: 0o700 });
       const author = feedback.length ? [...base, message('user', data('revision_findings', feedback))] : base;
       const final = await call('final', author, attempt);
-      const { markdown, dispositionChanges } = final.answer;
+      const { dispositionChanges } = final.answer;
+      const markdown = typeof final.answer.markdown === 'string' ? restoreObservedLinkSpelling(final.answer.markdown, allowed) : undefined;
       let { dispositions } = final.answer;
       if (dispositionChanges !== undefined) {
         try {
@@ -368,7 +382,7 @@ export async function finalizeOpenAI({ runsDir, runDir, keyFile, ledgerDir, revi
       if (feedback.length) feedback.unshift({ previousFinal: markdown });
       if (feedback.length) continue;
       const transcript = [...author, message('assistant', final.content)];
-      const selfRequest = message('user', 'Continue as the same final author, now reconstructing your final units. You have already seen evidence; do not claim source blindness. ' + comprehension + '\n' + unitData);
+      const selfRequest = message('user', 'Continue as the same final author, now reconstructing your final units. You have already seen evidence; do not claim source blindness. Review the exact units below, which may restore the spelling of a public Markdown link to its observed trailing-slash form. ' + comprehension + '\n' + unitData);
       const selfA = await call('author-comprehension', [...transcript, selfRequest], attempt);
       const selfARows = validateReviewAnswer(selfA.answer, units);
       if (checkedAt() <= selfA.finishedAt) await delay(2);

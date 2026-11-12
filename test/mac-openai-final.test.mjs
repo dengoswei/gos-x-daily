@@ -61,7 +61,10 @@ async function setup(t, variant) {
       if (['repair', 'citation-then-material-fail'].includes(variant) && stages.length > 1) {
         assert.ok(last.includes('指出具体问题并进行修订'));
       }
-      answer = variant === 'delta' ? { markdown, dispositionChanges: dispositions.items.filter(row => row.disposition === 'included') } :
+      answer = variant === 'delta' ? {
+        markdown: markdown.replace('](' + fixture.input.excerpts[0].url + ')', '](' + fixture.input.excerpts[0].url + '/)'),
+        dispositionChanges: dispositions.items.filter(row => row.disposition === 'included'),
+      } :
         { markdown, dispositions };
       finalText = JSON.stringify(answer);
     } else {
@@ -187,10 +190,13 @@ test('API final repairs only units with invalid quotes before approving the same
   f.unchangedLedger();
 });
 
-test('API final accepts changed dispositions and keeps the remaining validated rows', async t => {
+test('API final keeps unchanged dispositions and reviews the exact observed spelling of links', async t => {
   const f = await setup(t, 'delta');
   const result = await f.run();
   assert.equal((await cli(['validate-publication', '--publication', result.publication])).reviewedUnits, result.units);
+  const finalDigest = fs.readFileSync(path.join(path.dirname(result.publication), 'digest.md'), 'utf8');
+  assert.equal(finalDigest, f.markdown);
+  assert.notEqual(JSON.parse(fs.readFileSync(path.join(result.outDir, '1-final.json'), 'utf8')).markdown, finalDigest);
   f.unchangedLedger();
 });
 
