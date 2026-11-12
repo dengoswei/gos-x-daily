@@ -16,6 +16,11 @@ async function setup(t, variant) {
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const fixture = await makeApiFinalFixture(root);
   const { runDir, ledgerDir, markdown, dispositions, evidenceText, coverageText, secret } = fixture;
+  if (variant === 'delta') {
+    fs.writeFileSync(path.join(runDir, 'api-final-input.json'), JSON.stringify({
+      ...fixture.input, editorialFocus: [fixture.input.excerpts[0].id],
+    }));
+  }
   const included = dispositions.items.find(row => row.disposition === 'included');
   if (variant === 'citation-typo') {
     const skippedIndex = dispositions.items.findIndex(row => row.disposition === 'skipped');
@@ -58,6 +63,10 @@ async function setup(t, variant) {
     stages.push(stage);
     let answer;
     if (stage === 'final') {
+      if (variant === 'delta') {
+        assert.deepEqual(fromTag(all, 'verified_evidence').editorialFocus, [fixture.input.excerpts[0].id]);
+        assert.match(last, /preserve the material conditions, exceptions and benchmark scope/);
+      }
       if (['repair', 'citation-then-material-fail'].includes(variant) && stages.length > 1) {
         assert.ok(last.includes('指出具体问题并进行修订'));
       }
@@ -236,5 +245,7 @@ test('API final rejects attempts to select local mail or to supply a non-verbati
     await assert.rejects(f.run(), error);
   }
   assert.deepEqual(f.stages, []);
+  fs.writeFileSync(manifest, JSON.stringify({ ...f.input, editorialFocus: ['coverage'] }));
+  await assert.rejects(f.run(), /editorial focus must reference distinct public evidence IDs/);
   f.unchangedLedger();
 });

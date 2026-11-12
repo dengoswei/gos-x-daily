@@ -102,8 +102,13 @@ function loadPacket(root, sources, raw, sourcesPath = 'sources.json') {
   if (!excerpts.some(row => row.kind === 'public') || !excerpts.some(row => row.kind === 'coverage')) {
     throw new Error('API final needs both public evidence and coverage evidence');
   }
+  const editorialFocus = packet.editorialFocus ?? [];
+  if (!asList(editorialFocus, 20) || new Set(editorialFocus).size !== editorialFocus.length ||
+      editorialFocus.some(id => byId.get(id)?.kind !== 'public')) {
+    throw new Error('API final editorial focus must reference distinct public evidence IDs');
+  }
   if (Buffer.byteLength(JSON.stringify(excerpts)) > 180000) throw new Error('API final excerpt budget exceeded');
-  return { excerpts, byId, backing, materialsPaths, evidencePaths };
+  return { excerpts, editorialFocus, byId, backing, materialsPaths, evidencePaths };
 }
 
 function validateReviewAnswer(answer, units, packet, invalidQuotes) {
@@ -270,11 +275,13 @@ export async function finalizeOpenAI({ runsDir, runDir, keyFile, ledgerDir, revi
       return { result, rows: new Map(units.map(unit => [unit.id, rows.get(unit.id)])) };
     };
     const recentPublic = recent.map(row => ({ date: row.date, urls: row.urls.filter(url => canonicalAllowed.has(canonicalUrl(url))).map(canonicalUrl) }));
-    const shared = data('verified_evidence', { renderedCoverage, recentPublic, excerpts: [...packet.excerpts, accounting] });
+    const shared = data('verified_evidence', { renderedCoverage, recentPublic, excerpts: [...packet.excerpts, accounting],
+      ...(packet.editorialFocus.length ? { editorialFocus: packet.editorialFocus } : {}) });
     const base = [
       system('final', repoText('../../EDITORIAL.md') + '\n' + repoText('../../prompts/compose-digest.md') +
         '\nYou are the final author. Use the draft only as leads; every included story must be supported by verified excerpts. Cite only their exact public URLs. Return {"markdown":"complete digest","dispositionChanges":[]} with only rows that change from the draft. The controller retains each unchanged draft row by candidate key. Supply replacement rows using the same schema for every key whose inclusion, section, URL, merge target, or skip reason changes. When dropping an included candidate, also update any merged rows pointing to it. Use grouped keys for skips with the same reason. Audit counts must match the resulting dispositions. Count candidate keys, main bullets and supplemental links separately; one key or link need not equal one story. Do not infer reading depth, an excerpt absence reason, or the controller’s review or delivery status. Keep a concise 本次采集范围 paragraph in the visible main body, separated by blank lines, and preserve material limits. The renderer appends renderedCoverage verbatim. Distinguish hours with no certified traversal from measured actual gaps and unknown unseen-post count; make your own coverage text consistent with the appended line. No private source paths, links or headers. For repeats, require a supported new fact with 跟进.'),
-      message('user', data('final_inputs', { date: run.date, revision, draft }) + '\n' + shared),
+      message('user', data('final_inputs', { date: run.date, revision, draft }) + '\n' + shared +
+        (packet.editorialFocus.length ? '\nThe editorialFocus IDs mark source details found during review. If you cover their topic, explicitly preserve the material conditions, exceptions and benchmark scope in these excerpts.' : '')),
     ];
     let feedback = [];
     for (let attempt = 1; attempt <= 2; attempt++) {
