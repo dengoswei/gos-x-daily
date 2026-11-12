@@ -48,7 +48,7 @@ function applyDispositionChanges(original, changes) {
 function restoreObservedLinkSpelling(markdown, allowed) {
   let result = markdown;
   for (const url of citedUrls(markdown)) {
-    if (allowed.has(url)) continue;
+    if (allowed.has(url) || /[?#]/.test(url)) continue;
     const observed = url.endsWith('/') ? url.slice(0, -1) : url + '/';
     if (allowed.has(observed)) {
       result = result.replaceAll('](' + url + ')', '](' + observed + ')')
