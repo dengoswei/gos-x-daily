@@ -1,0 +1,130 @@
+{
+  "schemaVersion": 1,
+  "description": "4-Signal Prior Curation Profile: (1) Author confidence, (2) Source SNR tier, (3) Social/engagement resonance, minus noise penalties. Article category determines display section only, never quality score.",
+  "authors": {
+    "tierS": {
+      "boost": 6.0,
+      "handles": [
+        "karpathy",
+        "ylecun",
+        "srush_nlp",
+        "tri_dao",
+        "simonw",
+        "emollick",
+        "natolambert",
+        "rasbt",
+        "cHHillee",
+        "jeremyphoward",
+        "lianminzheng",
+        "zhuzilin_",
+        "woosuk_k",
+        "lilianweng",
+        "gdb",
+        "sama",
+        "darioamodei",
+        "demishassabis",
+        "jeffdean",
+        "NoamShazeer",
+        "hardmaru",
+        "fchollet",
+        "goodside",
+        "swyx",
+        "GergelyOrosz",
+        "dylan522p"
+      ]
+    },
+    "tierA": {
+      "boost": 3.5,
+      "handles": [
+        "OpenAI",
+        "AnthropicAI",
+        "GoogleDeepMind",
+        "Alibaba_Qwen",
+        "deepseek_ai",
+        "vllm_project",
+        "lmsysorg",
+        "PyTorch",
+        "huggingface",
+        "SemiAnalysis_",
+        "LatentSpacePod"
+      ]
+    }
+  },
+  "sources": {
+    "tierS": {
+      "boost": 5.0,
+      "names": [
+        "Anthropic Engineering",
+        "Thinking Machines",
+        "Lilian Weng",
+        "SemiAnalysis",
+        "Chips and Cheese",
+        "Interconnects",
+        "Ahead of AI"
+      ],
+      "domains": [
+        "anthropic.com/engineering",
+        "thinkingmachines.ai",
+        "lilianweng.github.io",
+        "semianalysis.com",
+        "chipsandcheese.com",
+        "interconnects.ai",
+        "magazine.sebastianraschka.com",
+        "latent.space",
+        "simonwillison.net",
+        "oneusefulthing.org",
+        "pragmaticengineer.com"
+      ]
+    },
+    "tierA": {
+      "boost": 3.0,
+      "names": [
+        "OpenAI News",
+        "Google DeepMind blog",
+        "Claude Blog",
+        "Qwen blog",
+        "PyTorch blog",
+        "vLLM releases",
+        "SGLang releases",
+        "Hugging Face blog"
+      ],
+      "domains": [
+        "openai.com",
+        "deepmind.google",
+        "qwenlm.github.io",
+        "pytorch.org/blog"
+      ]
+    },
+    "tierB": {
+      "boost": 1.0,
+      "names": [
+        "Google AI blog",
+        "NVIDIA Developer blog",
+        "smol.ai AI News",
+        "Hugging Face Daily Papers"
+      ],
+      "domains": [
+        "huggingface.co/papers",
+        "arxiv.org"
+      ]
+    }
+  },
+  "socialWeights": {
+    "fanInPerExtraPost": 2.8,
+    "fanInMaxExtraPosts": 4,
+    "watchAccountPresenceBoost": 4.0,
+    "xEngagementLogScale": 1.6,
+    "hfUpvotesLogScale": 2.0,
+    "githubStarsLogScale": 1.2
+  },
+  "noisePenalties": {
+    "caseStudyPr": -8.0,
+    "purePromoOrHiring": -6.0
+  },
+  "backlog": {
+    "maxPoolSize": 40,
+    "maxAgeDays": 7,
+    "dailyDecay": 0.6,
+    "minPriorScoreToEnter": 5.5
+  }
+}
