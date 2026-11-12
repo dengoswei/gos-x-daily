@@ -38,11 +38,75 @@ node $DEPLOYMENT_HOME/run.mjs cli compose-input --sources "$RUN/sources.json" --
 
 If configured feeds are used, import them with `cli import-feed` and use the merged sources consistently. Unsupported optional page shapes can remain declared supplemental materials with direct URLs and preserved originals. Do not falsify URLs to satisfy the importer.
 
+When `model.apiDraft.keyFile` is configured in the private, pinned
+`deployment.local.json`, generate worker packets at `RUN/packets`, then invoke
+`node $DEPLOYMENT_HOME/run.mjs local draft --run "$RUN"`. The key file must
+contain one `CODEX_API_KEY` entry. The API draft sends the normalized
+collection prompts and worker packets to the official OpenAI API using the
+configured `model.apiDraft.models.screen` (Sol or Terra) for screening and
+Sol for story and compose, with high reasoning on each call. It writes its
+results and token usage under `RUN/api-draft`. A partial provider failure can continue via
+`local draft --run "$RUN" --resume` with the same input and configuration.
+
+### API finalization
+
+For configured API runs, read original sources and write `canonical-materials.json`,
+`collection-coverage.md` and `api-final-input.json`. The latter is an explicit
+projection; see [the shape](../../examples/api-final-input.example.json). Set
+`collectionId` to the imported collection ID and list all local material and
+supplemental evidence paths. The runner also binds every evidence path from source
+provenance. Paths are relative to the run and cannot use symlinks.
+
+Only the `excerpts` projection (plus already processed draft, derived coverage
+counts and relevant public history URLs) goes to the API. Choose exact short text
+from the named, preserved file. Include date, mechanism, result and material
+limits for each publishable lead; use multiple excerpts for a long source. Each
+public source must have its observed direct HTTPS URL in its backing file, with
+no query string. Provide current coverage facts from `collection-coverage.md`.
+Review excerpts for private text, identifiers, paths and private URLs before
+running. Local bindings can include private mail or screenshots, but never use
+them as excerpts. Read public originals for useful leads from private mail; leave
+out claims that cannot be supported with shareable evidence and disclose the gap.
+
+```sh
+node $DEPLOYMENT_HOME/run.mjs local finalize --run "$RUN"
+```
+
+Sol High writes the final report and dispositions. A fresh reader reconstructs
+the final prose without source access and saves that result before the separate
+fidelity call. The API author continues its own author transcript, checks every
+pending unit, including the audit, exact Markdown and native post JSON, and
+records `sourceBlind: false` under its actual author identity. The runner resolves
+evidence IDs and verbatim citations locally, rehashes the bound files, and fails
+closed on unresolved material findings or invalid review data. If a fidelity
+review cites a known excerpt with a non-verbatim quote, the same reviewer gets
+one repair call for the affected units, using the same report and evidence.
+Those units must pass the same checks again. A material finding can trigger
+one revision and review of the whole report. Reviewers receive locally validated
+candidate counts, main-bullet count and counts grouped by cited public URL.
+The runner writes request IDs and usage to `api-usage.jsonl`
+under the returned final output directory. Finalization never contacts Feishu or
+writes to the delivery ledger. Use the returned `publication` path for the existing
+`cli validate-publication` and `local publish --publication` commands. Do not edit
+the reviewed artifacts. A separately authorized same-day revision uses
+`local finalize --run "$RUN" --revision` and the existing explicit revision sender.
+
+If finalization is interrupted, first check `local status --date YYYY-MM-DD`.
+Reconcile any accepted delivery and investigate any uncertain attempt. If there
+is no delivery attempt and an approved `api-final-result.json` exists, validate
+its publication and continue with the normal publish command. If no approved
+result exists, confirm on the host that no finalizer owns the run. Archive any
+empty stale `api-final.lock` directory under a unique name within the run, then
+restart finalization with the same frozen evidence and validated draft. Preserve
+prior attempt directories. Never move an active lock or a delivery-ledger file.
+
+### Host author workflow without an API key file
+
 Write `digest.md`, `canonical-materials.json`, `collection-coverage.md` and one disposition per imported candidate key. Explain the problem, mechanism and supported result in plain Chinese. Keep old publication dates, author claims and material limitations visible. Select substantive supported stories without an item quota. Review all observed candidates and relevant mail/Substack leads. Use recently published URLs for deduplication and identify a real new fact in any follow-up.
 
 The reader-facing message contains the articles and a short coverage paragraph. Detailed page counts, failed reads, cumulative coverage and candidate dispositions belong in the audit. Imported `included` keys are not the final article count because supplemental articles may be outside that set. Previous reports are historical evidence only, not a style or semantic approval baseline. Use the editorial and worker contracts in this checkout.
 
-## Self-check and bind
+### Host self-check and binding
 
 Create `publication.json` with absolute `ledgerDir` above, `rootDir: "."`, `reviewPath: "review.self.json"` and these snapshot fields:
 

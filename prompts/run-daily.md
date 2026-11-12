@@ -50,13 +50,39 @@ candidate and relevant supplemental lead. Context batches are not article quotas
 Keep failed reads and unverified 24h/48h intervals explicit.
 
 Assign story workers to read the original article/paper/repository and meaningful
-figures. They return prose, source-backed materials, disposition recommendations
-and unresolved questions. Deduplicate across sources and published URLs; a repeat
+figures. They return source-backed evidence, candidate leads and unresolved
+questions. Deduplicate across sources and published URLs; a repeat
 is eligible as 跟进 only with a specific new fact. Keep publication dates of old
 work. Do not import preview history as publication history, discard uncertain
 attempts, invoke a retired workspace workflow or change sending identity.
 
-## Write and review
+## Write and review with the configured API key
+
+If `inspect` reports a configured `model.apiDraft`, write worker packets to
+`RUN/packets` and run `local draft --run RUN` through the provisioned wrapper.
+It uses the configured screening model and GPT-6.1 Sol for story drafts and
+composition, all with high reasoning. A provider failure is a run failure unless the unchanged partial
+output can be completed with `--resume`. A structurally rejected draft requires
+diagnosis before a new attempt. Use the draft as leads for original-source checks.
+Prepare `canonical-materials.json`, `collection-coverage.md` and the explicit
+`api-final-input.json` projection described in the Mac runbook. Include enough
+verbatim public source text to verify dates, mechanisms, results, comparisons and
+limitations. Keep private Gmail bodies, screenshots, credentials and identifiers
+out of that projection. Corroborate private leads with public originals or record
+the limitation and omit unsupported items.
+
+Run `local finalize --run RUN`. Sol High writes the terminal digest and
+dispositions, then a fresh reader first reconstructs the prose without evidence
+and checks it against evidence in a second call. The actual API author reviews
+every unit, audit, render and native payload by continuing its author transcript
+with `sourceBlind: false`. Only use the returned `publication` path after both
+passes succeed. Do not edit the generated report or synthesize an approval.
+Unresolved API or evidence failures block this route; report them rather than
+quietly replacing the writer or reviewer. Record usage from both stage logs.
+
+If no API key file is configured, use the host author workflow below.
+
+## Host author workflow without a configured API key
 
 Produce a substantive Chinese report without an arbitrary story or sentence
 quota. Every item has one clear main idea; explain the concrete problem,
@@ -88,7 +114,8 @@ bytes and recheck affected units. Run `cli validate-publication`.
 ## Publish once and finish
 
 Immediately after successful author self-check, use
-`local publish --publication RUN/publication.json`. Only this controller checks
+`local publish --publication PUBLICATION` using the path from finalization (or
+the host-authored `RUN/publication.json` when no API key is configured). Only this controller checks
 sole Mac ownership, current recipient history, exact reviewed payload, target,
 canonical date key and durable attempt, sends once and verifies readback. API
 acceptance with pending readback requires reconciliation only. An uncertain

@@ -182,7 +182,8 @@ export function collectionFromBrowserArtifacts(runtime, bundle) {
     : extractThreadDiscoveries(bundle.threadDiscovery, { evidenceFor, window });
   if (threadDiscovery.contexts.length) warnings.push('Thread/quote contexts are discovery leads, not new-publication proof or complete interval traversal; original and observation dates remain distinct.');
   if (threadDiscovery.stats.unresolvedThreadReferences) warnings.push(`${threadDiscovery.stats.unresolvedThreadReferences} thread/quote reference(s) remain unresolved; do not infer missing content.`);
-  const deepLinkAudit = auditDeepLinks([...xFollowing, ...parsed.substack, ...threadDiscovery.auditItems], runtime.deepReadLimit).map(link => ({ ...link,
+  const watchItems = watchProfiles.flatMap(profile => profile.items);
+  const deepLinkAudit = auditDeepLinks([...xFollowing, ...watchItems, ...parsed.substack, ...threadDiscovery.auditItems], runtime.deepReadLimit).map(link => ({ ...link,
     readStatus: deepArticles.some(article => article.url === link.href || article.url === link.originalHref) ? 'browser_observed' : 'not_read' }));
   return {
     schemaVersion: 1, collectionId: runtime.runId, digestMarker: `<!-- x-daily-collection: ${runtime.runId} -->`,

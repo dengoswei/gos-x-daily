@@ -104,7 +104,12 @@ export function openRun(runDir) {
   const read = packetReader(packetsRoot);
   const coordinator = JSON.parse(readPublicationFile(packetsRoot, 'coordinator.json'));
   const inventory = read(coordinator.inventory).value;
-  const sourceBytes = fs.readFileSync(regularFile(path.join(runRoot, 'sources.json')));
+  const candidateSourcePath = [
+    path.join(runRoot, path.basename(String(inventory.sourceBinding?.path ?? ''))),
+    path.join(runRoot, 'sources.merged.json'),
+    path.join(runRoot, 'sources.json'),
+  ].find(candidate => fs.existsSync(candidate)) ?? path.join(runRoot, 'sources.json');
+  const sourceBytes = fs.readFileSync(regularFile(candidateSourcePath));
   if (sha256(sourceBytes) !== inventory.sourceBinding.sha256 || sourceBytes.length !== inventory.sourceBinding.sizeBytes) {
     throw new Error('RUN/sources.json does not match the packets source binding; re-run worker-input for this collection');
   }

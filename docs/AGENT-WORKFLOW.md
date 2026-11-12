@@ -99,6 +99,13 @@ or review checklists visible as headings in every reader-facing item.
 
 ## 4. Assemble and review
 
+In the configured Mac API route, the coordinator selects and verifies original
+evidence and builds the explicit public excerpt projection in the Mac runbook.
+`local finalize` owns terminal writing, the fresh two-phase reader calls and the
+same API author's semantic self-check. Its result is a reviewed local publication,
+not a send. The host-authored procedure below applies to other deployments and
+Mac runs without an API key file.
+
 The coordinator reads all selected `story.md` files, compact findings and the
 candidate/disposition indexes. It loads original evidence selectively for issues
 and for its required final author fidelity check, one review unit at a time.

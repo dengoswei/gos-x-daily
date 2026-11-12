@@ -41,6 +41,17 @@ const stableKey = value => JSON.stringify(value, (_key, entry) =>
     ? Object.fromEntries(Object.keys(entry).sort().map(key => [key, entry[key]])) : entry);
 const union = values => [...new Map(values.filter(value => value != null).map(value => [stableKey(value), value])).values()];
 
+const mergeMetrics = (a, b) => {
+  if (!a && !b) return undefined;
+  const out = {};
+  for (const key of ['likes', 'reposts', 'replies', 'bookmarks', 'views', 'upvotes', 'comments', 'githubStars']) {
+    const va = Number.isFinite(a?.[key]) ? a[key] : null;
+    const vb = Number.isFinite(b?.[key]) ? b[key] : null;
+    if (va !== null || vb !== null) out[key] = Math.max(va ?? 0, vb ?? 0);
+  }
+  return Object.keys(out).length ? out : undefined;
+};
+
 export function mergeItems(...groups) {
   const result = new Map();
   for (const item of groups.flat()) {
@@ -49,17 +60,21 @@ export function mergeItems(...groups) {
     const previous = result.get(key);
     if (!previous) result.set(key, { ...item,
       ...((item.evidenceId || item.evidenceIds?.length) ? { evidenceIds: union([item.evidenceId, ...(item.evidenceIds || [])]) } : {}),
-      ...((item.discovery || item.discoveries) ? { discoveries: union([item.discovery, ...(item.discoveries || [])]) } : {}),
+      ...((item.discovery || item.discoveries) ? { discoveries: union([item.discovery, ...(item.discovery ? [] : []), ...(item.discoveries || [])]) } : {}),
     });
-    else result.set(key, {
-      ...previous, ...item,
-      text: (previous.text || '').length > (item.text || '').length ? previous.text : item.text,
-      publishedAt: Number.isFinite(ms(previous.publishedAt)) && !Number.isFinite(ms(item.publishedAt)) ? previous.publishedAt : item.publishedAt,
-      ...((previous.evidenceId || item.evidenceId) ? { evidenceId: item.evidenceId || previous.evidenceId } : {}),
-      evidenceIds: union([previous.evidenceId, ...(previous.evidenceIds || []), item.evidenceId, ...(item.evidenceIds || [])]),
-      discoveries: union([previous.discovery, ...(previous.discoveries || []), item.discovery, ...(item.discoveries || [])]),
-      links: [...new Map([...(previous.links || []), ...(item.links || [])].map((l) => [l.href, l])).values()],
-    });
+    else {
+      const mergedMetrics = mergeMetrics(previous.metrics, item.metrics);
+      result.set(key, {
+        ...previous, ...item,
+        text: (previous.text || '').length > (item.text || '').length ? previous.text : item.text,
+        publishedAt: Number.isFinite(ms(previous.publishedAt)) && !Number.isFinite(ms(item.publishedAt)) ? previous.publishedAt : item.publishedAt,
+        ...((previous.evidenceId || item.evidenceId) ? { evidenceId: item.evidenceId || previous.evidenceId } : {}),
+        evidenceIds: union([previous.evidenceId, ...(previous.evidenceIds || []), item.evidenceId, ...(item.evidenceIds || [])]),
+        discoveries: union([previous.discovery, ...(previous.discoveries || []), item.discovery, ...(item.discoveries || [])]),
+        links: [...new Map([...(previous.links || []), ...(item.links || [])].map((l) => [l.href, l])).values()],
+        ...(mergedMetrics ? { metrics: mergedMetrics } : {}),
+      });
+    }
   }
   return [...result.values()];
 }
@@ -175,7 +190,7 @@ export async function scanWindow({ read, scroll, window, maxPages = 80, maxMs = 
 
 // This is a relevance heuristic, not a claim that the destination is an article.
 // Root-hosted papers and interactive research microsites still need a deep read.
-const technicalTopic = /\b(RL|GRPO|PPO|TRL|BF16|FP8|optimizer|rollout|checkpoint|training|inference|weight.?sync|delta|kernel|GPU|LLMs?|agents?|research|scaling|mechanistic[\s-]+interpretability|interpretability|mech[\s-]?interp|neurons?|superposition|monosemanticity|polysemanticity|sparse[\s-]+autoencoders?|SAEs?|feature[\s-]+visuali[sz]ation|Goodfire|Nick[\s_-]*Cammarata|nickcammarata)\b|(?<![\w.])AI\b|训练|推理|论文|权重|研究|可解释性|神经元|叠加/i;
+const technicalTopic = /\b(RL|GRPO|PPO|TRL|BF16|FP8|FP4|INT8|INT4|MoE|MLA|GQA|KV[\s-]?cache|CUDA|Triton|NCCL|ROCm|TPU|vLLM|SGLang|Megatron|PyTorch|JAX|optimizer|rollout|checkpoint|training|pretraining|post-training|fine-?tuning|distillation|quantization|speculative|attention|transformer|inference|serving|throughput|latency|benchmark|eval(?:uation)?s?|weight.?sync|delta|kernel|GPU|LLMs?|VLMs?|multimodal|vision-language|diffusion|world[\s-]?model|robotics|embodied|compiler|formal|verification|theorem|Lean\b|zero-knowledge|ZKP?|agents?|agentic|coding|RAG|context[\s-]?window|long[\s-]?context|research|paper|arxiv|open-?source|open-?weight|release|architecture|scaling|mechanistic[\s-]+interpretability|interpretability|mech[\s-]?interp|neurons?|superposition|monosemanticity|polysemanticity|sparse[\s-]+autoencoders?|SAEs?|feature[\s-]+visuali[sz]ation|Goodfire|Nick[\s_-]*Cammarata|nickcammarata)\b|(?<![\w.])AI\b|训练|推理|微调|蒸馏|量化|算子|吞吐|延迟|评测|基准|架构|开源|模型|多模态|智能体|代理|论文|权重|研究|可解释性|神经元|叠加/i;
 const navigationLabel = /^(?:home(?:page)?|website|official (?:site|website)|my (?:site|website)|profile|sign[ -]?in|log[ -]?in|subscribe|首页|主页|官网)\s*[.!]?$/i;
 
 export function canonicalLink(href) {
@@ -280,6 +295,41 @@ export function rankDeepLinks(items, limit = 12) {
 
 // Executed inside the browser, kept here so fixture tests can exercise the adapter.
 export function readFeedDom(kind) {
+  const parseCompactCount = raw => {
+    const m = String(raw ?? '').replace(/,/g, '').match(/(\d+(?:\.\d+)?)\s*([KkMm万])?/);
+    if (!m) return null;
+    const base = Number(m[1]);
+    if (!Number.isFinite(base)) return null;
+    const unit = (m[2] ?? '').toLowerCase();
+    const mult = unit === 'k' ? 1e3 : unit === 'm' ? 1e6 : unit === '万' ? 1e4 : 1;
+    return Math.round(base * mult);
+  };
+  const extractXMetrics = node => {
+    const group = node.querySelector?.('[role="group"][aria-label]');
+    const label = group?.getAttribute?.('aria-label') || '';
+    const metrics = {};
+    if (label) {
+      const patterns = [
+        ['replies', /(\d[\d,.]*\s*[KkMm万]?)\s*(?:replies|reply|条?回复)/i],
+        ['reposts', /(\d[\d,.]*\s*[KkMm万]?)\s*(?:reposts?|retweets?|次?转[发帖])/i],
+        ['likes', /(\d[\d,.]*\s*[KkMm万]?)\s*(?:likes?|次?喜欢|赞)/i],
+        ['bookmarks', /(\d[\d,.]*\s*[KkMm万]?)\s*(?:bookmarks?|次?书签|收藏)/i],
+        ['views', /(\d[\d,.]*\s*[KkMm万]?)\s*(?:views?|次?观看|查看)/i],
+      ];
+      for (const [field, re] of patterns) {
+        const hit = label.match(re);
+        const n = hit ? parseCompactCount(hit[1]) : null;
+        if (n !== null) metrics[field] = n;
+      }
+    }
+    for (const [field, testId] of [['replies', 'reply'], ['reposts', 'retweet'], ['likes', 'like'], ['bookmarks', 'bookmark']]) {
+      if (metrics[field] !== undefined) continue;
+      const el = node.querySelector?.(`[data-testid="${testId}"]`);
+      const n = el ? parseCompactCount(el.getAttribute?.('aria-label') || el.innerText || '') : null;
+      if (n !== null) metrics[field] = n;
+    }
+    return Object.keys(metrics).length ? metrics : undefined;
+  };
   const nodes = [...document.querySelectorAll(kind === 'x' ? 'article' : '[role=article]')];
   const items = nodes.filter(node => !node.querySelector('[data-testid="promotedIndicator"], [data-testid="placementTracking"]') &&
     !node.closest('[data-testid="placementTracking"]')).map((node) => {
@@ -289,8 +339,10 @@ export function readFeedDom(kind) {
     const url = kind === 'x' ? status : time?.closest('a[href]')?.href || links.find((l) => /\/p\/|\/home\/post\/|\/note\//.test(l.href))?.href;
     const rawDate = time?.getAttribute('datetime') || time?.getAttribute('title') || '';
     const parsed = Date.parse(rawDate);
+    const metrics = kind === 'x' ? extractXMetrics(node) : undefined;
     return { url, publishedAt: Number.isFinite(parsed) ? new Date(parsed).toISOString() : null,
       text: (node.innerText || '').trim().slice(0, 16000), links,
+      ...(metrics ? { metrics } : {}),
       truncated: Boolean(node.querySelector('[data-testid="tweet-text-show-more-link"]')) || (node.innerText || '').trim().length > 16000 };
   }).filter((i) => i.text && i.url);
   const text = document.body.innerText || '';

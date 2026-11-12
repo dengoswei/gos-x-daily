@@ -181,6 +181,25 @@ export async function main(args) {
   const config=loadLocalConfig();
   const command=args[0];
   const value=flag=>args[args.indexOf(flag)+1];
+  if (command === 'finalize') {
+    if (args[1] !== '--run' || !args[2] || (args.length !== 3 && !(args.length === 4 && args[3] === '--revision'))) {
+      throw new Error('Use local finalize --run RUN [--revision]');
+    }
+    const { finalizeOpenAI } = await import('./openai-final.mjs');
+    const deployment = read(path.join(base, 'deployment.local.json'));
+    return finalizeOpenAI({ runsDir: config.runsDir, runDir: args[2], ledgerDir: config.ledgerDir,
+      keyFile: deployment.model?.apiDraft?.keyFile, revision: args[3] === '--revision' });
+  }
+  if (command === 'draft') {
+    if (!args.includes('--run')) throw new Error('Use local draft --run RUN [--resume]');
+    const { draftOpenAI } = await import('./openai-draft.mjs');
+    const deployment = read(path.join(base, 'deployment.local.json'));
+    return draftOpenAI({
+      runsDir: config.runsDir, runDir: value('--run'),
+      keyFile: deployment.model?.apiDraft?.keyFile, models: deployment.model?.apiDraft?.models,
+      resume: args.includes('--resume'),
+    });
+  }
   if (command === 'doctor') {
     fs.accessSync(path.join(sourceRepo,'deployment/mac/mac-sender.mjs'), fs.constants.X_OK);
     const identity=verifyIdentity(config);

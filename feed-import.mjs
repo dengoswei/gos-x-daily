@@ -207,6 +207,23 @@ export function htmlElements(html, name) {
   return out.map(({ attrs, raw }) => ({ attrs, raw }));
 }
 
+/** Extracts valid HTTPS outbound links from an HTML snippet (resolving relative hrefs against baseUrl). */
+export function extractHtmlLinks(html, baseUrl = null) {
+  if (typeof html !== 'string' || !html) return [];
+  const seen = new Set(), links = [];
+  for (const { attrs, raw } of htmlElements(html, 'a')) {
+    const rawHref = attrs.href?.trim();
+    if (!rawHref || /^(?:javascript:|mailto:|tel:|#)/i.test(rawHref)) continue;
+    let resolved;
+    try { resolved = baseUrl ? new URL(rawHref, baseUrl) : new URL(rawHref); } catch { continue; }
+    if (resolved.protocol !== 'https:' || resolved.username || resolved.password) continue;
+    if (seen.has(resolved.href)) continue;
+    seen.add(resolved.href);
+    links.push({ href: resolved.href, text: htmlToText(raw).slice(0, 200) });
+  }
+  return links;
+}
+
 function entryLink(xml, label) {
   const links = elementsOf(xml, ['link'], label);
   const tagged = links.map(node => node.attrs).filter(attrs => attrs.href);
@@ -230,18 +247,26 @@ function entryDate(xml, label) {
   return null;
 }
 
-// Cut text is marked, never presented as the whole entry.
-const feedItem = ({ url, title, text, publishedAt }, label) => {
+// Cut text is marked, never presented as the whole entry. With maxText: Infinity,
+// full raw text is preserved for the L0 archive without truncation.
+const feedItem = ({ url, title, text, publishedAt, links }, label, maxText = MAX_TEXT) => {
   const href = https(url, label).href;
   const cleanTitle = (title ?? '').slice(0, 500);
   const full = text || cleanTitle;
-  const body = full.slice(0, MAX_TEXT);
+  const body = Number.isFinite(maxText) ? full.slice(0, maxText) : full;
   if (!body) throw new Error(`Feed entry has neither title nor text in ${label}: ${href}`);
-  return { url: href, title: cleanTitle, text: body, publishedAt, ...(full.length > MAX_TEXT ? { truncated: true } : {}) };
+  return {
+    url: href,
+    title: cleanTitle,
+    text: body,
+    publishedAt,
+    ...(Number.isFinite(maxText) && full.length > maxText ? { truncated: true } : {}),
+    ...(Array.isArray(links) ? { links } : {}),
+  };
 };
 
 // Returns entries in document order as { url, title, text, publishedAt }; throws on any malformed entry.
-export function parseFeedDocument(text, kind, label = kind) {
+export function parseFeedDocument(text, kind, label = kind, { maxText = MAX_TEXT, includeLinks = false } = {}) {
   if (typeof text !== 'string') throw new Error(`Feed document must be text: ${label}`);
   if (kind === 'hf-daily-papers') {
     let value;
@@ -253,9 +278,28 @@ export function parseFeedDocument(text, kind, label = kind) {
       // The feed's own publication is the Daily Papers listing; the arXiv date is often days older.
       const when = paper.submittedOnDailyAt ?? entry.publishedAt ?? paper.publishedAt ?? null;
       const original = paper.publishedAt ?? entry.publishedAt ?? null;
+      const extraLinks = [];
+      const metrics = {};
+      if (includeLinks) {
+        if (/^\d{4}\.\d{4,5}(?:v\d+)?$/.test(paper.id)) extraLinks.push({ href: `https://arxiv.org/abs/${paper.id}`, text: 'arXiv' });
+        if (typeof paper.githubRepo === 'string') {
+          try { const gh = https(paper.githubRepo, label); extraLinks.push({ href: gh.href, text: 'GitHub' }); } catch {}
+        }
+        if (typeof paper.projectPage === 'string') {
+          try { const pp = https(paper.projectPage, label); extraLinks.push({ href: pp.href, text: 'Project' }); } catch {}
+        }
+        const upvotes = paper.upvotes ?? entry.upvotes;
+        const comments = entry.numComments ?? paper.numComments;
+        const stars = paper.githubStars ?? entry.githubStars;
+        if (Number.isFinite(upvotes) && upvotes >= 0) metrics.upvotes = upvotes;
+        if (Number.isFinite(comments) && comments >= 0) metrics.comments = comments;
+        if (Number.isFinite(stars) && stars >= 0) metrics.githubStars = stars;
+      }
       // JSON fields are plain text: "<10%" or "$a<b$" is content, never markup.
       return { ...feedItem({ url: `https://huggingface.co/papers/${paper.id}`, title: squash(String(paper.title ?? entry.title ?? '')),
-        text: squash(String(paper.summary ?? '')), publishedAt: when == null ? null : stamp(when, label) }, label),
+        text: squash(String(paper.summary ?? '')), publishedAt: when == null ? null : stamp(when, label),
+        ...(includeLinks ? { links: extraLinks } : {}) }, label, maxText),
+      ...(Object.keys(metrics).length ? { metrics } : {}),
       paperPublishedAt: original == null ? null : stamp(original, label) };
     });
   }
@@ -266,27 +310,61 @@ export function parseFeedDocument(text, kind, label = kind) {
     const link = entryLink(xml, label);
     if (!link) throw new Error(`Feed entry without a link in ${label}`);
     // RSS bodies are HTML; Atom text constructs default to type="text".
+    const bodyNodes = ['content:encoded', 'content', 'description', 'summary']
+      .map(name => ({ name, node: firstElement(xml, name, label) }))
+      .filter(({ node }) => Boolean(node));
     const body = ['description', 'summary', 'content:encoded', 'content'].map(name => fieldText(firstElement(xml, name, label), kind !== 'atom' || name === 'content:encoded')).find(Boolean) ?? '';
-    return feedItem({ url: link, title: fieldText(firstElement(xml, 'title', label), false), text: body, publishedAt: entryDate(xml, label) }, label);
+    let extractedLinks;
+    if (includeLinks) {
+      const htmlRaw = bodyNodes.map(({ name, node }) => {
+        const type = (node.attrs.type ?? '').toLowerCase();
+        if (type === 'xhtml') return node.raw;
+        if (type === 'html' || type === 'text/html' || (kind !== 'atom' || name === 'content:encoded')) return xmlText(node.raw);
+        return '';
+      }).join('\n');
+      extractedLinks = extractHtmlLinks(htmlRaw, link);
+    }
+    return feedItem({ url: link, title: fieldText(firstElement(xml, 'title', label), false), text: body, publishedAt: entryDate(xml, label),
+      ...(includeLinks ? { links: extractedLinks } : {}) }, label, maxText);
   });
 }
 
-export function mergeFeedDocuments(runtime, collection, bundle, baseDir) {
+export function mergeFeedDocuments(runtime, collection, bundle, baseDir, { maxText = MAX_TEXT, maxSkewHours = 2 } = {}) {
   if (bundle?.schemaVersion !== 1 || bundle.transport !== 'fetched-documents') throw new Error('Unsupported feed capture schema/transport');
-  if (collection?.schemaVersion !== 1 || typeof collection.collectionId !== 'string' || !collection.sources || typeof collection.sources !== 'object') throw new Error('Expected an imported collection');
-  if (collection.sources.feeds !== undefined) throw new Error('Collection already contains imported feeds');
-  const configured = validateFeedConfig(runtime.sources);
   const startedAt = stamp(bundle.startedAt, 'startedAt');
   const fetchedAt = stamp(bundle.fetchedAt, 'fetchedAt');
-  const collectedAt = stamp(collection.collectedAt, 'collection collectedAt');
+  const baseCollection = collection ?? {
+    schemaVersion: 1,
+    collectionId: runtime.runId,
+    digestMarker: `<!-- x-daily-collection: ${runtime.runId} -->`,
+    date: new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date(fetchedAt)),
+    collectedAt: fetchedAt,
+    coverage: {
+      window: { start: new Date(Date.parse(startedAt) - runtime.lookbackHours * 3600000).toISOString(), end: startedAt },
+      digestWindow: { start: new Date(Date.parse(startedAt) - runtime.lookbackHours * 3600000).toISOString(), end: startedAt },
+      assurance: 'feed_only_no_browser_capture',
+      reports: { xFollowing: [], substack: [] },
+      carriedFrom: null,
+    },
+    checks: { xFollowing: { attempted: false, available: false, items: 0, status: 'not_captured' }, watch: {} },
+    warnings: ['Feed-only run: browser X capture was not provided in this environment.'],
+    deepLinkAudit: [],
+    provenance: { transport: 'fetched-documents', startedAt, evidence: [] },
+    sources: { xFollowing: [], substack: [], karpathy: [], watchProfiles: [], blogs: [], xiaohongshu: [], deepArticles: [], threadContexts: [] },
+    stats: { xFollowing: 0, freshXFollowing: 0, substack: 0, karpathy: 0, watchProfiles: 0, blogs: 0, xiaohongshu: 0, deepArticles: 0, threadObservations: 0, threadQuotedPosts: 0, unresolvedThreadReferences: 0 },
+  };
+  if (baseCollection?.schemaVersion !== 1 || typeof baseCollection.collectionId !== 'string' || !baseCollection.sources || typeof baseCollection.sources !== 'object') throw new Error('Expected an imported collection');
+  if (baseCollection.sources.feeds !== undefined) throw new Error('Collection already contains imported feeds');
+  const configured = validateFeedConfig(runtime.sources);
+  const collectedAt = stamp(baseCollection.collectedAt, 'collection collectedAt');
   if (Date.parse(startedAt) > Date.parse(fetchedAt) || Date.parse(fetchedAt) - Date.parse(startedAt) > 2 * 3600000) throw new Error('Feed fetches must belong to one run of at most two hours');
-  // Feeds may be fetched shortly before or after the browser capture; both sides share one two-hour run.
-  if (Math.abs(Date.parse(startedAt) - Date.parse(collectedAt)) > 2 * 3600000) throw new Error('Feed fetch must start within two hours of the browser capture');
+  const skewHours = Math.abs(Date.parse(startedAt) - Date.parse(collectedAt)) / 3600000;
+  if (skewHours > maxSkewHours) throw new Error('Feed fetch must start within two hours of the browser capture');
   const base = fs.realpathSync(baseDir);
   if (!Array.isArray(bundle.documents) || !bundle.documents.length) throw new Error('Fetched feed documents are required');
   const failures = bundle.failures ?? [];
   if (!Array.isArray(failures)) throw new Error('Feed capture failures must be an array');
-  const known = new Set((collection.provenance?.evidence ?? []).map(entry => entry.id));
+  const known = new Set((baseCollection.provenance?.evidence ?? []).map(entry => entry.id));
   const byFeed = new Map();
   for (const document of bundle.documents) {
     if (!/^[a-zA-Z0-9-]{1,100}$/.test(document?.id ?? '') || known.has(document.id)) throw new Error('Missing or duplicate feed document ID');
@@ -308,6 +386,9 @@ export function mergeFeedDocuments(runtime, collection, bundle, baseDir) {
   }
   const windowStart = Date.parse(startedAt) - runtime.lookbackHours * 3600000;
   const warnings = ['Feed items are publisher-declared entries; document hashes verify fetched bytes, not semantic accuracy.'];
+  if (collection && skewHours > 2) {
+    warnings.push(`Feed fetch and browser capture are ${skewHours.toFixed(1)} hours apart (merged across shared ${runtime.lookbackHours}h window)`);
+  }
   const checks = {}, items = [], seen = new Set(), evidence = [];
   let undated = 0;
   for (const feed of configured) {
@@ -318,14 +399,14 @@ export function mergeFeedDocuments(runtime, collection, bundle, baseDir) {
       checks[feed.name] = { attempted: failed.has(feed.name), items: 0, status: failed.has(feed.name) ? 'fetch_failed' : 'not_fetched' };
       continue;
     }
-    const parsed = parseFeedDocument(readDocument(base, document).toString('utf8'), feed.kind, feed.name);
+    const parsed = parseFeedDocument(readDocument(base, document).toString('utf8'), feed.kind, feed.name, { maxText, includeLinks: true });
     const dated = parsed.filter(entry => entry.publishedAt).sort((a, b) => Date.parse(b.publishedAt) - Date.parse(a.publishedAt));
     // Window first, then cap: maxItems bounds the in-window items a feed may contribute.
     const fresh = [...dated, ...parsed.filter(entry => !entry.publishedAt)]
       .filter(entry => !entry.publishedAt || (Date.parse(entry.publishedAt) >= windowStart && Date.parse(entry.publishedAt) <= Date.parse(startedAt)));
     const kept = [];
     for (const entry of fresh) {
-      const value = { ...entry, source: 'feed', feedName: feed.name, evidenceId: document.id, links: [] };
+      const value = { ...entry, source: 'feed', feedName: feed.name, evidenceId: document.id, links: Array.isArray(entry.links) ? entry.links : [] };
       const key = itemKey(value);
       if (seen.has(key)) continue;
       if (kept.length === feed.maxItems) { warnings.push(`${feed.name} capped at ${feed.maxItems} items`); break; }
@@ -338,7 +419,7 @@ export function mergeFeedDocuments(runtime, collection, bundle, baseDir) {
     evidence.push({ id: document.id, kind: 'fetched_document', path: document.path, sha256: document.sha256, url: document.url, capturedAt: document.fetchedAt });
   }
   if (undated) warnings.push(`feeds: ${undated} item(s) lack publication dates; do not claim all are fresh`);
-  const result = structuredClone(collection);
+  const result = structuredClone(baseCollection);
   result.sources.feeds = items;
   result.stats = { ...result.stats, feeds: items.length };
   result.checks = { ...result.checks, feeds: checks };

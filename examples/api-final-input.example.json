@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "collectionId": "REPLACE-WITH-IMPORTED-COLLECTION-ID",
+  "materialsPaths": ["canonical-materials.json", "collection-coverage.md"],
+  "evidencePaths": ["primary/public-article.txt", "mail/relevant-body.txt"],
+  "excerpts": [
+    {
+      "id": "article-method",
+      "kind": "public",
+      "path": "primary/public-article.txt",
+      "url": "https://example.invalid/public-article",
+      "text": "Replace with a verbatim public passage from the named file, which must contain the direct source URL."
+    },
+    {
+      "id": "coverage-window",
+      "kind": "coverage",
+      "path": "collection-coverage.md",
+      "text": "Replace with a verbatim current-run coverage excerpt with private details omitted."
+    }
+  ]
+}

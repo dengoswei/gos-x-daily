@@ -14,7 +14,7 @@ remote retirement.
 
 This repository contains source code, editorial rules, schemas and synthetic tests.
 It does **not** contain a logged-in browser, private email, live evidence, delivery
-history, credentials, a model client, or an enabled schedule. The reusable Mac
+history, credentials, or an enabled schedule. The reusable Mac
 bootstrap, controller, sender, installer and complete task/worker prompts **are
 versioned here**; deployment-specific identity/configuration and history stay local.
 
@@ -27,6 +27,7 @@ versioned here**; deployment-specific identity/configuration and history stay lo
 | Editorial depth and coherence | `EDITORIAL.md`, `prompts/compose-digest.md` |
 | Small coordinator inputs and complete worker packets | `worker-packets.mjs`, `cli.mjs worker-input` |
 | Compact Feishu post and exact review binding | `lark-post.mjs`, `review.mjs`, `digest.mjs` |
+| Configured Mac API drafting, final writing and semantic review | `deployment/mac/openai-draft.mjs`, `deployment/mac/openai-final.mjs` |
 | Mac entry/controller/sole sender | `deployment/mac/` |
 | Deliberate code promotion | `tools/install-mac.mjs` |
 
@@ -140,6 +141,8 @@ index pages are client-rendered and yield no links without the browser.
 ## Repository map
 
 - `cli.mjs`: offline entry points plus separately gated collection / send.
+- `run-daily.mjs`: portable v2 end-to-end pipeline (zero-bootstrap state, dual-layer `store/raw` + `store/cards` + `store/topics`, 4-signal prior curation + rolling evergreen backlog, on-demand full-text fetch, two-tier digest composition, single-pass review, `telemetry.json` self-check, and `lark-cli` alert fallback). See [docs/DESIGN-FUNNEL-AND-CURATION.md](docs/DESIGN-FUNNEL-AND-CURATION.md).
+- `content-store.mjs`, `curation.mjs`, `telemetry.mjs`, `config/taste.json`: dual-layer original/card archive, 4-signal prior scorer (`author + source SNR + social/engagement - noise`), cross-day high-value backlog pool (`backlog-pool.json`), rolling source health, funnel telemetry and operational alert cards.
 - `browser-artifacts.mjs`, `thread-discovery.mjs`: evidence imports and thread context.
 - `feed-import.mjs`, `tools/fetch-feeds.mjs`: offline feed import and its separate network fetch tool.
 - `coverage.mjs`, `feed.mjs`: bounded scans, deduplication and honest coverage gaps.
