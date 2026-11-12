@@ -29,21 +29,22 @@ versioned here**; deployment-specific identity/configuration and history stay lo
 | Compact Feishu post and exact review binding | `lark-post.mjs`, `review.mjs`, `digest.mjs` |
 | Configured Mac API drafting, final writing and semantic review | `deployment/mac/openai-draft.mjs`, `deployment/mac/openai-final.mjs` |
 | Mac entry/controller/sole sender | `deployment/mac/` |
-| Deliberate code promotion | `tools/install-mac.mjs` |
+| Sync and activate production | `npm run mac:update` |
 
-The private installation's `run.mjs` is a small checked bootstrap; `inspect`
-returns its actual source checkout and revision. Its `MAC-RUNBOOK.md` is a pointer
-to this repository, not another editable copy of the procedure. The scheduler
-retains only authorization, installation paths and a reference to the tracked
-daily prompt. It does not duplicate the complete workflow.
+The scheduler runs the installed `run.mjs workflow` and follows the prompt from
+the verified production revision. That prompt links to operational references
+and worker instructions. The Mac controller owns scheduled delivery and alerts.
 
-For an already provisioned installation, after review/tests and committing the
-source, run `node tools/install-mac.mjs --deployment-dir /ABSOLUTE/PRIVATE/INSTALL`.
-This backs up code pointers, pins tracked file hashes and points the existing
-bootstrap at this checkout. It does not create credentials, change the schedule,
-send messages or copy/reset the ledger. Then verify `run.mjs inspect` and
-`run.mjs local doctor` in the provisioned host context. Future working changes
-invalidate the release until explicitly reviewed and promoted again.
+From a clean main checkout, update the checkout and the installed release together:
+
+```sh
+npm run mac:update -- --deployment-dir /ABSOLUTE/PRIVATE/INSTALL
+```
+
+The updater fast-forwards to the fetched `origin/main` and installs that commit's
+files in a versioned release directory. It switches the active release with one
+pointer write after checking the snapshot. Verify the result with the installed
+`run.mjs workflow`. Use `run.mjs local doctor` for a host-context readiness check.
 
 ## Start on another machine / agent
 
@@ -141,7 +142,7 @@ index pages are client-rendered and yield no links without the browser.
 ## Repository map
 
 - `cli.mjs`: offline entry points plus separately gated collection / send.
-- `run-daily.mjs`: portable v2 end-to-end pipeline (zero-bootstrap state, dual-layer `store/raw` + `store/cards` + `store/topics`, 4-signal prior curation + rolling evergreen backlog, on-demand full-text fetch, two-tier digest composition, single-pass review, `telemetry.json` self-check, and `lark-cli` alert fallback). See [docs/DESIGN-FUNNEL-AND-CURATION.md](docs/DESIGN-FUNNEL-AND-CURATION.md).
+- `run-daily.mjs`: local preview for the content store, selection, backlog and telemetry. It shares the section rules in `digest-layout.mjs` with Mac production. See [docs/DESIGN-FUNNEL-AND-CURATION.md](docs/DESIGN-FUNNEL-AND-CURATION.md).
 - `content-store.mjs`, `curation.mjs`, `telemetry.mjs`, `config/taste.json`: dual-layer original/card archive, 4-signal prior scorer (`author + source SNR + social/engagement - noise`), cross-day high-value backlog pool (`backlog-pool.json`), rolling source health, funnel telemetry and operational alert cards.
 - `browser-artifacts.mjs`, `thread-discovery.mjs`: evidence imports and thread context.
 - `feed-import.mjs`, `tools/fetch-feeds.mjs`: offline feed import and its separate network fetch tool.
@@ -151,7 +152,7 @@ index pages are client-rendered and yield no links without the browser.
 - `compose.mjs`: compact composition input (candidates keyed as `binding.mjs` keys them,
   shared-link clusters, deep reads, recently published URLs) without audit records or evidence paths.
 - `prompts/`, `EDITORIAL.md`: user-owned composition and independent review rules;
-  `prompts/compose-digest.md` holds every composition rule (the `summarize-*.md` files are stubs).
+  `prompts/compose-digest.md` holds the production composition rules and uses the shared layout in `digest-layout.mjs`.
 - `examples/`: deliberately incomplete path templates, **not evidence or approval**.
 - `test/`: synthetic, no-production-network regression tests.
 
@@ -165,9 +166,8 @@ even in a private repository. See [SECURITY.md](SECURITY.md).
 
 Offline tests do not establish live login, capture quality, semantic review,
 Lark acceptance, recipient-read status, or scheduler wiring. Those must be verified
-for each deployment. Code backup is not a backup of private publication history. Publishing this repo
-does not modify an existing deployment or make it automatically follow `main`;
-see the runbook for explicit version promotion.
+for each deployment. After merging a change, activate it with `npm run mac:update`.
+Keep separate backups of the private publication history.
 
 No license has been selected. Source is published for the owner's requested
 review and operation workflow. [Provenance](docs/PROVENANCE.md).

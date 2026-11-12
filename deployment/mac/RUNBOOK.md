@@ -8,12 +8,14 @@ Use `$DEPLOYMENT_HOME/run.mjs` as the entry point. Source `$HOME/.zshrc` before 
 
 The authoritative production ledger is `$HOME/.codex/automations/x-daily-digest-9am/local-delivery-ledger`. It retains the `gos-daily` namespace and `xdaily-gos-daily-YYYY-MM-DD` keys. Its forward boundary is November 8. Imported published URLs through November 6 retain their provenance. The November 7 uncertain attempt remains archived and is never retried. Preview history is not publication history. Remote execution may resume only after an explicit future ownership transfer with reconciled state.
 
-`DEPLOYMENT_HOME` is the private installation directory (default `$HOME/Documents/GosXDaily`). The tracked implementation is `deployment/mac/` in this repository. The only installed executable entry point is `$DEPLOYMENT_HOME/run.mjs`, a small hash-checked bootstrap pointing to that checkout. `source-repo.local.json` records the absolute source checkout locally. Credentials, source roster, evidence and delivery state never belong in Git.
+`DEPLOYMENT_HOME` is the private installation directory (default `$HOME/Documents/GosXDaily`). The tracked implementation is `deployment/mac/` in this repository. The installed entry point `$DEPLOYMENT_HOME/run.mjs` verifies the active release and reports its production prompt with `workflow`. From a clean main checkout, run `npm run mac:update -- --deployment-dir "$DEPLOYMENT_HOME"` to sync main and activate the same commit on Mac. The private installation retains its existing configuration, source roster, evidence and delivery ledger.
 
 ## Start an occurrence
 
 ```sh
 source $HOME/.zshrc
+node $DEPLOYMENT_HOME/run.mjs workflow
+# Set GOS_X_DAILY_EXPECT_REVISION to the revision returned above for this run.
 node $DEPLOYMENT_HOME/run.mjs inspect
 node $DEPLOYMENT_HOME/run.mjs local doctor
 node $DEPLOYMENT_HOME/run.mjs local start-run

@@ -48,7 +48,7 @@ The **v2 architecture (`run-daily.mjs`, `content-store.mjs`, `curation.mjs`, `te
             5. Source-Faithful Composition + Single-Pass Review + Telemetry Self-Check
                ├── Deterministic URL allowlist gate + pipeline-jargon blocker (`validateV2Digest`)
                ├── Canonical section ordering (`Quick Hits / 快讯速览` first when present)
-               └── `telemetry.json` + `### 运行自检` footer + `lark-cli` guaranteed alert fallback
+               └── `telemetry.json` + `### 运行自检` footer + local failure diagnostics
 ```
 
 ---
@@ -128,10 +128,10 @@ Daily news volume is bursty: a major conference or release day may produce 15+ g
 1. **Zero Chicken-and-Egg Dependencies**:
    - `ensureWorkspace(dataDir)` initializes `state/published-history.jsonl`, `state/source-health.json`, `state/backlog-pool.json`, `state/delivery-receipts.jsonl`, and `runs/` automatically on first run.
    - Runs cleanly on headless Linux boxes (feeds/papers only, no browser required), on Mac with local Host Agent two-step mode (`--prepare-only` $\rightarrow$ `--finalize-digest` with zero external API calls on private timelines), or fully automated via `--models`.
-2. **Graceful Degradation & Guaranteed `lark-cli` Alert Fallback**:
+2. **Graceful Degradation & Local Failure Diagnostics**:
    - Lease locks (`acquireLeaseLock`) automatically reclaim dead PIDs or expired leases.
    - Individual feed timeouts, paywalls, or cross-hour X/Feed capture skews (`maxSkewHours = 48`) degrade gracefully instead of aborting the run.
-   - Any unrecoverable failure triggers `formatAlertMarkdown` + `sendViaLarkCli`, delivering a diagnostic alert card to Feishu so scheduled runs never fail silently.
+   - An unrecoverable preview failure records a local diagnostic. The Mac production controller owns scheduled failure notifications and Feishu delivery.
 3. **Quantified Self-Check Footer (`### 运行自检 [OK | WARN | ACTION_NEEDED]`)**:
    - Reports exact `usable / configured` sources and explicitly names any `unattempted` or `failed` sources (with consecutive failure days tracked in `source-health.json`).
    - Prints full funnel visibility: `原始入库 -> 遗珠池召回/累加 -> 7日去重跳过 -> 话题聚合 -> 初筛入选 -> 全文补齐 -> 成稿（深度 + 快讯，含捞回遗珠） -> 遗珠池留存`.

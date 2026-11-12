@@ -9,6 +9,8 @@ import { createReviewInput, validateReview } from '../../review.mjs';
 import { JSON_NOTE, UNTRUSTED, modelJson, tagged } from '../../prototype/run-packets.mjs';
 import { frozenApiRun, readApiKey } from './openai-draft.mjs';
 
+import { digestLayoutPrompt, QUICK_SECTION } from '../../digest-layout.mjs';
+
 const model = 'gpt-6.1-sol';
 const inputName = 'api-final-input.json';
 const auditId = 'local-disposition-counts';
@@ -27,7 +29,6 @@ const substantial = text => typeof text === 'string' && text.trim().length >= 8 
 const fields = ['problem', 'method', 'result', 'innovation'];
 const checkedAt = () => new Date().toISOString();
 const sha256 = value => createHash('sha256').update(value).digest('hex');
-const quickHitsHeading = 'Quick Hits / 快讯速览';
 
 function quickHitsLayoutIssue(markdown) {
   const headings = splitDigest(markdown).main.flatMap(line => {
@@ -35,7 +36,7 @@ function quickHitsLayoutIssue(markdown) {
     return heading ? [heading] : [];
   });
   const quickHits = headings.filter(heading => /quick\s*hits|快讯速览/i.test(heading));
-  if (quickHits.length && (quickHits.length !== 1 || headings[0] !== quickHitsHeading)) {
+  if (quickHits.length && (quickHits.length !== 1 || headings[0] !== QUICK_SECTION)) {
     return 'Use exactly one ## Quick Hits / 快讯速览 section, before every other main section, when there are qualifying short updates.';
   }
   return null;
@@ -337,7 +338,7 @@ export async function finalizeOpenAI({ runsDir, runDir, keyFile, ledgerDir, revi
     const shared = data('verified_evidence', { renderedCoverage, recentPublic, excerpts: [...packet.excerpts, accounting],
       ...(packet.editorialFocus.length ? { editorialFocus: packet.editorialFocus } : {}) });
     const base = [
-      system('final', repoText('../../EDITORIAL.md') + '\n' + repoText('../../prompts/compose-digest.md') +
+      system('final', repoText('../../EDITORIAL.md') + '\n' + repoText('../../prompts/compose-digest.md') + '\n' + digestLayoutPrompt +
         '\nYou are the final author. Use the draft only as leads; every included story must be supported by verified excerpts. Cite only their exact public URLs. Return {"markdown":"complete digest","dispositionChanges":[]} with only rows that change from the draft. The controller retains each unchanged draft row by candidate key. Supply replacement rows using the same schema for every key whose inclusion, section, URL, merge target, or skip reason changes. When dropping an included candidate, also update any merged rows pointing to it. Use grouped keys for skips with the same reason. Audit counts must match the resulting dispositions. Count candidate keys, main bullets and supplemental links separately; one key or link need not equal one story. Do not infer reading depth, an excerpt absence reason, or the controller’s review or delivery status. Keep a concise 本次采集范围 paragraph in the visible main body, separated by blank lines, and preserve material limits. The renderer appends renderedCoverage verbatim. Distinguish hours with no certified traversal from measured actual gaps and unknown unseen-post count; make your own coverage text consistent with the appended line. No private source paths, links or headers. For repeats, require a supported new fact with 跟进.'),
       message('user', data('final_inputs', { date: run.date, revision, draft }) + '\n' + shared +
         (packet.editorialFocus.length ? '\nThe editorialFocus IDs mark source details found during review. If you cover their topic, explicitly preserve the material conditions, exceptions and benchmark scope in these excerpts.' : '')),

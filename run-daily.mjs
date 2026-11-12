@@ -1,10 +1,9 @@
 #!/usr/bin/env node
-// Portable v2 X Daily pipeline:
+// Portable X Daily preview:
 // Zero-bootstrap state -> Wide funnel (Browser + Feeds + Supplements) ->
 // Dual-layer store (L0 Raw + L1 Cards + Topics + 7d soft dedup) ->
 // Topic selection -> On-demand full-text fetch -> Two-tier digest composition ->
-// Deterministic URL hygiene + single-pass review -> Self-check telemetry ->
-// Feishu delivery (with guaranteed lark-cli failure alert fallback).
+// Deterministic URL hygiene + single-pass review -> Local self-check telemetry.
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -20,14 +19,11 @@ import {
   acquireLeaseLock,
   loadSoftHistory,
   appendSoftHistory,
-  hasAcceptedReceipt,
-  appendAcceptedReceipt,
   collectSourceStatuses,
   updateSourceHealth,
   buildTelemetry,
   renderTelemetryMarkdown,
   formatAlertMarkdown,
-  sendViaLarkCli,
 } from './telemetry.mjs';
 import {
   resolveCollectionShortlinks,
@@ -44,8 +40,11 @@ import {
   saveBacklogPool,
 } from './curation.mjs';
 
+import { DEEP_SECTION_ORDER as CANONICAL_DEEP_ORDER, digestLayoutPrompt, QUICK_SECTION } from './digest-layout.mjs';
+
 const repoRoot = path.dirname(fileURLToPath(import.meta.url));
 const readPrompt = name => fs.readFileSync(path.join(repoRoot, 'prompts', name), 'utf8');
+const composeV2Prompt = () => readPrompt('v2-compose-digest.md') + '\n\n' + digestLayoutPrompt;
 const shanghaiDate = (value = new Date()) =>
   new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date(value));
 const safeCanonical = href => {
@@ -53,9 +52,7 @@ const safeCanonical = href => {
 };
 
 const FORBIDDEN_JARGON = /所给摘录|提供的材料|摘录(?:没有|未|中)|候选键/;
-const CANONICAL_DEEP_ORDER = ['Frameworks / Infra', 'Breakthrough Research', 'Applications / Products', 'Long-form / Essays'];
 const DEEP_SECTIONS = new Set(CANONICAL_DEEP_ORDER);
-const QUICK_SECTION = 'Quick Hits / 快讯速览';
 
 export function parseSelectedPlanPayload(payload, validTopicIds) {
   const list = Array.isArray(payload) ? payload : payload?.selected;
@@ -333,8 +330,7 @@ export function validateV2Digest(markdown, { date, observedUrlSet }) {
 /**
  * Executes the end-to-end v2 daily digest workflow.
  * - Zero-bootstrap: initializes state automatically in `dataDir`.
- * - Resilient: degrades gracefully when individual feeds/pages fail; sends a `lark-cli`
- *   diagnostic alert card if an unrecoverable failure occurs so scheduled runs never fail silently.
+ * - Saves local artifacts and diagnostics. Production uses the Mac controller.
  */
 export async function runDailyV2({
   dataDir = './data',
@@ -350,7 +346,6 @@ export async function runDailyV2({
   prepareOnly = false,
   selectedTopicsPath = null,
   finalizeDigestPath = null,
-  larkConfig = null,
   lookbackHours = 48,
   fetchFeedsOnline = false,
   fetchFullTextOnline = true,
@@ -359,7 +354,7 @@ export async function runDailyV2({
   runtimeHooks = {},
 } = {}) {
   const fetchImpl = runtimeHooks.fetch ?? globalThis.fetch;
-  const spawnSyncImpl = runtimeHooks.spawnSync;
+  if (allowSend) throw new Error('The preview cannot send. Use the verified Mac production controller.');
   const nowDate = runtimeHooks.now ? new Date(runtimeHooks.now) : new Date();
   const today = shanghaiDate(nowDate);
 
@@ -375,16 +370,6 @@ export async function runDailyV2({
   let telemetry = null;
 
   try {
-    // Idempotency check: if today's report was already delivered, exit cleanly without re-running.
-    const priorReceipt = hasAcceptedReceipt(workspace.receiptsFile, today);
-    if (priorReceipt && !runtimeHooks.forceRerun) {
-      return {
-        status: 'already_sent_today',
-        date: today,
-        messageId: priorReceipt.messageId,
-        sentAt: priorReceipt.sentAt,
-      };
-    }
 
     const resolvedSources = sourcesConfig
       ?? (sourcesFile && fs.existsSync(sourcesFile)
@@ -666,7 +651,7 @@ export async function runDailyV2({
       const composePromptPath = path.join(runDir, 'host-compose-prompt.md');
       const prepareStatePath = path.join(runDir, 'prepare-state.json');
       fs.writeFileSync(preparedTopicsPath, JSON.stringify(selectedMaterials, null, 2) + '\n', { mode: 0o600 });
-      fs.writeFileSync(composePromptPath, `${readPrompt('v2-compose-digest.md')}\n\n${composeInput}\n`, { mode: 0o600 });
+      fs.writeFileSync(composePromptPath, `${composeV2Prompt()}\n\n${composeInput}\n`, { mode: 0o600 });
       fs.writeFileSync(prepareStatePath, JSON.stringify({
         schemaVersion: 1,
         reportDate,
@@ -714,7 +699,7 @@ export async function runDailyV2({
         draftMarkdown = await runStage({
           stage: 'compose',
           label: 'v2-compose',
-          system: readPrompt('v2-compose-digest.md'),
+          system: composeV2Prompt(),
           prompt: composeInput,
           parse: text => {
             const md = extractBlock(text, 'markdown');
@@ -776,7 +761,7 @@ export async function runDailyV2({
         .some(u => citedCanonicalSet.has(safeCanonical(u))),
     ).length;
 
-    const persistBacklog = Boolean((allowSend && larkConfig?.enabled === true) || runtimeHooks.recordHistoryOnLocalRun || runtimeHooks.persistBacklogOnLocalRun !== false);
+    const persistBacklog = Boolean(runtimeHooks.recordHistoryOnLocalRun || runtimeHooks.persistBacklogOnLocalRun !== false);
     let savedBacklogCount = 0;
     if (persistBacklog) {
       for (const tp of storeTopics) tp._storeDir = storeDir;
@@ -820,30 +805,8 @@ export async function runDailyV2({
     renderLarkPost(finalMarkdown);
     fs.writeFileSync(path.join(runDir, 'digest.md'), finalMarkdown, { mode: 0o600 });
 
-    // Stage 8: Deliver via lark-cli (when enabled & authorized) + update 7-day soft history
-    currentStage = 'deliver';
-    lock.heartbeat(currentStage);
-    let delivery = { sent: false, status: 'local_only_send_not_requested' };
-    const idempotencyKey = `xdaily-v2-${reportDate}`;
-
-    if (allowSend && larkConfig?.enabled === true) {
-      delivery = sendViaLarkCli(finalMarkdown, larkConfig, { idempotencyKey, spawnSyncImpl });
-      if (!delivery.sent) {
-        throw new Error(`Feishu digest delivery failed (${delivery.status}): ${delivery.error ?? 'unknown error'}`);
-      }
-      appendAcceptedReceipt(workspace.receiptsFile, {
-        date: reportDate,
-        messageId: delivery.messageId,
-        chatId: larkConfig.chatId ?? null,
-        userId: larkConfig.userId ?? null,
-      });
-      appendSoftHistory(workspace.historyFile, {
-        date: reportDate,
-        idempotencyKey,
-        urls: digestStats.citedUrls,
-        titles: digestStats.extractedTitles,
-      });
-    } else if (runtimeHooks.recordHistoryOnLocalRun) {
+    if (runtimeHooks.recordHistoryOnLocalRun) {
+      const idempotencyKey = `xdaily-v2-${reportDate}`;
       appendSoftHistory(workspace.historyFile, {
         date: reportDate,
         idempotencyKey,
@@ -853,7 +816,7 @@ export async function runDailyV2({
     }
 
     return {
-      status: delivery.sent ? 'completed_and_sent' : 'completed_local',
+      status: 'completed_local',
       date: reportDate,
       runDir,
       digestPath: path.join(runDir, 'digest.md'),
@@ -861,10 +824,9 @@ export async function runDailyV2({
       storeDir,
       overallHealth: telemetry.overallHealth,
       funnel: telemetry.funnel,
-      delivery,
+      delivery: { sent: false, status: 'local_only_send_not_requested' },
     };
   } catch (error) {
-    // Guaranteed visibility: never fail silently when lark-cli is configured.
     const alertMarkdown = formatAlertMarkdown({
       date: today,
       stage: currentStage,
@@ -875,18 +837,10 @@ export async function runDailyV2({
     if (runDir && fs.existsSync(runDir)) {
       fs.writeFileSync(path.join(runDir, 'alert.md'), alertMarkdown, { mode: 0o600 });
     }
-    let alertDelivery = { sent: false, status: 'alert_not_configured' };
-    if (allowSend && larkConfig?.enabled === true) {
-      alertDelivery = sendViaLarkCli(alertMarkdown, larkConfig, {
-        idempotencyKey: `xdaily-alert-${today}-${currentStage}`,
-        spawnSyncImpl,
-      });
-    }
     const wrapped = new Error(`[${currentStage}] ${error?.message ?? error}`);
     wrapped.stage = currentStage;
     wrapped.runDir = runDir;
     wrapped.alertMarkdown = alertMarkdown;
-    wrapped.alertDelivery = alertDelivery;
     throw wrapped;
   } finally {
     lock.release();
@@ -901,15 +855,14 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   };
   if (argv.includes('--help') || argv.includes('-h')) {
     console.log(JSON.stringify({
-      usage: 'node run-daily.mjs [--data-dir ./data] [--run-dir EXISTING_RUN] [--sources config/sources.json] [--models models.json] [--browser-artifacts browser-capture.json] [--feed-artifacts feed-capture.json] [--fetch-feeds] [--no-fetch-fulltext] [--prepare-only] [--selected-topics selected.json] [--finalize-digest draft.md] [--lark-config runtime.local.json] [--allow-send]',
+      usage: 'node run-daily.mjs [--data-dir ./data] [--run-dir EXISTING_RUN] [--sources config/sources.json] [--models models.json] [--browser-artifacts browser-capture.json] [--feed-artifacts feed-capture.json] [--fetch-feeds] [--no-fetch-fulltext] [--prepare-only] [--selected-topics selected.json] [--finalize-digest draft.md]',
     }, null, 2));
     process.exit(0);
   }
-  const larkConfigFile = flagValue('--lark-config');
-  const larkConfig = larkConfigFile && fs.existsSync(larkConfigFile)
-    ? JSON.parse(fs.readFileSync(larkConfigFile, 'utf8')).lark
-    : null;
   try {
+    if (argv.includes('--allow-send') || argv.includes('--lark-config')) {
+      throw new Error('The preview cannot send. Use the verified Mac production controller.');
+    }
     const result = await runDailyV2({
       dataDir: flagValue('--data-dir', './data'),
       runDir: flagValue('--run-dir'),
@@ -922,8 +875,6 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
       finalizeDigestPath: flagValue('--finalize-digest'),
       fetchFeedsOnline: argv.includes('--fetch-feeds'),
       fetchFullTextOnline: !argv.includes('--no-fetch-fulltext'),
-      larkConfig,
-      allowSend: argv.includes('--allow-send') && process.env.X_DAILY_ALLOW_SEND === '1',
     });
     console.log(JSON.stringify(result, null, 2));
   } catch (error) {
@@ -932,7 +883,6 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
       stage: error.stage ?? 'unknown',
       error: error.message,
       runDir: error.runDir ?? null,
-      alertDelivery: error.alertDelivery ?? null,
     }, null, 2));
     process.exitCode = 1;
   }
