@@ -22,6 +22,19 @@ async function setup(t, variant) {
     }));
   }
   const included = dispositions.items.find(row => row.disposition === 'included');
+  const quickSection = '## Quick Hits / 快讯速览\n- **版本更新。** 新增本地导出命令。 [发布说明](https://example.com/synthetic-quick-release)\n\n';
+  const quickExcerpt = { id: 'quick', kind: 'public', path: 'public-source.txt',
+    url: 'https://example.com/synthetic-quick-release', text: 'SYNTHETIC release: version 1.2 adds a local export command.' };
+  const essayHeading = '## Long-form / Essays';
+  let essayDigest;
+  if (variant === 'quick-first') {
+    fs.appendFileSync(path.join(runDir, quickExcerpt.path), quickExcerpt.url + '\n' + quickExcerpt.text + '\n');
+    fs.writeFileSync(path.join(runDir, 'api-final-input.json'), JSON.stringify({
+      ...fixture.input, excerpts: [...fixture.input.excerpts, quickExcerpt],
+    }));
+    essayDigest = markdown.replace('## ' + included.section, essayHeading);
+    included.section = essayHeading.slice(3);
+  }
   if (variant === 'citation-typo') {
     const skippedIndex = dispositions.items.findIndex(row => row.disposition === 'skipped');
     dispositions.items[skippedIndex] = { key: dispositions.items[skippedIndex].key, disposition: 'merged', mergedInto: included.key };
@@ -80,6 +93,12 @@ async function setup(t, variant) {
         dispositionChanges: dispositions.items.filter(row => row.disposition === 'included'),
       } :
         { markdown, dispositions };
+      if (variant === 'quick-first') {
+        if (stages.length > 1) assert.match(last, /before every other main section/);
+        answer.markdown = stages.length === 1
+          ? essayDigest.replace('本次采集范围', quickSection + '本次采集范围')
+          : essayDigest.replace(essayHeading, quickSection + essayHeading);
+      }
       finalText = JSON.stringify(answer);
     } else {
       const originalUnits = fromTag(all, 'review_units');
@@ -106,10 +125,11 @@ async function setup(t, variant) {
           (materialAfterRepair && repairingCitations));
       const covered = [{ id: 'coverage', quote: coverageText }];
       const paper = [{ id: 'paper', quote: evidenceText }, { id: 'paper', quote: fixture.input.excerpts[0].url }];
+      if (variant === 'quick-first') paper.push({ id: quickExcerpt.id, quote: quickExcerpt.text });
       const audit = !isComprehension && fromTag(all, 'local_disposition_facts');
       if (audit) {
         const facts = JSON.parse(audit.text);
-        assert.equal(facts.mainBullets, 1);
+        assert.equal(facts.mainBullets, variant === 'quick-first' ? 2 : 1);
         assert.deepEqual(Object.values(facts.publicUrlDispositions),
           [variant === 'citation-typo' ? { includedKeys: 2, mergedKeys: 1 } : { includedKeys: 1, mergedKeys: 0 }]);
         assert.ok(!audit.text.includes(included.key));
@@ -180,6 +200,17 @@ test('API final preserves reader isolation, author continuity, exact payload bin
   await assert.rejects(f.run(), /already completed/);
   fs.appendFileSync(path.join(path.dirname(result.publication), 'digest.md'), '\n');
   await assert.rejects(cli(['validate-publication', '--publication', result.publication]), /stale or tampered/);
+  f.unchangedLedger();
+});
+
+test('Mac final rejects Quick Hits below essays and reviews the corrected order', async t => {
+  const f = await setup(t, 'quick-first');
+  const result = await f.run();
+  assert.equal(result.attempt, 2);
+  assert.deepEqual(f.stages.slice(0, 3), ['final', 'final', 'reader-comprehension']);
+  const report = fs.readFileSync(path.join(path.dirname(result.publication), 'report.final.md'), 'utf8');
+  assert.deepEqual(report.match(/^## .+$/gm), ['## Quick Hits / 快讯速览', '## Long-form / Essays']);
+  assert.equal((await cli(['validate-publication', '--publication', result.publication])).reviewedUnits, result.units);
   f.unchangedLedger();
 });
 
