@@ -67,6 +67,9 @@ Review excerpts for private text, identifiers, paths and private URLs before
 running. Local bindings can include private mail or screenshots, but never use
 them as excerpts. Read public originals for useful leads from private mail; leave
 out claims that cannot be supported with shareable evidence and disclose the gap.
+For a recovery with verified editorial findings, `editorialFocus` can list the
+public excerpt IDs containing conditions or exceptions the new final should
+state explicitly when it covers the corresponding topic.
 
 ```sh
 node $DEPLOYMENT_HOME/run.mjs local finalize --run "$RUN"
