@@ -10,6 +10,9 @@ Source the user's shell configuration before Node or Lark CLI. Use only the
 provisioned `DEPLOYMENT_HOME/run.mjs` entry point. Read
 `deployment/mac/RUNBOOK.md`, `EDITORIAL.md`, `prompts/compose-digest.md`,
 `BROWSER-ARTIFACTS.md` and `docs/AGENT-WORKFLOW.md` from the verified checkout.
+Use the revision returned by `workflow` as `GOS_X_DAILY_EXPECT_REVISION` on
+every controller command in the run. If the active revision changes, restart
+from `workflow` and check the delivery ledger before proceeding.
 Run `inspect`, `local doctor`, and `local start-run`. If today's receipt exists,
 run `local reconcile --date YYYY-MM-DD` and return it without collection or send.
 Bot operations require host network and macOS Keychain access. If sandbox access

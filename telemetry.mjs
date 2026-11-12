@@ -1,12 +1,10 @@
 // Zero-bootstrap state, lease locks, source health tracking, funnel telemetry,
-// self-check digest panel, and lark-cli fallback alert delivery.
+// self-check digest panel and local failure diagnostics.
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { randomUUID } from 'node:crypto';
-import { spawnSync } from 'node:child_process';
 import { canonicalUrl } from './binding.mjs';
-import { larkPostJson } from './lark-post.mjs';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const DEFAULT_LEASE_MS = 45 * 60 * 1000;
@@ -609,55 +607,4 @@ export function formatAlertMarkdown({ date = shanghaiDate(), stage = 'unknown', 
   if (runDir) lines.push(`- **现场目录**：\`${runDir}\``);
   lines.push(`- **排查建议**：检查上述报错或信源状态后重跑 \`${commandHint}\``);
   return lines.join('\n') + '\n';
-}
-
-/**
- * Sends a rich-text post (either the daily digest or an operational failure alert) via lark-cli.
- * Falls back cleanly with a local status report when lark-cli is disabled or unconfigured.
- */
-export function sendViaLarkCli(markdown, larkConfig = {}, { idempotencyKey = null, spawnSyncImpl = spawnSync, timeoutMs = 45000 } = {}) {
-  if (!larkConfig || larkConfig.enabled !== true) {
-    return { sent: false, status: 'lark_disabled_local_only' };
-  }
-  const executable = larkConfig.executable || 'lark-cli';
-  const profileArgs = larkConfig.profile ? ['--profile', larkConfig.profile] : [];
-  const recipientArgs = larkConfig.chatId
-    ? ['--chat-id', larkConfig.chatId]
-    : larkConfig.userId
-      ? ['--user-id', larkConfig.userId]
-      : null;
-  if (!recipientArgs) {
-    return { sent: false, status: 'lark_missing_recipient', error: 'Configure lark.chatId or lark.userId to enable Feishu delivery' };
-  }
-
-  const postJson = larkPostJson(markdown);
-  const args = [
-    ...profileArgs,
-    'im', '+messages-send', '--as', 'bot',
-    ...recipientArgs,
-    '--msg-type', 'post',
-    '--content', postJson,
-    ...(idempotencyKey ? ['--idempotency-key', idempotencyKey] : []),
-  ];
-
-  const res = spawnSyncImpl(executable, args, { encoding: 'utf8', shell: false, timeout: timeoutMs, maxBuffer: 4 * 1024 * 1024 });
-  if (res.error || res.signal || res.status !== 0) {
-    return {
-      sent: false,
-      status: 'lark_cli_failed',
-      error: res.error?.message ?? `exit=${res.status ?? res.signal}: ${String(res.stderr ?? res.stdout ?? '').slice(0, 300)}`,
-    };
-  }
-  const out = String(res.stdout ?? '');
-  const jsonStart = out.indexOf('{');
-  if (jsonStart >= 0) {
-    try {
-      const parsed = JSON.parse(out.slice(jsonStart));
-      if (parsed?.ok === true && parsed.data?.message_id) {
-        return { sent: true, status: 'sent', messageId: parsed.data.message_id };
-      }
-      return { sent: false, status: 'lark_api_rejected', error: out.slice(0, 300) };
-    } catch { /* fall through */ }
-  }
-  return { sent: false, status: 'lark_unconfirmed_output', error: out.slice(0, 300) };
 }

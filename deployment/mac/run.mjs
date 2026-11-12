@@ -28,12 +28,15 @@ export function verifyFiles(root, manifest) {
   return seen.size;
 }
 
-export async function main(argv = process.argv.slice(2)) {
-  const manifest = read(path.join(base, 'release-manifest.json'));
+export async function main(argv = process.argv.slice(2), pointer) {
+  const manifest = pointer?.schemaVersion === 2 ? pointer.release : read(path.join(base, 'release-manifest.json'));
   const filesVerified = verifyFiles(repo, manifest);
   const [command = 'inspect', ...args] = argv;
-  const localManifest = read(path.join(base, 'local-release-manifest.json'));
+  const localManifest = pointer?.schemaVersion === 2 ? pointer.local : read(path.join(base, 'local-release-manifest.json'));
   verifyFiles(base, localManifest);
+  if (command === 'workflow' && args.length === 0) {
+    return { revision: manifest.revision, repo, prompt: path.join(repo, 'prompts/run-daily.md') };
+  }
   if (command === 'local') {
     const local = await import(pathToFileURL(path.join(repo, 'deployment/mac/mac-local.mjs')).href);
     return local.main(args);

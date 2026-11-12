@@ -13,7 +13,6 @@ import {
   buildTelemetry,
   renderTelemetryMarkdown,
   formatAlertMarkdown,
-  sendViaLarkCli,
 } from '../telemetry.mjs';
 import {
   resolveCollectionShortlinks,
@@ -271,7 +270,7 @@ test('dual-layer content store archives raw bodies, clusters across arXiv/HF/X, 
   assert.equal(material.observations.length, 2);
 });
 
-test('end-to-end runDailyV2 produces two-tier digest, blocks leaked pipeline jargon, records history, and sends lark-cli alert on failure', async t => {
+test('the local preview builds both tiers, refuses delivery, and records failures locally', async t => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'xdaily-v2-e2e-'));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
 
@@ -337,11 +336,6 @@ test('end-to-end runDailyV2 produces two-tier digest, blocks leaked pipeline jar
     /Unobserved or hallucinated URL/,
   );
 
-  const larkCalls = [];
-  const mockSpawnSync = (executable, args) => {
-    larkCalls.push({ executable, args });
-    return { status: 0, stdout: JSON.stringify({ ok: true, data: { message_id: `om_synth_${larkCalls.length}` } }) };
-  };
 
   const mockFetch = async (_url, init) => {
     const body = JSON.parse(init.body);
@@ -377,15 +371,13 @@ test('end-to-end runDailyV2 produces two-tier digest, blocks leaked pipeline jar
     modelsFile,
     feedArtifactsPath: feedBundlePath,
     fetchFullTextOnline: false,
-    larkConfig: { enabled: true, executable: '/usr/local/bin/lark-cli', chatId: 'oc_synthetic_chat' },
-    allowSend: true,
-    runtimeHooks: { fetch: mockFetch, spawnSync: mockSpawnSync, now: '2026-11-11T01:00:00Z' },
+    runtimeHooks: { fetch: mockFetch, now: '2026-11-11T01:00:00Z' },
   });
 
-  assert.equal(result.status, 'completed_and_sent');
+  assert.equal(result.status, 'completed_local');
   assert.equal(result.funnel.publishedDeepDive, 1);
   assert.equal(result.funnel.publishedQuickHits, 1);
-  assert.equal(larkCalls.length, 1);
+  assert.equal(result.delivery.sent, false);
 
   const finalDigest = fs.readFileSync(result.digestPath, 'utf8');
   assert.match(finalDigest, /## Breakthrough Research/);
@@ -400,39 +392,22 @@ test('end-to-end runDailyV2 produces two-tier digest, blocks leaked pipeline jar
   const dispValidation = validateDispositions(autoDisp, mergedCol, finalDigest.split('### 运行自检')[0] + '\n## 差异补充\naudit');
   assert.equal(dispValidation.included, 2);
 
-  // Second run on the same day exits idempotently without re-sending.
-  const secondRun = await runDailyV2({
-    dataDir,
-    sourcesConfig,
-    modelsFile,
-    feedArtifactsPath: feedBundlePath,
-    fetchFullTextOnline: false,
-    larkConfig: { enabled: true, executable: '/usr/local/bin/lark-cli', chatId: 'oc_synthetic_chat' },
-    allowSend: true,
-    runtimeHooks: { fetch: mockFetch, spawnSync: mockSpawnSync, now: '2026-11-11T02:00:00Z' },
-  });
-  assert.equal(secondRun.status, 'already_sent_today');
-  assert.equal(larkCalls.length, 1);
+  await assert.rejects(runDailyV2({ allowSend: true }), /preview cannot send/);
 
-  // Unrecoverable error on next day triggers guaranteed lark-cli alert card instead of silent failure!
   await assert.rejects(
     () => runDailyV2({
       dataDir,
       sourcesConfig,
       modelsFile,
       fetchFeedsOnline: false, // Neither browser nor feed artifacts supplied -> fatal empty collection
-      larkConfig: { enabled: true, executable: '/usr/local/bin/lark-cli', chatId: 'oc_synthetic_chat' },
-      allowSend: true,
-      runtimeHooks: { fetch: mockFetch, spawnSync: mockSpawnSync, now: '2026-11-12T01:00:00Z' },
+      runtimeHooks: { fetch: mockFetch, now: '2026-11-12T01:00:00Z' },
     }),
     err => {
       assert.equal(err.stage, 'collect_and_import');
-      assert.equal(err.alertDelivery?.sent, true);
       assert.match(err.alertMarkdown, /X AI 日报运行告警 2026-11-12/);
       return true;
     },
   );
-  assert.equal(larkCalls.length, 2);
 });
 
 test('Mac Codex feedback regressions: unattempted sources warn in footer, >2h X+Feed skew merges, X quote/t.co clusters, and two-step host compose works without API calls', async t => {

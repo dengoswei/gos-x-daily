@@ -136,20 +136,9 @@ Fan-in, recency and author prominence inform the ranking; an explained mechanism
 outranks an unexplained headline. During selection, consider sourced short
 updates and long-form pieces alongside research, infrastructure and products.
 
-Use these sections in order. Omit any section without a qualifying item:
-1. `## Quick Hits / 快讯速览` for standalone releases, version updates or brief
-   ecosystem news whose practical change fits in one or two sentences. State
-   what changed and who can use it, when known, and cite the primary source.
-   Keep research papers and items requiring a mechanism or comparison in a
-   deep section. Do not repeat a deep item in Quick Hits.
-2. `## Frameworks / Infra`
-3. `## Breakthrough Research`
-4. `## Applications / Products`
-5. `## Long-form / Essays` for a substantive essay, engineering retrospective
-   or first-person analysis whose central argument is worth unpacking
-6. `## 补课 / 历史讨论` (optional) for catch-up items; alternatively prefix a catch-up
-   item inside its topical section with `补读｜`
-7. `## 差异补充` (required audit)
+Follow the shared digest sections. After the topical sections, use the optional
+`## 补课 / 历史讨论` for catch-up items, or prefix them with `补读｜` in their
+topical section. End with the required `## 差异补充` audit.
 
 ## Reading the collection
 
