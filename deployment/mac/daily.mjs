@@ -70,6 +70,8 @@ export function resumeGeneratedDraft(runDir, collectionId) {
 
 export function prepareGeneratedPublication(runDir, generated, revisionOf) {
   const state = read(path.join(runDir, 'prepare-state.json'));
+  const runMetadata = read(path.join(runDir, 'run.json'));
+  if (revisionOf && runMetadata.revisionOf !== revisionOf) throw new Error('Revision intent differs from the frozen run');
   const sources = read(path.join(runDir, 'sources.merged.json'));
   const prepared = read(path.join(runDir, 'prepared-topics.json'));
   const original = fs.readFileSync(path.join(runDir, 'digest.md'), 'utf8');
@@ -85,7 +87,12 @@ export function prepareGeneratedPublication(runDir, generated, revisionOf) {
   const coverage = coverageStatusLine(sources) + '\n\n' + telemetry + '\n\n' + scopeNote;
   const keys = new Set(candidateKeys(sources));
   const dispositions = read(path.join(runDir, 'dispositions.json'));
-  const accounting = { candidateKeys: keys.size, dispositionRows: dispositions.items.map(row => ({
+  const accounting = { publicationIntent: { date: sources.date,
+    mode: revisionOf ? 'same_day_revision' : 'daily_report',
+    priorAcceptedSameDayReport: Boolean(revisionOf),
+    noticeMeaning: revisionOf ? 'The user requested this new report to replace the earlier accepted report for the same date. The controller validated the original receipt when creating this revision run.' : 'The regular report for this date.',
+    deliveryState: 'not_sent; replacement takes effect when the reviewed report is delivered' },
+    candidateKeys: keys.size, dispositionRows: dispositions.items.map(row => ({
     disposition: row.disposition, count: row.keys?.length ?? 1 })),
     pipelineCounters: telemetryData.funnel, rawCounts: state.counts, backlogSnapshot: state.backlogStats,
     selectedTopics: prepared.map(row => ({ topicId: row.topicId, section: row.section,
@@ -105,7 +112,7 @@ export function prepareGeneratedPublication(runDir, generated, revisionOf) {
   const urls = [...new Set(citedUrls(body))];
   const materials = prepared.map(row => row.material);
   const excerpts = [];
-  const materialsPaths = ['canonical-materials.json', 'collection-coverage.md', 'prepared-topics.json'];
+  const materialsPaths = ['canonical-materials.json', 'collection-coverage.md', 'prepared-topics.json', 'run.json'];
   const publicDir = path.join(runDir, 'publication-evidence');
   fs.mkdirSync(publicDir, { recursive: true, mode: 0o700 });
   const evidence = selectedEvidence(materials, urls, sources.collectedAt);
