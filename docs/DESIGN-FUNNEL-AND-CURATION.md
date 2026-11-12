@@ -41,13 +41,13 @@ The **v2 architecture (`run-daily.mjs`, `content-store.mjs`, `curation.mjs`, `te
                Evaluates Top ~45 shortlist on:
                (a) Novel Insight  (b) Empirical Engineering Lesson  (c) Consequential Judgment
                ├── `deep` (5–8 items) -> Full-text fetch (`enrichTopicsWithFullText`) -> Deep Dive
-               ├── `quick` (0–5 items) -> Concise releases / product betas ONLY -> Quick Hits (last)
+               ├── `quick` (0–5 items) -> Concise releases / product betas ONLY -> Quick Hits (first)
                └── `deferred` -> High-value runners-up saved back into `backlog-pool.json`
                                      │
                                      ▼
             5. Source-Faithful Composition + Single-Pass Review + Telemetry Self-Check
                ├── Deterministic URL allowlist gate + pipeline-jargon blocker (`validateV2Digest`)
-               ├── Canonical section ordering (`Quick Hits / 快讯速览` always after Deep Dive)
+               ├── Canonical section ordering (`Quick Hits / 快讯速览` first when present)
                └── `telemetry.json` + `### 运行自检` footer + `lark-cli` guaranteed alert fallback
 ```
 
@@ -107,7 +107,7 @@ The top ~45 candidates ranked by $S_{\text{prior}}$ are evaluated by the LLM (or
 
 ### Strict `Deep Dive` vs. `Quick Hits` Boundary
 - **`Deep Dive` (`tier: "deep"`, 5–8 items)**: Items whose value requires unpacking `obstacle -> concrete mechanism -> experimental setup & boundary`. Diversity guard caps any single feed (e.g., Daily Papers) at 2–3 items when other strong sources exist.
-- **`Quick Hits / 快讯速览` (`tier: "quick"`, 0–5 items, rendered LAST)**: **Strictly** for items whose entire value fits in 1–2 crisp sentences without methodological exposition (routine product betas, UI connectors, minor SDK/framework point releases). **Research papers are never dumped into Quick Hits as overflow.**
+- **`Quick Hits / 快讯速览` (`tier: "quick"`, 0–5 items, rendered first)**: **Strictly** for items whose entire value fits in 1–2 crisp sentences without methodological exposition (routine product betas, UI connectors, minor SDK/framework point releases). **Research papers are never dumped into Quick Hits as overflow.**
 
 ---
 
@@ -116,10 +116,10 @@ The top ~45 candidates ranked by $S_{\text{prior}}$ are evaluated by the LLM (or
 Daily news volume is bursty: a major conference or release day may produce 15+ genuinely worthwhile pieces, while a weekend may have only 3. Without cross-day memory, items #9–#15 vanish once the 48-hour capture window slides forward.
 
 ### Lifecycle Rules (`curation.mjs`)
-1. **Selective Admission**: After daily composition, unpicked topics that were either explicitly marked `deferred` by the Stage 2 editor or scored $S_{\text{prior}} \ge 5.5$ (`minPriorScoreToEnter`) are persisted into `state/backlog-pool.json` (capped at `maxPoolSize = 40`). Low-signal noise is discarded immediately.
+1. **Selective Admission**: After daily composition, unpicked topics that were either explicitly marked `deferred` by the Stage 2 editor or scored $S_{\text{prior}} \ge 5.5$ (`minPriorScoreToEnter`) are persisted into `state/backlog-pool.json` (capped at `maxPoolSize = 1000`). Low-signal noise is discarded immediately.
 2. **Zero-Refetch Full-Text Caching**: Any full article body already fetched or extracted for a backlog candidate is copied into `state/backlog-articles/<hash>.txt` and reused automatically on subsequent runs.
 3. **Cross-Day Signal Accumulation**: If a slow-burn essay or paper in the backlog receives new X discussions or higher upvotes tomorrow, `mergeBacklogIntoTopics` merges the new observations into the existing topic, increments `fanIn`, updates peak `metrics`, and resets age decay (`refreshedToday = true`) — naturally boosting slow-burn gems to the top.
-4. **Gentle Decay & Hard 7-Day TTL**: Unrefreshed backlog items decay by `dailyDecay = 0.6` points per day and expire cleanly after `maxAgeDays = 7` (or immediately once published in `published-history.jsonl`). Recalled items older than 48 hours carry the `补读｜` prefix with their original publication date.
+4. **Daily Ranking Decay and One-Year Retention**: Unrefreshed backlog items lose `dailyDecay = 0.6` ranking points per day. The admission threshold applies on entry. Admitted items remain eligible for retention up to `maxAgeDays = 365`, subject to the capacity limit and removal when cited or matched in recent publication history. Recalled items older than 48 hours carry the `补读｜` prefix with their original publication date.
 
 ---
 

@@ -214,8 +214,8 @@ export function selectTopicsHeuristic(topics, { maxDeep = 7, maxQuick = 4, maxPe
 
 /**
  * Reorders `## ` sections into canonical reader order:
- * Frameworks / Infra -> Breakthrough Research -> Applications / Products -> Long-form / Essays ->
- * any custom deep sections -> Quick Hits / 快讯速览 (always last before telemetry footer).
+ * Quick Hits / 快讯速览 -> Frameworks / Infra -> Breakthrough Research ->
+ * Applications / Products -> Long-form / Essays -> any custom deep sections.
  */
 export function normalizeDigestSectionOrder(markdown) {
   const lines = String(markdown ?? '').trim().split(/\r?\n/);
@@ -238,7 +238,7 @@ export function normalizeDigestSectionOrder(markdown) {
   if (sections.length <= 1) return lines.join('\n').trim();
 
   const rankOf = name => {
-    if (name === QUICK_SECTION || /quick\s*hits|快讯/i.test(name)) return 100;
+    if (name === QUICK_SECTION || /quick\s*hits|快讯/i.test(name)) return -1;
     const idx = CANONICAL_DEEP_ORDER.indexOf(name);
     return idx >= 0 ? idx : 50;
   };
@@ -538,7 +538,7 @@ export async function runDailyV2({
         const loadedBacklog = loadBacklogPool(workspace.stateDir, {
           reportDate,
           softHistory,
-          maxAgeDays: taste.backlog?.maxAgeDays ?? 7,
+          maxAgeDays: taste.backlog?.maxAgeDays,
         });
         backlogStats = mergeBacklogIntoTopics(storeTopics, loadedBacklog.entries, storeDir, { taste, reportDate });
         storeCounts.topics = storeTopics.length;

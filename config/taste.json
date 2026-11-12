@@ -122,8 +122,8 @@
     "purePromoOrHiring": -6.0
   },
   "backlog": {
-    "maxPoolSize": 40,
-    "maxAgeDays": 7,
+    "maxPoolSize": 1000,
+    "maxAgeDays": 365,
     "dailyDecay": 0.6,
     "minPriorScoreToEnter": 5.5
   }
