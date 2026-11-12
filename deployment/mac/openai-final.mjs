@@ -10,6 +10,7 @@ import { JSON_NOTE, UNTRUSTED, modelJson, tagged } from '../../prototype/run-pac
 import { frozenApiRun, readApiKey } from './openai-draft.mjs';
 
 import { digestLayoutPrompt, QUICK_SECTION } from '../../digest-layout.mjs';
+import { acquireLeaseLock } from '../../telemetry.mjs';
 
 const model = 'gpt-6.1-sol';
 const inputName = 'api-final-input.json';
@@ -188,19 +189,20 @@ function validateReviewAnswer(answer, units, packet, invalidQuotes) {
 const comprehension = 'For each exact unit return {"units":[{"id":"…","status":"pass or fail","reconstruction":{"problem":"…","method":"…","result":"…","innovation":"…"},"notes":"…"}]}. Reconstruct the main point, mechanism, result, and contribution or limitation solely from the supplied final prose; for coverage, audit and transport units reconstruct their actual meaning and role. State what is missing rather than inventing it. Fail unclear or misleading units and explain the concrete defect. Use distinct, substantive explanations.';
 const fidelity = 'For each exact unit return {"units":[{"id":"…","status":"pass or fail","notes":"…","evidence":[{"id":"excerpt ID","quote":"verbatim substring of that excerpt\'s text field, at least 8 characters"}]}]}. Compare claims, dates, mechanism, results, comparisons and limitations with the supplied evidence. Give specific findings, fail material discrepancies or missing evidence. Cite evidence for every link in main and rendered Markdown units, coverage evidence for any coverage claims, render and transport, and the local disposition facts for any candidate counts. A URL alone is not evidence. A disposition reason records an editorial decision, not proof of which source bodies were read. For exact transport JSON check visible text, link grouping and any truncation against render; do not claim client UI readback.';
 
-export async function finalizeOpenAI({ runsDir, runDir, keyFile, ledgerDir, revision = false, resume, fetchImpl = globalThis.fetch }) {
+export async function finalizeOpenAI({ runsDir, runDir, keyFile, ledgerDir, revision = false, resume, generated, fetchImpl = globalThis.fetch }) {
   const { run, sources, sourcesText, sourcesPath = 'sources.json' } = frozenApiRun(runsDir, runDir);
   const read = file => readPublicationFile(runDir, file);
   const inputRaw = read(inputName);
   const packet = loadPacket(runDir, sources, inputRaw, sourcesPath);
   const recent = recentPublishedUrls(ledgerDir, { before: run.date });
-  if (revision) recent.push(...recentPublishedUrls(ledgerDir, { before: new Date(Date.parse(run.date) + 86400000).toISOString().slice(0, 10) })
+  if (revision && !generated) recent.push(...recentPublishedUrls(ledgerDir, { before: new Date(Date.parse(run.date) + 86400000).toISOString().slice(0, 10) })
     .filter(row => row.date === run.date));
   const allowed = new Set(packet.excerpts.flatMap(row => row.url ? [row.url] : []));
   const canonicalAllowed = new Set([...allowed].map(canonicalUrl));
-  const draftReport = JSON.parse(read('api-draft/report.json'));
+  const draftReport = generated ? { validation: { passed: true } } : JSON.parse(read('api-draft/report.json'));
   if (draftReport.validation?.passed !== true) throw new Error('API final requires a validated API draft');
-  const draft = { markdown: read('api-draft/digest.md'), dispositions: JSON.parse(read('api-draft/dispositions.json')) };
+  const draft = generated ? { markdown: read('digest.publication.md'), dispositions: JSON.parse(read('dispositions.json')) }
+    : { markdown: read('api-draft/digest.md'), dispositions: JSON.parse(read('api-draft/dispositions.json')) };
   const windows = sources.coverage?.accounting?.windows;
   const accounting = { id: accountingId, kind: 'coverage', text: coverageStatusLine(sources) +
     '\nHours lacking certified UI traversal: 24h window = ' + (windows?.['24h']?.unscannedHours ?? 'unknown') +
@@ -209,7 +211,8 @@ export async function finalizeOpenAI({ runsDir, runDir, keyFile, ledgerDir, revi
   const key = readApiKey(keyFile);
   const resultPath = path.join(runDir, 'api-final-result.json');
   const lock = path.join(runDir, 'api-final.lock');
-  fs.mkdirSync(lock, { mode: 0o700 });
+  const reviewLease = generated ? acquireLeaseLock(path.join(runDir, 'daily-review.lock'), { stage: 'review' }) : null;
+  if (!reviewLease) fs.mkdirSync(lock, { mode: 0o700 });
   try {
     if (fs.existsSync(resultPath)) throw new Error('API final already completed for this run');
     let prior;
@@ -233,6 +236,7 @@ export async function finalizeOpenAI({ runsDir, runDir, keyFile, ledgerDir, revi
     const outDir = fs.mkdtempSync(path.join(runDir, 'api-final-'));
     const usagePath = path.join(outDir, 'api-usage.jsonl');
     const call = async (stage, messages, attempt) => {
+      reviewLease?.heartbeat(stage);
       const serialized = JSON.stringify(messages);
       const inputBytes = Buffer.byteLength(serialized);
       const inputSha256 = sha256(serialized);
@@ -344,11 +348,12 @@ export async function finalizeOpenAI({ runsDir, runDir, keyFile, ledgerDir, revi
         (packet.editorialFocus.length ? '\nThe editorialFocus IDs mark source details found during review. If you cover their topic, explicitly preserve the material conditions, exceptions and benchmark scope in these excerpts.' : '')),
     ];
     let feedback = [];
-    for (let attempt = 1; attempt <= 2; attempt++) {
+    for (let attempt = 1; attempt <= (generated ? 1 : 2); attempt++) {
       const folder = path.join(outDir, 'attempt-' + attempt);
       fs.mkdirSync(folder, { mode: 0o700 });
-      const author = feedback.length ? [...base, message('user', data('revision_findings', feedback))] : base;
-      const final = await call('final', author, attempt);
+      const author = generated ? generated.messages : feedback.length ? [...base, message('user', data('revision_findings', feedback))] : base;
+      const final = generated ? { ...generated, answer: { markdown: draft.markdown, dispositions: draft.dispositions } }
+        : await call('final', author, attempt);
       const { dispositionChanges } = final.answer;
       const markdown = typeof final.answer.markdown === 'string' ? restoreObservedLinkSpelling(final.answer.markdown, allowed) : undefined;
       let { dispositions } = final.answer;
@@ -459,7 +464,7 @@ export async function finalizeOpenAI({ runsDir, runDir, keyFile, ledgerDir, revi
       if (feedback.length) feedback.unshift({ previousFinal: markdown });
       if (feedback.length) continue;
       const transcript = [...author, message('assistant', final.content)];
-      const selfRequest = message('user', 'Continue as the same final author, now reconstructing your final units. You have already seen evidence; do not claim source blindness. Review the exact units below, which may restore the spelling of a public Markdown link to its observed trailing-slash form. ' + comprehension + '\n' + unitData);
+      const selfRequest = message('user', 'Continue as the same final author, now reconstructing your final units. You have already seen evidence; do not claim source blindness. Review the exact units below, including the deterministically appended telemetry, coverage and revision notice. ' + comprehension + '\n' + unitData + (generated ? '\n' + shared : ''));
       const selfA = await call('author-comprehension', [...transcript, selfRequest], attempt);
       const selfARows = validateReviewAnswer(selfA.answer, units);
       if (checkedAt() <= selfA.finishedAt) await delay(2);
@@ -488,8 +493,11 @@ export async function finalizeOpenAI({ runsDir, runDir, keyFile, ledgerDir, revi
       writeJson(resultPath, result);
       return result;
     }
-    throw new Error('API final could not resolve validation or material review findings in two attempts. Inspect ' + outDir);
+    const failure = new Error((generated ? 'Publication review requires correction. Inspect ' : 'API final could not resolve validation or material review findings in two attempts. Inspect ') + outDir);
+    failure.findings = feedback;
+    throw failure;
   } finally {
-    fs.rmdirSync(lock);
+    if (reviewLease) reviewLease.release();
+    else fs.rmdirSync(lock);
   }
 }

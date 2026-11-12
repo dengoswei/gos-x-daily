@@ -498,6 +498,7 @@ export function buildContentStore(collection, storeDir, { softHistory = null, su
       candidateKeys: allCandidateKeys,
       cards: sorted.map(c => ({
         id: c.id,
+        candidateKey: c.candidateKey,
         kind: c.kind,
         author: c.author,
         sourceLabel: c.sourceLabel,
@@ -785,11 +786,18 @@ export function buildAutoDispositions({ collectionId, candidateKeys = [], topics
     const matchedUrl = topicUrls.find(u => citedCanonical.has(safeCanonical(u)));
 
     if (matchedUrl) {
-      const primaryKey = keys[0];
-      const section = bulletSectionsByUrl.get(safeCanonical(matchedUrl)) ?? 'Frameworks / Infra';
-      items.push({ key: primaryKey, disposition: 'included', section, url: matchedUrl });
-      handled.add(primaryKey);
-      for (const extraKey of keys.slice(1)) {
+      const citedOwners = (topic.cards ?? []).map((card, index) => ({
+        key: card.candidateKey ?? topic.candidateKeys[index], url: card.url,
+      })).filter(card => keys.includes(card.key) && citedCanonical.has(safeCanonical(card.url)));
+      const included = citedOwners.length ? citedOwners : [{ key: keys[0], url: matchedUrl }];
+      const primaryKey = included[0].key;
+      for (const owner of included) {
+        if (handled.has(owner.key)) continue;
+        const section = bulletSectionsByUrl.get(safeCanonical(owner.url)) ?? 'Frameworks / Infra';
+        items.push({ key: owner.key, disposition: 'included', section, url: owner.url });
+        handled.add(owner.key);
+      }
+      for (const extraKey of keys.filter(key => !handled.has(key))) {
         items.push({ key: extraKey, disposition: 'merged', mergedInto: primaryKey });
         handled.add(extraKey);
       }

@@ -8,7 +8,7 @@ does not create a schedule or grant new access. Use Asia/Shanghai throughout.
 
 Source the user's shell configuration before Node or Lark CLI. Use only the
 provisioned `DEPLOYMENT_HOME/run.mjs` entry point. Read
-`deployment/mac/RUNBOOK.md`, `EDITORIAL.md`, `prompts/compose-digest.md`,
+`deployment/mac/RUNBOOK.md`, `EDITORIAL.md`, `prompts/v2-compose-digest.md`,
 `BROWSER-ARTIFACTS.md` and `docs/AGENT-WORKFLOW.md` from the verified checkout.
 Use the revision returned by `workflow` as `GOS_X_DAILY_EXPECT_REVISION` on
 every controller command in the run. If the active revision changes, restart
@@ -32,6 +32,9 @@ large review records in the coordinator context.
 ## Collect and process
 
 Freeze the actual source roster and rolling 48-hour window at collection start.
+The effective roster merges release-owned public feeds/blogs with local private
+profiles and named overrides. Fetch every enabled feed using the release tool
+`tools/fetch-feeds.mjs` and the frozen sources. Record individual failures.
 Use supported authorized browser/connector access and current provisioned
 sessions. No direct CDP, profile/cookie copying or routine authentication prompts.
 Require selected usable X Following, scroll beyond the first screen through the
@@ -44,11 +47,10 @@ failures are explicit limitations, not evidence of no new material.
 
 Workers preserve actual captures, URLs, original publication/observation times,
 read depth and hashes. The coordinator imports with `cli import-browser` and
-`cli import-feed` when applicable, using the returned run's `runtime.json` so
-coverage advances in the persistent local state. Use the existing authoritative
-local delivery ledger as `--published-history` for `cli compose-input` and
-`cli worker-input`. Save the full composition input to disk; read only the worker
-coordinator manifest/indexes in the main context. Consider every observed
+`cli import-feed --preserve-full-text --allow-window-skew` for the configured feeds, using the returned run's `runtime.json` so
+coverage advances in the persistent local state. The daily command supplies the
+authoritative local publication history to the shared pipeline. Read source-worker
+handoffs and exceptional findings in the main context. Consider every observed
 candidate and relevant supplemental lead. Context batches are not article quotas.
 Keep failed reads and unverified 24h/48h intervals explicit.
 
@@ -59,66 +61,36 @@ is eligible as 跟进 only with a specific new fact. Keep publication dates of o
 work. Do not import preview history as publication history, discard uncertain
 attempts, invoke a retired workspace workflow or change sending identity.
 
-## Write and review with the configured API key
+## Run the repository pipeline
 
-If `inspect` reports a configured `model.apiDraft`, write worker packets to
-`RUN/packets` and run `local draft --run RUN` through the provisioned wrapper.
-It uses the configured screening model and GPT-6.1 Sol for story drafts and
-composition, all with high reasoning. A provider failure is a run failure unless the unchanged partial
-output can be completed with `--resume`. A structurally rejected draft requires
-diagnosis before a new attempt. Use the draft as leads for original-source checks.
-Prepare `canonical-materials.json`, `collection-coverage.md` and the explicit
-`api-final-input.json` projection described in the Mac runbook. Include enough
-verbatim public source text to verify dates, mechanisms, results, comparisons and
-limitations. Keep private Gmail bodies, screenshots, credentials and identifiers
-out of that projection. Corroborate private leads with public originals or record
-the limitation and omit unsupported items.
+After importing browser and feed bundles into RUN/sources.merged.json, save public
+supplemental originals as RUN/supplements.public.json. Each array entry has title,
+url, text, publishedAt, sourceLabel and reading limits. Private mail bodies remain
+local discovery evidence. Use their public originals as supplements.
 
-Run `local finalize --run RUN`. Sol High writes the terminal digest and
-dispositions, then a fresh reader first reconstructs the prose without evidence
-and checks it against evidence in a second call. The actual API author reviews
-every unit, audit, render and native payload by continuing its author transcript
-with `sourceBlind: false`. Only use the returned `publication` path after both
-passes succeed. Do not edit the generated report or synthesize an approval.
-Unresolved API or evidence failures block this route; report them rather than
-quietly replacing the writer or reviewer. Record usage from both stage logs.
+Run `local daily --run RUN` through the provisioned wrapper. It directly calls
+`runDailyV2` in `run-daily.mjs` with the frozen sources and authoritative
+published-URL history. That one pipeline owns raw/card/topic storage, prior scores,
+backlog recall, topic selection, original-text enrichment, composition, automatic
+dispositions and telemetry. Quick Hits comes first. Inspect returned status and
+artifact paths without rewriting or selecting stories in the coordinator.
 
-If no API key file is configured, use the host author workflow below.
+The Mac adapter preserves the composer's actual transcript and reviews the exact
+output, including telemetry, coverage, revision notice and native Feishu payload.
+It has no separate final writer. A material finding returns to the same repository
+composer for one correction. Publication requires a genuine fresh reader check
+and the original author's self-check against the preserved evidence. Tests and
+structural checks do not substitute for those checks.
 
-## Host author workflow without a configured API key
-
-Produce a substantive Chinese report without an arbitrary story or sentence
-quota. Every item has one clear main idea; explain the concrete problem,
-mechanism and supported conclusion with the connective reasoning a reader needs.
-Use a useful example when a mechanism would otherwise remain opaque. Distinguish
-author claims, observations and limitations. Keep comparisons fair without burying
-the explanation under numbers and caveats. Use compact native post rows, bold
-idea-led titles and source links together at the end. Separate a short reader
-collection note from the detailed audit. Candidate inclusion counts are not final
-article counts.
-
-Use a fresh reader worker for selected stories or batches to detect missing
-reasoning. Give final prose first, persist its reconstruction, then supply sources
-for fidelity checking. Record actual identity and source exposure; advisory
-reports do not replace the author's required self-check or create independence
-by changing names. Resolve findings before final review.
-
-Create `publication.json` with `reviewMode: "self"`, `renderStyle: "concise"`,
-`transport: "feishu-post-v1"`, actual author identity and the existing ledger.
-Generate `review.pending.json` via `cli review-input`. The actual final author
-checks every item, original evidence, dates, limits, audit, final Markdown and
-exact serialized native post. Inspect text/link row grouping as well as text
-completeness: a matching text hash alone does not certify layout. Record real
-check times, substantive reconstruction and fidelity findings with source paths.
-Use the same author/reviewer identity and `sourceBlind: false`; never fabricate
-independence or run synthetic approval helpers. Rebuild bindings after changed
-bytes and recheck affected units. Run `cli validate-publication`.
+The retired `local draft` and `local finalize` commands are unavailable.
+An interrupted `local daily` keeps its evidence and attempts. Check the run and
+ledger before resuming. A completed daily result returns its existing publication.
+Do not independently invoke the legacy prototype orchestration.
 
 ## Publish once and finish
 
 Immediately after successful author self-check, use
-`local publish --publication PUBLICATION` using the path from finalization (or
-the host-authored `RUN/publication.json` when no API key is configured). Only this controller checks
+`local publish --publication PUBLICATION` using the publication path returned by `local daily`. Only this controller checks
 sole Mac ownership, current recipient history, exact reviewed payload, target,
 canonical date key and durable attempt, sends once and verifies readback. API
 acceptance with pending readback requires reconciliation only. An uncertain
