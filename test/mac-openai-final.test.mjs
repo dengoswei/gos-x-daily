@@ -172,6 +172,11 @@ async function setup(t, variant) {
         const index = units.findIndex(unit => unit.kind === 'render');
         reviewRows[index].evidence = reviewRows[index].evidence.filter(ref => ref.id !== 'coverage');
       }
+      if (['uncited-link-repair', 'uncited-link-persists'].includes(variant) && stage === 'reader-fidelity' &&
+          (!repairingCitations || variant === 'uncited-link-persists')) {
+        const index = units.findIndex(unit => unit.kind === 'render');
+        reviewRows[index].evidence = covered;
+      }
       if (!repairingCitations && ((variant === 'citation-typo' && stage.endsWith('fidelity')) || materialAfterRepair)) {
         for (const [index, unit] of units.entries()) {
           if (unit === units[0] || unit.kind === 'render') {
@@ -380,5 +385,24 @@ test('API final rejects attempts to select local mail or to supply a non-verbati
   assert.deepEqual(f.stages, []);
   fs.writeFileSync(manifest, JSON.stringify({ ...f.input, editorialFocus: ['coverage'] }));
   await assert.rejects(f.run(), /editorial focus must reference distinct public evidence IDs/);
+  f.unchangedLedger();
+});
+
+test('API final repairs a passing render unit that omitted one cited link excerpt instead of aborting', async t => {
+  const f = await setup(t, 'uncited-link-repair');
+  const result = await f.run();
+  assert.equal(result.attempt, 1);
+  assert.deepEqual(f.stages, [
+    'final', 'reader-comprehension', 'reader-fidelity', 'reader-fidelity',
+    'author-comprehension', 'author-fidelity',
+  ]);
+  assert.equal((await cli(['validate-publication', '--publication', result.publication])).reviewedUnits, result.units);
+  f.unchangedLedger();
+});
+
+test('API final rejects a link still missing after citation repair', async t => {
+  const f = await setup(t, 'uncited-link-persists');
+  await assert.rejects(f.run(), /account for every cited link/);
+  assert.equal(f.stages.filter(stage => stage === 'reader-fidelity').length, 2);
   f.unchangedLedger();
 });

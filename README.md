@@ -1,5 +1,19 @@
 # Gos X Daily
 
+## Current Mac production contract
+
+The user-authorized production path is `local deliver --run RUN`. It uses the
+shared v2 screen, compose and single-pass review stages, then binds and sends the
+result with the existing ledger and readback. `prompts/v2-review-digest.md` owns
+editorial review. The former four-call `openai-final.mjs` path is retired from
+production; historical independent/self-review descriptions below apply only to
+legacy records and portable callers. The coordinating agent collects/imports
+inputs and waits for delivery, without adding semantic review or routine approval.
+Model roles can be provisioned in `deployment.local.json` via `model.modelsFile`,
+using the repository provider schema with required screen/compose/review roles.
+
+
+
 ## Provisioned Mac policy
 
 The installed Mac controller follows [the Mac runbook](deployment/mac/RUNBOOK.md)

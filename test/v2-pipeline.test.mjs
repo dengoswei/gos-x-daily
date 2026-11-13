@@ -20,7 +20,9 @@ import {
   enrichTopicsWithFullText,
   loadTopicFullMaterial,
   buildAutoDispositions,
+  isAbstractLandingUrl,
 } from '../content-store.mjs';
+import { modelTopic } from '../model-input.mjs';
 import { parseFeedDocument, mergeFeedDocuments } from '../feed-import.mjs';
 import { readFeedDom } from '../feed.mjs';
 import { scoreTopicPrior, isRoboticsEmbodiedTopic, loadBacklogPool, mergeBacklogIntoTopics, saveBacklogPool } from '../curation.mjs';
@@ -1064,4 +1066,120 @@ test('inline URLs in supplement/article bodies enter observedUrls, stale watch t
   assert.equal(badDigestEval.digestPassed, false);
   assert.equal(badDigestEval.deepRoboticsCount, 2);
   assert.ok(badDigestEval.digestIssues.some(i => i.startsWith('excess_robotics_in_deep')));
+});
+
+test('Nov 13 Codex failure regressions: HF/arXiv abstract pages never masquerade as full_text, arXiv /html/ upgrades cleanly with /abs/ fallback, and X span telemetry never claims continuous coverage', async t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'xdaily-nov13-regressions-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+
+  assert.equal(isAbstractLandingUrl('https://huggingface.co/papers/2611.13766'), true);
+  assert.equal(isAbstractLandingUrl('https://arxiv.org/abs/2611.13766'), true);
+  assert.equal(isAbstractLandingUrl('https://arxiv.org/html/2611.13766v1'), false);
+  assert.equal(isAbstractLandingUrl('https://pytorch.org/blog/helion/'), false);
+
+  // 1. Paper A has /html/ available -> upgrades to full_text; Paper B returns 404 on /html/ and falls back to /abs/ -> stays abstract_only even if >1200 chars of chrome!
+  const topics = [
+    {
+      topicId: 'paper-html-ok',
+      title: 'Paper With HTML Full Text',
+      category: 'paper',
+      primaryUrl: 'https://huggingface.co/papers/2611.10001',
+      allObservedUrls: ['https://huggingface.co/papers/2611.10001'],
+      contentStatus: 'abstract_only',
+      cards: [{ kind: 'feed', url: 'https://huggingface.co/papers/2611.10001', contentStatus: 'abstract_only', sourceLabel: 'HF' }],
+    },
+    {
+      topicId: 'fame-qp-abstract-only',
+      title: 'FAME-QP: Dense QP Solver',
+      category: 'paper',
+      fetchedArticle: { url: 'https://huggingface.co/papers/2611.13766', contentStatus: 'full_text', modelShareable: true },
+      primaryUrl: 'https://huggingface.co/papers/2611.13766',
+      allObservedUrls: ['https://huggingface.co/papers/2611.13766'],
+      contentStatus: 'full_text',
+      cards: [{ kind: 'feed', url: 'https://huggingface.co/papers/2611.13766', contentStatus: 'abstract_only', sourceLabel: 'HF' }],
+    },
+  ];
+  fs.mkdirSync(path.join(dir, 'topics'), { recursive: true });
+
+  const stats = await enrichTopicsWithFullText(topics, dir, {
+    fetchImpl: async url => {
+      if (url === 'https://arxiv.org/html/2611.10001') {
+        return new Response(`<html><body><article>${'Full theorem proof and experimental setup. '.repeat(50)}</article></body></html>`,
+          { status: 200, headers: { 'content-type': 'text/html' } });
+      }
+      if (url === 'https://arxiv.org/html/2611.13766') {
+        return new Response('Not Found', { status: 404 });
+      }
+      if (url === 'https://arxiv.org/abs/2611.13766') {
+        return new Response(`<html><body><main>${'Abstract and long author/navigation metadata on landing page. '.repeat(40)}</main></body></html>`,
+          { status: 200, headers: { 'content-type': 'text/html' } });
+      }
+      throw new Error(`Unexpected URL: ${url}`);
+    },
+  });
+
+  assert.equal(stats.fullText, 1);
+  assert.equal(stats.snippetOnly, 1);
+  assert.equal(topics[0].contentStatus, 'full_text');
+  assert.equal(topics[1].contentStatus, 'abstract_only', 'Landing /abs/ page must never be promoted to full_text');
+
+  // modelTopic projection must also preserve abstract_only rather than blindly overwriting with full_text!
+  const projectedOk = modelTopic(topics[0]);
+  const projectedAbs = modelTopic(topics[1]);
+  assert.equal(projectedOk.contentStatus, 'full_text');
+  assert.equal(projectedAbs.contentStatus, 'abstract_only');
+
+  // 2. X Following partial span telemetry wording states observed span + unverified traversal, never "仅覆盖近 Xh".
+  const tel = buildTelemetry({
+    date: '2026-11-13',
+    sources: [{ id: 'xFollowing', label: 'X Following', kind: 'x', status: 'partial', items: 12, observedSpanHours: 20.6, stopReason: 'bounded_browser_capture' }],
+    funnel: { rawItems: 12, clusteredTopics: 10, screenSelectedTopics: 4, publishedDeepDive: 3, publishedQuickHits: 1 },
+  });
+  const xWarn = tel.recommendations.find(r => r.target === 'xFollowing');
+  assert.ok(xWarn);
+  assert.ok(!xWarn.reason.includes('仅覆盖近'), `Must not claim continuous coverage: ${xWarn.reason}`);
+  assert.match(xWarn.reason, /观察帖子时间跨度约 20\.6h.*非连续完整遍历/);
+});
+
+test('model projection rejects stale explicit full-text labels on paper landing pages', () => {
+  const url = 'https://huggingface.co/papers/2611.13766';
+  const projected = modelTopic({
+    primaryUrl: url,
+    cards: [{ kind: 'feed', url, contentStatus: 'abstract_only' }],
+    fetchedArticle: { url, modelShareable: true, contentStatus: 'full_text', charCount: 4000 },
+  });
+  assert.equal(projected.contentStatus, 'abstract_only');
+  assert.equal(projected.fetchedArticle.contentStatus, 'abstract_only');
+});
+
+test('arXiv server errors preserve failure status instead of falling back to an abstract', async t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'xdaily-arxiv-error-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const urls = [];
+  const topics = [{ topicId: 'paper-error', primaryUrl: 'https://arxiv.org/abs/2611.13766',
+    allObservedUrls: [], contentStatus: 'abstract_only', cards: [] }];
+  const stats = await enrichTopicsWithFullText(topics, dir, { fetchImpl: async url => {
+    urls.push(url);
+    return new Response('Unavailable', { status: 503 });
+  } });
+  assert.deepEqual(urls, ['https://arxiv.org/html/2611.13766']);
+  assert.equal(stats.failed, 1);
+  assert.equal(stats.fullText, 0);
+});
+
+test('original-source enrichment uses bounded parallel requests', async t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'xdaily-parallel-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  let active = 0, peak = 0;
+  const topics = Array.from({ length: 7 }, (_, index) => ({ topicId: 'parallel-' + index,
+    primaryUrl: 'https://example.com/article-' + index, allObservedUrls: [], contentStatus: 'snippet_only' }));
+  const stats = await enrichTopicsWithFullText(topics, dir, { concurrency: 3, fetchImpl: async () => {
+    active++;
+    peak = Math.max(peak, active);
+    await new Promise(resolve => setTimeout(resolve, 10));
+    active--;
+    return new Response('<article>' + 'Synthetic article text. '.repeat(100) + '</article>');
+  } });
+  assert.equal(peak, 3);
+  assert.equal(stats.fullText, 7);
 });

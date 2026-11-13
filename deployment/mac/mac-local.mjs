@@ -230,17 +230,29 @@ export async function main(args) {
   const config=loadLocalConfig();
   const command=args[0];
   const value=flag=>args[args.indexOf(flag)+1];
-  if (command === 'daily') {
-    if (args.length !== 3 || args[1] !== '--run') throw new Error('Use local daily --run RUN');
+  if (command === 'daily' || command === 'deliver') {
+    if (args.length !== 3 || args[1] !== '--run') throw new Error('Use local daily|deliver --run RUN');
     const { runProductionDaily } = await import('./daily.mjs');
     const deployment = read(path.join(base, 'deployment.local.json'));
+    let stage = 'draft';
     try {
-      return await runProductionDaily({ runDir: args[2], runsDir: config.runsDir,
+      const completed = await runProductionDaily({ runDir: args[2], runsDir: config.runsDir,
         dataDir: path.join(base, 'v2'), ledgerDir: config.ledgerDir,
-        keyFile: deployment.model?.apiDraft?.keyFile, screenModel: deployment.model?.apiDraft?.models?.screen });
+        keyFile: deployment.model?.apiDraft?.keyFile, screenModel: deployment.model?.apiDraft?.models?.screen,
+        composeModel: deployment.model?.apiDraft?.models?.compose,
+        reviewModel: deployment.model?.apiDraft?.models?.review, modelsFile: deployment.model?.modelsFile });
+      if (command === 'daily') return completed;
+      stage = 'publish';
+      const delivered = await main(['publish', '--publication', completed.publication]);
+      if (['already_accepted', 'accepted_readback_pending', 'already_present_requires_reconciliation'].includes(delivered.status)) {
+        const publication = read(completed.publication);
+        const date = read(path.join(args[2], publication.snapshotInputs.sourcesPath)).date;
+        return main(['reconcile', '--date', date]);
+      }
+      return delivered;
     } catch (error) {
       let alert;
-      try { alert = sendFailureAlert(config, todayInShanghai(), 'finalize'); }
+      try { alert = sendFailureAlert(config, todayInShanghai(), stage); }
       catch (alertError) { alert = { status: 'alert_failed', error: alertError.message }; }
       throw new Error(error.message + '\n' + JSON.stringify({ alert }));
     }

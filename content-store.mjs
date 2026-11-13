@@ -94,6 +94,11 @@ function contentStatusOf(kind, text, item) {
 
 const NON_ARTICLE_HOSTS = /(^|\.)(x\.com|twitter\.com|t\.co|youtube\.com|youtu\.be|instagram\.com|facebook\.com|linkedin\.com)$/;
 const NON_FETCH_FINAL_HOSTS = /(^|\.)(x\.com|twitter\.com|youtube\.com|youtu\.be|instagram\.com|facebook\.com|linkedin\.com)$/;
+const ABSTRACT_LANDING_URL_RE = /(?:^https?:\/\/(?:www\.)?arxiv\.org\/abs\/|^https?:\/\/(?:www\.)?huggingface\.co\/papers\/\d{4}\.\d{4,5}(?:[/?#]|$))/i;
+
+export function isAbstractLandingUrl(rawUrl) {
+  return ABSTRACT_LANDING_URL_RE.test(String(rawUrl ?? '').trim());
+}
 const INLINE_BODY_URL_RE = /https?:\/\/[^\s"'`<>)\]\\]+/g;
 const INLINE_URL_TRAILING = /[.,;:!?。，、)\]》」）】]+$/;
 
@@ -588,10 +593,16 @@ async function readBoundedBytes(response, controller, maxBytes = MAX_FETCH_BYTES
 
 function normalizeFetchTarget(rawUrl) {
   const u = new URL(rawUrl);
-  // Convert arXiv /abs/ or /pdf/ to /html/ first if desired? Actually /abs/ has title+abstract reliably,
-  // and arXiv /html/ exists for most modern papers; keep original URL and let HTML extractor parse <article> or <main>.
-  const arxivPdf = u.hostname === 'arxiv.org' && u.pathname.match(/^\/pdf\/(\d{4}\.\d{4,5}(?:v\d+)?)/);
-  if (arxivPdf) u.pathname = `/abs/${arxivPdf[1]}`;
+  // Prefer arXiv HTML full-text papers (/html/<id>) when starting from /abs/, /pdf/, or HF Daily Papers landing pages;
+  // if /html/<id> returns 404 for an older TeX bundle, enrichTopicsWithFullText falls back to /abs/<id> cleanly.
+  const arxivMatch = u.hostname.replace(/^www\./, '') === 'arxiv.org'
+    && u.pathname.match(/^\/(?:abs|pdf)\/(\d{4}\.\d{4,5}(?:v\d+)?)/);
+  const hfPaperMatch = u.hostname.replace(/^www\./, '') === 'huggingface.co'
+    && u.pathname.match(/^\/papers\/(\d{4}\.\d{4,5})/);
+  const paperId = arxivMatch?.[1] ?? hfPaperMatch?.[1];
+  if (paperId) {
+    return new URL(`https://arxiv.org/html/${paperId}`);
+  }
   return u;
 }
 
@@ -614,7 +625,29 @@ function extractReadableArticle(html, url) {
  * Fetches public HTTPS web pages for shortlisted topics that currently lack full text,
  * persisting both raw HTML/text and extracted links under store/raw/fetched/.
  */
-export async function enrichTopicsWithFullText(topics, storeDir, {
+export async function enrichTopicsWithFullText(topics, storeDir, options = {}) {
+  const { topicIds = null, maxFetches = 20, concurrency = 4, ...fetchOptions } = options;
+  if (!Number.isInteger(concurrency) || concurrency < 1 || concurrency > 16) throw new Error('Invalid enrichment concurrency');
+  const selected = new Set(topicIds ?? topics.map(topic => topic.topicId));
+  const pending = topics.filter(topic => selected.has(topic.topicId)).slice(0, maxFetches);
+  const results = new Array(pending.length);
+  let cursor = 0;
+  await Promise.all(Array.from({ length: Math.min(concurrency, pending.length) }, async () => {
+    while (cursor < pending.length) {
+      const index = cursor++;
+      results[index] = await enrichTopicsSequentially([pending[index]], storeDir, { ...fetchOptions, maxFetches: 1 });
+    }
+  }));
+  return results.reduce((total, result) => ({
+    attempted: total.attempted + result.attempted,
+    fullText: total.fullText + result.fullText,
+    snippetOnly: total.snippetOnly + result.snippetOnly,
+    failed: total.failed + result.failed,
+    degradedUrls: [...total.degradedUrls, ...result.degradedUrls],
+  }), { attempted: 0, fullText: 0, snippetOnly: 0, failed: 0, degradedUrls: [] });
+}
+
+async function enrichTopicsSequentially(topics, storeDir, {
   topicIds = null,
   maxFetches = 20,
   fetchImpl = globalThis.fetch,
@@ -628,6 +661,10 @@ export async function enrichTopicsWithFullText(topics, storeDir, {
 
   for (const topic of topics) {
     if (targetSet && !targetSet.has(topic.topicId)) continue;
+    if (topic.contentStatus === 'full_text' && isAbstractLandingUrl(topic.fetchedArticle?.url) &&
+        !topic.cards?.some(card => card.contentStatus === 'full_text' && !isAbstractLandingUrl(card.url))) {
+      topic.contentStatus = 'abstract_only';
+    }
     if (topic.contentStatus === 'full_text') {
       stats.attempted += 1;
       stats.fullText += 1;
@@ -657,6 +694,7 @@ export async function enrichTopicsWithFullText(topics, storeDir, {
     try {
       let current = normalizeFetchTarget(targetUrl);
       let finalResponse = null;
+      let triedArxivHtmlFallback = false;
       for (let hop = 0; ; hop++) {
         const refusal = publicUrlRefusal(current);
         if (refusal) throw new Error(`Refused target (${refusal})`);
@@ -680,7 +718,15 @@ export async function enrichTopicsWithFullText(topics, storeDir, {
           current = new URL(loc, current);
           continue;
         }
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        if (!res.ok) {
+          const htmlPaper = [404, 410].includes(res.status) && !triedArxivHtmlFallback && current.hostname === 'arxiv.org' && current.pathname.match(/^\/html\/(\d{4}\.\d{4,5}(?:v\d+)?)/);
+          if (htmlPaper) {
+            triedArxivHtmlFallback = true;
+            current = new URL(`https://arxiv.org/abs/${htmlPaper[1]}`);
+            continue;
+          }
+          throw new Error(`HTTP ${res.status}`);
+        }
         finalResponse = { res, finalUrl: current.href };
         break;
       }
@@ -715,12 +761,17 @@ export async function enrichTopicsWithFullText(topics, storeDir, {
       fs.writeFileSync(extractedPath, parsed.text + '\n', { mode: 0o600 });
 
       const relPath = path.relative(root, extractedPath);
+      const isLandingAbstractOnly = isAbstractLandingUrl(finalResponse.finalUrl);
+      const fetchedStatus = parsed.paywalled
+        ? 'paywalled'
+        : (!isLandingAbstractOnly && parsed.text.length >= 800) ? 'full_text' : 'abstract_only';
       topic.fetchedArticle = {
         modelShareable: true,
         url: finalResponse.finalUrl,
         title: parsed.title,
         charCount: parsed.text.length,
         paywalled: parsed.paywalled,
+        contentStatus: fetchedStatus,
         rawTextPath: relPath,
         outboundLinks: parsed.links.slice(0, 30),
       };
@@ -729,11 +780,11 @@ export async function enrichTopicsWithFullText(topics, storeDir, {
         if (c && !topic.allObservedUrls.includes(l.href)) topic.allObservedUrls.push(l.href);
       }
 
-      if (!parsed.paywalled && parsed.text.length >= 800) {
+      if (fetchedStatus === 'full_text') {
         topic.contentStatus = 'full_text';
         stats.fullText += 1;
       } else {
-        topic.contentStatus = parsed.paywalled ? 'paywalled' : 'abstract_only';
+        topic.contentStatus = fetchedStatus;
         stats.snippetOnly += 1;
         stats.degradedUrls.push(finalResponse.finalUrl);
       }
@@ -792,6 +843,7 @@ export function loadTopicFullMaterial(topic, storeDir) {
         url: topic.fetchedArticle.url,
         title: topic.fetchedArticle.title,
         paywalled: topic.fetchedArticle.paywalled,
+        contentStatus: topic.fetchedArticle.contentStatus ?? topic.contentStatus,
         text: fetchedBody.slice(0, 32000),
       },
     } : {}),

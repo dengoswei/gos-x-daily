@@ -67,39 +67,46 @@ After importing browser and feed bundles into RUN/sources.merged.json, save publ
 supplemental originals as RUN/supplements.public.json. Each array entry has title,
 url, text, publishedAt, sourceLabel and reading limits. Private mail bodies remain
 local discovery evidence. Use their public originals as supplements. The model
-projection also excludes logged-in Xiaohongshu and subscription-page bodies.
-Their public original papers/articles can enter as verified public supplements.
-Do not place private snippets in the public-supplement file. Legacy backlog
-bodies without recorded public provenance stay local until publicly reverified.
+projection (`model-input.mjs`) excludes subscription, Xiaohongshu and mail cards
+unless explicitly marked model-shareable. Keep these private cards unmarked.
+Authorized public feeds, blogs, verified public
+supplements and user-authorized X/watch timeline text (`https://api.openai.com/v1`,
+`store: false`) enter model prompts; screenshots stay local. Do not run ad-hoc
+anonymous X scraping/embed checks that fail with HTTP 403, and do not place private
+snippets in the public-supplement file. Legacy backlog bodies without recorded
+public provenance stay local until publicly reverified.
 
-Run `local daily --run RUN` through the provisioned wrapper. It directly calls
-`runDailyV2` in `run-daily.mjs` with the frozen sources and authoritative
-published-URL history. That one pipeline owns raw/card/topic storage, prior scores,
-backlog recall, topic selection, original-text enrichment, composition, automatic
-dispositions and telemetry. Quick Hits comes first. Inspect returned status and
-artifact paths without rewriting or selecting stories in the coordinator.
+Run `local deliver --run RUN` through the provisioned wrapper as a standalone
+command (never chained in the same shell invocation with staging or mail-audit
+file copies). When sandbox restrictions prevent the authorized operation, use the available
+host-context permission mechanism with a concise justification citing
+the user's standing authorization for `model-input.mjs`-filtered payloads to
+`https://api.openai.com/v1` (`store: false`). It directly calls `runDailyV2` in
+`run-daily.mjs` with the frozen sources and authoritative published-URL history.
+That one pipeline owns raw/card/topic storage, prior scores, backlog recall,
+topic selection, original-text enrichment, composition, automatic dispositions
+and telemetry. Quick Hits comes first. Inspect returned status and artifact paths
+without rewriting or selecting stories in the coordinator.
 
-The Mac adapter preserves the composer's actual transcript and reviews the exact
-output, including telemetry, coverage, revision notice and native Feishu payload.
-It has no separate final writer. A material finding returns to the same repository
-composer for one correction. Publication requires a genuine fresh reader check
-and the original author's self-check against the preserved evidence. Tests and
-structural checks do not substitute for those checks.
+The shared pipeline performs one technical/readability review using
+`prompts/v2-review-digest.md`, accepting its corrected Markdown after deterministic
+validation. The Mac adapter binds that result and publishes it immediately.
+Do not invoke separate reader, author, fidelity or comprehension reviews. Do not
+manually rewrite drafts or delete model checkpoints. Independent source batches
+run concurrently with bounded budgets; model stages with data dependencies run
+in order. Checkpoints reuse completed calls when inputs and model settings match.
 
 The retired `local draft` and `local finalize` commands are unavailable.
-An interrupted `local daily` keeps its evidence and attempts. Check the run and
+An interrupted `local deliver` keeps its evidence and attempts. Check the run and
 ledger before resuming. A completed daily result returns its existing publication.
 Do not independently invoke the legacy prototype orchestration.
 
 ## Publish once and finish
 
-Immediately after successful author self-check, use
-`local publish --publication PUBLICATION` using the publication path returned by `local daily`. Only this controller checks
-sole Mac ownership, current recipient history, exact reviewed payload, target,
-canonical date key and durable attempt, sends once and verifies readback. API
-acceptance with pending readback requires reconciliation only. An uncertain
-attempt requires evidence-based reconciliation: never reset the ledger, invent a
-new key, change bot or retry blindly.
+`local deliver` owns generation through verified delivery. `local daily` remains
+a generate-only diagnostic command. For an already reviewed publication, use
+`local publish --publication PUBLICATION`. Preserve the canonical ledger and
+reconcile uncertain or accepted-but-unread outcomes before another send.
 
 Return the Feishu message link/ID and a concise outcome, or a precise operational
 failure. Update the automation's private memory with actual run path, coverage

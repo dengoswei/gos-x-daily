@@ -2,13 +2,14 @@
 
 ## Provisioned Mac policy
 
-The installed Mac controller follows `deployment/mac/RUNBOOK.md` and
-`prompts/run-daily.md`. With explicit `reviewMode: "self"`, the author records a
-real self-check using the same identity and `sourceBlind: false`. Default callers
-retain independent review. Both modes require every review unit, preserved
-original evidence, exact byte binding and no unresolved material issues.
+The installed Mac controller uses the shared `run-daily.mjs` single-pass review
+and `prompts/v2-review-digest.md`. The current user explicitly authorized replacing
+the former four-call Mac review. Do not add reader/author review agents or invoke
+`openai-final.mjs` for production. Preserve source evidence and exact publication
+bindings. Legacy independent/self review records remain readable for reconciliation.
+Use `local deliver --run RUN` after imports to generate, review, publish and read back.
 
-Use subagents for independent source batches, story processing and reader checks
+Use subagents for independent source batches and original-source reading
 as specified in `docs/AGENT-WORKFLOW.md`. Give them fresh bounded contexts and
 file paths; return concise findings instead of original-source dumps. Coordinate
 exclusive browser surface ownership. Only the parent may import persistent

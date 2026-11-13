@@ -443,7 +443,7 @@ export function buildTelemetry({ date = shanghaiDate(), sources = [], funnel = {
       level: 'WARN',
       target: 'xFollowing',
       label: 'X Following',
-      reason: `X Following 仅覆盖近 ${xRow.observedSpanHours}h（因 ${xRow.stopReason ?? '采集上限'} 停止，早于该时间的帖子未扫到）`,
+      reason: `X Following 观察帖子时间跨度约 ${xRow.observedSpanHours}h（于 ${xRow.stopReason ?? '采集上限'} 停止，非连续完整遍历，遗漏帖数未知）`,
     });
   }
 

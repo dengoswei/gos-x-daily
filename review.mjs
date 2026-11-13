@@ -82,7 +82,7 @@ export function deriveReviewUnits(markdown, renderedMarkdown) {
  * native post JSON receives its own mandatory review unit and hash binding too.
  * An optional dispositionsPath is bound like the digest.
  */
-export function buildReviewSnapshot({ rootDir, digestPath, sourcesPath, dispositionsPath, materialsPaths, evidencePaths, renderedMarkdown, authorId, transport }) {
+export function buildReviewSnapshot({ rootDir, digestPath, sourcesPath, dispositionsPath, materialsPaths, evidencePaths, renderedMarkdown, authorId, transport, reviewProtocol }) {
   if (!meaningful(rootDir) || !meaningful(authorId)) throw new Error('Review root and author identity are required');
   if (!Array.isArray(materialsPaths) || !materialsPaths.length || !Array.isArray(evidencePaths) || !evidencePaths.length) {
     throw new Error('Review requires material and evidence files');
@@ -127,7 +127,7 @@ export function buildReviewSnapshot({ rootDir, digestPath, sourcesPath, disposit
     transportBinding = { kind: transport, sha256 };
     units.push({ id: `transport-${sha256.slice(0, 12)}`, kind: 'transport', sha256, text });
   }
-  const bindings = { authorId, files, renderedSha256: hash(renderedMarkdown), units: units.map(({ text, ...unit }) => unit),
+  const bindings = { authorId, ...(reviewProtocol ? { reviewProtocol } : {}), files, renderedSha256: hash(renderedMarkdown), units: units.map(({ text, ...unit }) => unit),
     ...(transportBinding ? { transport: transportBinding } : {}) };
   return { bindings, snapshotSha256: hash(JSON.stringify(bindings)), units };
 }
@@ -153,6 +153,32 @@ export function createReviewInput(options) {
 
 /** Throws unless the complete approved record matches the exact current bytes. */
 export function validateReview(review, options) {
+  if (options.reviewProtocol === 'v2-single-pass') {
+    if (options.reviewMode !== 'self' || review?.kind !== 'x-daily-single-pass-review-v1' || review.status !== 'approved') {
+      throw new Error('Single-pass publication requires its recorded editorial review');
+    }
+    const snapshot = buildReviewSnapshot(options);
+    if (review.snapshotSha256 !== snapshot.snapshotSha256 || JSON.stringify(review.bindings) !== JSON.stringify(snapshot.bindings)) {
+      throw new Error('Review binding is stale or tampered');
+    }
+    if (!options.materialsPaths.includes(review.editorialReviewPath)) throw new Error('Editorial review must be bound');
+    const editorial = JSON.parse(fileUnderRoot(options.rootDir, review.editorialReviewPath).bytes);
+    const result = editorial.result;
+    if (editorial.protocol !== 'v2-single-pass' || !['pass', 'revise'].includes(result?.verdict) ||
+        !Array.isArray(result.issues) || (result.verdict === 'pass' && result.issues.length)) {
+      throw new Error('Editorial review has unresolved or invalid findings');
+    }
+    const text = result.verdict === 'revise' ? result.revisedMarkdown : editorial.inputMarkdown;
+    const material = fileUnderRoot(options.rootDir, 'prepared-topics.json').bytes;
+    if (sha256(material) !== editorial.materialsSha256) throw new Error('Reviewed material changed');
+    const digest = fileUnderRoot(options.rootDir, options.digestPath).bytes.toString('utf8');
+    // Same-day revision notice is supplied by the controller after review.
+    const body = digest.replace(/^(# X AI 日报 [^\n]+)\n\d+ 月 \d+ 日修订版。本版替代今天此前的日报。\n/, '$1\n');
+    if (!meaningful(text) || !body.startsWith(text.trim() + '\n')) throw new Error('Published prose differs from the editorial result');
+    return { ok: true, reviewedUnits: snapshot.units.length, reviewerId: review.reviewerId,
+      snapshotSha256: snapshot.snapshotSha256, bindings: snapshot.bindings };
+  }
+  if (options.reviewProtocol !== undefined) throw new Error('Unsupported review protocol');
   const kind = reviewKind(options);
   const selfReview = kind === SELF_KIND;
   if (review?.schemaVersion !== 1 || review?.kind !== kind || review?.status !== 'approved') throw new Error('An approved record matching the configured review mode is required');

@@ -1,5 +1,19 @@
 # X Daily on this Mac
 
+## Current Mac production contract
+
+The user-authorized production path is `local deliver --run RUN`. It uses the
+shared v2 screen, compose and single-pass review stages, then binds and sends the
+result with the existing ledger and readback. `prompts/v2-review-digest.md` owns
+editorial review. The former four-call `openai-final.mjs` path is retired from
+production; historical independent/self-review descriptions below apply only to
+legacy records and portable callers. The coordinating agent collects/imports
+inputs and waits for delivery, without adding semantic review or routine approval.
+Model roles can be provisioned in `deployment.local.json` via `model.modelsFile`,
+using the repository provider schema with required screen/compose/review roles.
+
+
+
 ## Production contract
 
 The user confirmed on November 8, 2026 that the Dot Gos Remote Compute schedule is stopped and that this Mac is the sole sender. `mac-authority.json` preserves that statement. The active standalone Codex task is `X Daily Digest 9AM`, daily at 09:00 Asia/Shanghai. Each occurrence has standing authorization to collect, write, self-check and send the finished report to the provisioned Feishu private chat. No human review, fresh login or remote reservation is part of an ordinary run.

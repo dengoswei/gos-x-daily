@@ -42,6 +42,7 @@ import {
 } from './curation.mjs';
 
 import { DEEP_SECTION_ORDER as CANONICAL_DEEP_ORDER, digestLayoutPrompt, QUICK_SECTION, assertDigestLayout } from './digest-layout.mjs';
+import { sha256 } from './review.mjs';
 import { modelTopic } from './model-input.mjs';
 
 const repoRoot = path.dirname(fileURLToPath(import.meta.url));
@@ -454,7 +455,9 @@ export async function runDailyV2({
 
     const hasPreparedState = Boolean(existingRunDir && fs.existsSync(path.join(existingRunDir, 'prepare-state.json')));
     const resumingFinalize = Boolean(hasPreparedState && finalizeDigestPath);
-    const reselectingPreparedRun = Boolean(hasPreparedState && selectedTopicsPath && !finalizeDigestPath);
+    const resumingModels = Boolean(hasPreparedState && runtimeHooks.resumeModels && !finalizeDigestPath &&
+      fs.existsSync(path.join(runtimeHooks.modelArtifactsDir ?? path.join(existingRunDir, 'model-artifacts'), 'checkpoints/v2-compose.json')));
+    const reselectingPreparedRun = Boolean(hasPreparedState && (selectedTopicsPath || resumingModels) && !finalizeDigestPath);
 
     if (resumingFinalize) {
       currentStage = 'load_prepared_run';
@@ -620,7 +623,7 @@ export async function runDailyV2({
         const artifactsDir = runtimeHooks.modelArtifactsDir ?? path.join(runDir, 'model-artifacts');
         fs.mkdirSync(artifactsDir, { recursive: true, mode: 0o700 });
         const stageStore = outputStore(artifactsDir);
-        runStage = makeStageRunner({ roles, store: stageStore, usage, budget: budgetGuard(loaded.budget) });
+        runStage = makeStageRunner({ roles, store: stageStore, usage, budget: budgetGuard(loaded.budget), resume: runtimeHooks.resumeModels === true });
       }
 
       const selectableTopics = modelsFile ? storeTopics.map(modelTopic).filter(Boolean) : storeTopics;
@@ -656,7 +659,11 @@ export async function runDailyV2({
       fs.writeFileSync(selectPromptPath, `${readPrompt('v2-select-topics.md')}\n\n${tagged('topics_json', modelJson(screenShortlist))}\n`, { mode: 0o600 });
 
       const validTopicIds = new Set(selectableTopics.map(t => t.topicId));
-      if (selectedTopicsPath) {
+      if (resumingModels) {
+        const saved = JSON.parse(fs.readFileSync(path.join(runDir, 'prepare-state.json'), 'utf8'));
+        selectedPlan = saved.selectedPlan;
+        deferredMap = new Map(saved.deferredEntries ?? []);
+      } else if (selectedTopicsPath) {
         const customRaw = JSON.parse(fs.readFileSync(selectedTopicsPath, 'utf8'));
         selectedPlan = parseSelectedPlanPayload(customRaw, validTopicIds);
         deferredMap = selectedPlan.deferredMap ?? new Map();
@@ -681,7 +688,7 @@ export async function runDailyV2({
       currentStage = 'enrich_full_text';
       lock.heartbeat(currentStage);
       const selectedIds = selectedPlan.map(s => s.topicId);
-      deepFetchStats = fetchFullTextOnline
+      deepFetchStats = fetchFullTextOnline && !resumingModels
         ? await enrichTopicsWithFullText(storeTopics, storeDir, { topicIds: selectedIds, fetchImpl })
         : {
             attempted: selectedIds.length,
@@ -786,16 +793,23 @@ export async function runDailyV2({
             prompt: tagged('draft_markdown', draftMarkdown) + '\n\n' + tagged('selected_topics', modelJson(selectedMaterials)),
             parse: text => {
               const parsed = parseJsonBlock(text);
+              if (!Array.isArray(parsed?.issues) || parsed.issues.some(issue => typeof issue !== 'string') ||
+                  (parsed.verdict === 'pass' && parsed.issues.length)) throw new Error('Review requires resolved issues');
               if (!['pass', 'revise'].includes(parsed?.verdict)) throw new Error('verdict must be pass or revise');
               if (parsed.verdict === 'revise') {
                 if (typeof parsed.revisedMarkdown !== 'string' || !parsed.revisedMarkdown.trim()) {
                   throw new Error('revise verdict requires non-empty revisedMarkdown');
                 }
+                parsed.revisedMarkdown = normalizeDigestSectionOrder(parsed.revisedMarkdown);
                 validateV2Digest(parsed.revisedMarkdown, { date: reportDate, observedUrlSet });
               }
               return parsed;
             },
           });
+          fs.writeFileSync(path.join(runDir, 'editorial-review.json'), JSON.stringify({
+            protocol: 'v2-single-pass', inputMarkdown: draftMarkdown, result: reviewOutcome,
+            materialsSha256: sha256(fs.readFileSync(preparedTopicsPath)),
+          }, null, 2) + '\n', { mode: 0o600 });
           if (reviewOutcome.verdict === 'revise' && reviewOutcome.revisedMarkdown) {
             draftMarkdown = reviewOutcome.revisedMarkdown.trim();
           }

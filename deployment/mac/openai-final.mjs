@@ -182,8 +182,14 @@ function validateReviewAnswer(answer, units, packet, invalidQuotes) {
           continue;
         }
         const links = unit.kind === 'main' || unit.kind === 'render' ? citedUrls(unit.text).map(canonicalUrl) : [];
-        if (links.some(url => !sources.some(source => source.url && canonicalUrl(source.url) === url))) {
-          throw new Error('API review must account for every cited link in this unit');
+        const uncitedLinks = links.filter(url => !sources.some(source => source.url && canonicalUrl(source.url) === url));
+        if (uncitedLinks.length) {
+          if (!invalidQuotes) throw new Error('API review must account for every cited link in this unit');
+          const missingIds = [...packet.byId.values()]
+            .filter(source => source.url && uncitedLinks.includes(canonicalUrl(source.url)))
+            .map(source => source.id);
+          invalidQuotes.set(unit.id, missingIds.length ? missingIds : [null]);
+          continue;
         }
       }
       rows.set(row.id, { status: row.status, notes: row.notes, evidence });
@@ -352,8 +358,8 @@ export async function finalizeOpenAI({ runsDir, runDir, keyFile, ledgerDir, revi
         return { unitId: unit.id, excerptIds, ...(excerptIds.length ? {} : { reason: 'pass_without_evidence' }) };
       });
       const repair = message('user',
-        'Continue the same fidelity review. Return verdicts only for the listed repair units. Some pass verdicts have no citations, some citations use an unknown ID or invalid quote, or required coverage evidence is missing. ' +
-        'Cite only IDs in valid_evidence_ids. Review unit IDs (including render and transport IDs) identify content under review and must never be cited as source evidence. For any listed unit about collection or coverage, cite a verbatim quote from a coverage excerpt and preserve other relevant citations. ' +
+        'Continue the same fidelity review. Return verdicts only for the listed repair units. Some pass verdicts have no citations, some citations use an unknown ID or invalid quote, required coverage evidence is missing, or a cited URL in the unit lacks a matching source excerpt citation. ' +
+        'Cite only IDs in valid_evidence_ids. Review unit IDs (including render and transport IDs) identify content under review and must never be cited as source evidence. For any listed unit about collection or coverage, cite a verbatim quote from a coverage excerpt and preserve other relevant citations. For any main or render unit, ensure every URL appearing in that unit is backed by at least one verbatim quote from an excerpt carrying that exact URL (including link_only discovery excerpts), while keeping all previously cited excerpts for the unit. ' +
         'Recheck the affected verdicts against the same evidence. Use short verbatim substrings of the supplied text, including any model version or qualifier that changes the claim. ' +
         'If the source does not support a claim, return fail and explain the discrepancy. ' +
         fidelity + '\n' + data('repair_units', affected) + '\n' + data('citation_errors', errors) +

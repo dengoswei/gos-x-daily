@@ -1,14 +1,16 @@
-// The Mac adapter supplies credentials and publication review to the repository pipeline.
+// The Mac adapter supplies configuration and binds the shared pipeline's editorial result.
 // Selection, enrichment, composition, backlog and telemetry live in run-daily.mjs.
 import fs from 'node:fs';
 import path from 'node:path';
-import { runDailyV2, validateV2Digest, normalizeDigestSectionOrder } from '../../run-daily.mjs';
-import { extractBlock, tagged, modelJson } from '../../prototype/run-packets.mjs';
+import { runDailyV2, validateV2Digest } from '../../run-daily.mjs';
+import { loadModels } from '../../prototype/run-packets.mjs';
 import { assertCollection, coverageStatusLine } from '../../digest.mjs';
 import { canonicalUrl, citedUrls, candidateKeys } from '../../binding.mjs';
 import { renderTelemetryMarkdown, acquireLeaseLock } from '../../telemetry.mjs';
 import { frozenApiRun, readApiKey } from './openai-draft.mjs';
-import { finalizeOpenAI } from './openai-final.mjs';
+import { buildReviewSnapshot, validateReview } from '../../review.mjs';
+import { publicationGates } from '../../digest.mjs';
+import { recentPublishedUrls } from '../../delivery-ledger.mjs';
 
 const model = 'gpt-6.1-sol';
 const endpoint = 'https://api.openai.com/v1/chat/completions';
@@ -51,24 +53,7 @@ export function selectedEvidence(materials, cited, collectedAt) {
   return [...records.values()].map(({ url, parts }) => ({ url, text: [...parts].join('\n\n') }));
 }
 
-export function resumeGeneratedDraft(runDir, collectionId) {
-  const file = path.join(runDir, 'generated-author.json');
-  if (!fs.existsSync(file)) return null;
-  const generated = read(file);
-  const prepared = read(path.join(runDir, 'prepared-topics.json'));
-  const packet = read(path.join(runDir, 'api-final-input.json'));
-  const body = fs.readFileSync(path.join(runDir, 'digest.md'), 'utf8').split('\n### 运行自检')[0].trim();
-  const authored = normalizeDigestSectionOrder(extractBlock(generated.content, 'markdown')).trim();
-  const materialInput = tagged('selected_topics', modelJson(prepared));
-  if (packet.collectionId !== collectionId || body !== authored ||
-      !generated.id || !generated.actualModel || !generated.finishedAt ||
-      !generated.messages?.some(message => message.role === 'user' && message.content.includes(materialInput))) {
-    throw new Error('Saved composer transcript no longer matches the draft, selected material or collection');
-  }
-  return generated;
-}
-
-export function prepareGeneratedPublication(runDir, generated, revisionOf) {
+export function preparePublication(runDir, revisionOf) {
   const state = read(path.join(runDir, 'prepare-state.json'));
   const runMetadata = read(path.join(runDir, 'run.json'));
   if (revisionOf && runMetadata.revisionOf !== revisionOf) throw new Error('Revision intent differs from the frozen run');
@@ -98,6 +83,13 @@ export function prepareGeneratedPublication(runDir, generated, revisionOf) {
     selectedTopics: prepared.map(row => ({ topicId: row.topicId, section: row.section,
       sourceCandidateCount: (state.topics.find(topic => topic.topicId === row.topicId)?.candidateKeys ?? []).filter(key => keys.has(key)).length,
       fromBacklog: row.material.fromBacklog, contentStatus: row.material.contentStatus,
+      ...(row.material.fetchedFullText ? {
+        fetchedArticle: {
+          url: row.material.fetchedFullText.url,
+          contentStatus: row.material.fetchedFullText.contentStatus ?? row.material.contentStatus,
+          preservedCharacters: row.material.fetchedFullText.text.length,
+        },
+      } : {}),
       sources: row.material.observations.map(item => ({ url: item.url, contentStatus: item.contentStatus,
         preservedCharacters: item.text.length })) })) };
   const accountingText = 'Deterministic pipeline accounting from preserved prepare-state, prepared-topics, dispositions and telemetry snapshots:\n' + JSON.stringify(accounting);
@@ -118,7 +110,7 @@ export function prepareGeneratedPublication(runDir, generated, revisionOf) {
   const evidence = selectedEvidence(materials, urls, sources.collectedAt);
   for (const [index, { url, text }] of evidence.entries()) {
     const parsed = new URL(url);
-    if (parsed.search || parsed.protocol !== 'https:') throw new Error('Publication needs an observed public URL without a query string');
+    if (parsed.protocol !== 'https:') throw new Error('Publication needs an observed HTTPS URL');
     if (!text || text.trim().length < 8) throw new Error('Published URL has no readable evidence');
     const backing = 'publication-evidence/source-' + (index + 1) + '.txt';
     fs.writeFileSync(path.join(runDir, backing), url + '\n\n' + text + '\n', { mode: 0o600 });
@@ -136,84 +128,68 @@ export function prepareGeneratedPublication(runDir, generated, revisionOf) {
   save(path.join(runDir, 'canonical-materials.json'), { sources: evidence.map(({ url }) => ({ url })), origin: 'prepared-topics.json' });
   save(path.join(runDir, 'api-final-input.json'), { schemaVersion: 1, collectionId: sources.collectionId,
     materialsPaths, evidencePaths: [], excerpts });
-  save(path.join(runDir, 'generated-author.json'), generated);
   return markdown;
 }
 
 export async function runProductionDaily({ runDir, runsDir, dataDir, ledgerDir, keyFile,
-  screenModel = model, fetchImpl = globalThis.fetch }) {
+  screenModel = model, composeModel = model, reviewModel = composeModel, modelsFile: configuredModelsFile, fetchImpl = globalThis.fetch }) {
   const { run, sources, sourcesPath } = frozenApiRun(runsDir, runDir);
   assertCollection(sources);
-  if (![model, 'gpt-6.1-terra'].includes(screenModel)) throw new Error('Unsupported configured screening model');
   const resultPath = path.join(runDir, 'daily-result.json');
   if (fs.existsSync(resultPath)) return read(resultPath);
-  const key = readApiKey(keyFile);
   const lock = acquireLeaseLock(path.join(runDir, 'daily.lock'));
   const heartbeat = setInterval(() => lock.heartbeat('daily'), 60000);
   heartbeat.unref();
   const previousKey = process.env.CODEX_API_KEY;
-  const usagePath = path.join(runDir, 'daily-usage.jsonl');
-  const log = value => fs.appendFileSync(usagePath, JSON.stringify({ at: new Date().toISOString(), ...value }) + '\n', { mode: 0o600 });
-  const role = (name, maxTokens = 16000, maxTokensRetry = 24000, reasoningEffort = 'high') => ({
-    kind: 'openai', baseUrl: 'https://api.openai.com/v1', model: name,
-    apiKeyEnv: 'CODEX_API_KEY', maxTokens, maxTokensRetry, maxTokensParam: 'max_completion_tokens', reasoningEffort,
-  });
-  const modelsFile = path.join(runDir, 'daily-models.json');
-  save(modelsFile, {
-    roles: {
-      screen: role(screenModel, 8000, 16000, screenModel === 'gpt-6.1-terra' ? 'medium' : 'high'),
-      compose: role(model, 20000, 28000, 'high'),
-    },
-  });
-  const supplementsPath = path.join(runDir, 'supplements.public.json');
-  const supplements = fs.existsSync(supplementsPath) ? read(supplementsPath) : [];
-  let generated;
-  let feedback;
   try {
-    process.env.CODEX_API_KEY = key;
-    for (let attempt = 1; attempt <= 2; attempt++) {
-      generated = attempt === 1 ? resumeGeneratedDraft(runDir, sources.collectionId) : null;
-      let result = { runDir, digestPath: path.join(runDir, 'digest.md'), telemetryPath: path.join(runDir, 'telemetry.json') };
-      if (generated) log({ event: 'resumed_generated_draft', requestId: generated.id });
-      else {
-        const artifactDir = fs.mkdtempSync(path.join(runDir, 'daily-model-artifacts-'));
-        result = await runDailyV2({ dataDir, runDir, sourcesFile: path.join(runDir, 'sources.frozen.json'),
-          premergedSourcesPath: path.join(runDir, sourcesPath), supplements, modelsFile,
-          publishedHistoryFile: path.join(ledgerDir, 'published-urls.jsonl'),
-          runtimeHooks: { modelArtifactsDir: artifactDir, editorialFeedback: feedback, publicationPending: true,
-            fetch: async (url, init) => {
-              if (url !== endpoint) return fetchImpl(url, init);
-              const body = JSON.parse(init.body);
-              if (init.method !== 'POST' || ![model, screenModel].includes(body.model) || body.tools) throw new Error('Unexpected daily model request');
-              log({ event: 'started', model: body.model, reasoningEffort: body.reasoning_effort ?? 'high', inputBytes: Buffer.byteLength(init.body) });
-              const response = await fetchImpl(endpoint, { ...init, redirect: 'error',
-                body: JSON.stringify({ ...body, reasoning_effort: body.reasoning_effort ?? 'high', service_tier: 'default', store: false }) });
-              const payload = await response.clone().json().catch(() => null);
-              log({ event: 'response', status: response.status, requestId: payload?.id, model: payload?.model, usage: payload?.usage });
-              if (response.ok && payload?.model !== body.model && !payload?.model?.startsWith(body.model + '-')) throw new Error('Unexpected daily model response');
-              if (body.messages[0]?.content.includes('digest composition (v2)') && payload?.choices?.[0]?.finish_reason === 'stop') {
-                generated = { messages: body.messages, content: payload.choices[0].message.content,
-                  id: payload.id, actualModel: payload.model, finishedAt: new Date().toISOString() };
-              }
-              return response;
-            } },
-        });
-      }
-      if (!generated) throw new Error('Missing original composer transcript');
-      prepareGeneratedPublication(runDir, generated, run.revisionOf);
-      try {
-        const reviewed = await finalizeOpenAI({ runDir, runsDir, keyFile, ledgerDir,
-          revision: Boolean(run.revisionOf), generated, fetchImpl });
-        const completed = { ...result, ...reviewed, status: 'daily_reviewed_not_sent',
-          pipeline: 'run-daily.mjs', revisionOf: run.revisionOf ?? null };
-        save(resultPath, completed);
-        return completed;
-      } catch (error) {
-        if (!error.findings?.length || attempt === 2) throw error;
-        feedback = error.findings;
-        log({ event: 'review_requires_revision', findings: feedback });
-      }
-    }
+    if (!configuredModelsFile) process.env.CODEX_API_KEY = readApiKey(keyFile);
+    const role = name => ({ kind: 'openai', baseUrl: 'https://api.openai.com/v1', model: name,
+      apiKeyEnv: 'CODEX_API_KEY', maxTokens: 20000, maxTokensRetry: 28000,
+      maxTokensParam: 'max_completion_tokens', reasoningEffort: 'high' });
+    const modelsFile = configuredModelsFile ?? path.join(runDir, 'daily-models.json');
+    if (!configuredModelsFile) save(modelsFile, { roles: { screen: role(screenModel), compose: role(composeModel), review: role(reviewModel) } });
+    loadModels(modelsFile, ['screen', 'compose', 'review'], [], { fetch: fetchImpl });
+    const supplementsPath = path.join(runDir, 'supplements.public.json');
+    const supplements = fs.existsSync(supplementsPath) ? read(supplementsPath) : [];
+    const result = await runDailyV2({ dataDir, runDir,
+      sourcesFile: path.join(runDir, 'sources.frozen.json'),
+      premergedSourcesPath: path.join(runDir, sourcesPath), supplements, modelsFile,
+      publishedHistoryFile: path.join(ledgerDir, 'published-urls.jsonl'),
+      runtimeHooks: { modelArtifactsDir: path.join(runDir, 'daily-model-artifacts'),
+        resumeModels: true, publicationPending: true,
+        fetch: async (url, init) => {
+          if (url !== endpoint) return fetchImpl(url, init);
+          const body = JSON.parse(init.body);
+          return fetchImpl(endpoint, { ...init, redirect: 'error',
+            body: JSON.stringify({ ...body, store: false }) });
+        } },
+    });
+    // The shared v2 reviewer already returned the corrected final prose.
+    // Publication packaging is deterministic and adds no second model review.
+    preparePublication(runDir, run.revisionOf);
+    const packet = read(path.join(runDir, 'api-final-input.json'));
+    const snapshotInputs = { digestPath: 'digest.publication.md', dispositionsPath: 'dispositions.json',
+      sourcesPath: 'sources.merged.json', materialsPaths: [...packet.materialsPaths, 'editorial-review.json'],
+      evidencePaths: [...new Set([...(sources.provenance?.evidence ?? []).map(row => row.path), ...packet.evidencePaths])],
+      authorId: 'pipeline:' + composeModel, reviewMode: 'self', reviewProtocol: 'v2-single-pass',
+      renderStyle: 'concise', transport: 'feishu-post-v1' };
+    const markdown = fs.readFileSync(path.join(runDir, snapshotInputs.digestPath), 'utf8');
+    const gates = publicationGates(runDir, snapshotInputs, markdown, sources,
+      { publishedHistory: recentPublishedUrls(ledgerDir, { before: run.date }) });
+    const inputs = { rootDir: runDir, ...snapshotInputs, renderedMarkdown: gates.renderedMarkdown };
+    const snapshot = buildReviewSnapshot(inputs);
+    const review = { schemaVersion: 1, kind: 'x-daily-single-pass-review-v1', status: 'approved',
+      reviewerId: 'pipeline:' + reviewModel, reviewedAt: new Date().toISOString(),
+      snapshotSha256: snapshot.snapshotSha256, bindings: snapshot.bindings,
+      editorialReviewPath: 'editorial-review.json' };
+    validateReview(review, inputs);
+    save(path.join(runDir, 'review.single-pass.json'), review);
+    const publication = path.join(runDir, 'publication.json');
+    save(publication, { rootDir: '.', snapshotInputs, reviewPath: 'review.single-pass.json', ledgerDir });
+    const completed = { ...result, status: 'daily_reviewed_not_sent', publication,
+      pipeline: 'run-daily.mjs', reviewProtocol: 'v2-single-pass', revisionOf: run.revisionOf ?? null };
+    save(resultPath, completed);
+    return completed;
   } finally {
     clearInterval(heartbeat);
     if (previousKey === undefined) delete process.env.CODEX_API_KEY;

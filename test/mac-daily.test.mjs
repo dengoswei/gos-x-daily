@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { effectiveSources } from '../source-config.mjs';
-import { runProductionDaily, selectedEvidence, resumeGeneratedDraft } from '../deployment/mac/daily.mjs';
+import { runProductionDaily, selectedEvidence } from '../deployment/mac/daily.mjs';
 import { makeApiFinalFixture } from './helpers/api-final-fixture.mjs';
 import { main as cli } from '../cli.mjs';
 import { modelTopic } from '../model-input.mjs';
@@ -82,33 +82,27 @@ test('Mac production uses the repository funnel and reviews its output without a
       const topics = tagged(all, 'topics_json').slice(0, 2);
       content = '```json\n' + JSON.stringify({ selected: topics.map((topic, index) => ({ topicId: topic.topicId,
         tier: index ? 'deep' : 'quick', section: index ? 'Frameworks / Infra' : 'Quick Hits / 快讯速览', reason: 'Synthetic selection' })) }) + '\n```';
-    } else if (!body.response_format) {
+    } else if (all.includes('digest composition (v2)')) {
       calls.push('compose');
       const topics = tagged(all, 'selected_topics');
       content = '```markdown\n# X AI 日报 2026-11-08\n\n' + topics.map(topic =>
         '## ' + topic.section + '\n\n- **Synthetic runtime caches repeated prefix state.** A simulated two-level index reuses decoded state. [Original](' + topic.material.primaryUrl + ')').join('\n\n') + '\n```';
     } else {
-      if (interruptFirstReview) {
-        interruptFirstReview = false;
-        throw new Error('Synthetic transient review outage');
-      }
-      const comprehension = /reconstructing your final units/.test(last) || body.messages[0].content.includes('reader-comprehension');
-      calls.push(comprehension ? 'comprehension' : 'fidelity');
-      const units = tagged(all, 'review_units');
-      const evidence = comprehension ? [] : [...tagged(all, 'verified_evidence').excerpts, tagged(all, 'local_disposition_facts')];
-      content = JSON.stringify({ units: units.map(unit => ({ id: unit.id, status: 'pass', notes: 'Synthetic fixture has the expected exact source support.',
-        ...(comprehension ? { reconstruction: { problem: 'Synthetic repeated prefix work.', method: 'Synthetic two-level cache lookup.',
-          result: 'Synthetic reuse of decoded state.', innovation: 'Synthetic reuse avoids repeated decoding.' } }
-          : { evidence: evidence.map(row => ({ id: row.id, quote: row.text.slice(0, 100) })) }) })) });
+      if (interruptFirstReview) return new Response('Synthetic permanent interruption', { status: 400 });
+      calls.push('review');
+      const draft = all.split('<draft_markdown>\n')[1].split('\n</draft_markdown>')[0];
+      content = '```json\n' + JSON.stringify({ verdict: 'revise', issues: ['Clarify synthetic result'],
+        revisedMarkdown: draft.replaceAll('A simulated two-level', 'A synthetic two-level') }) + '\n```';
     }
     return Response.json({ id: 'synthetic-' + calls.length, model: 'gpt-6.1-sol', choices: [{ finish_reason: 'stop', message: { content } }],
       usage: { prompt_tokens: 100, completion_tokens: 100 } });
   };
   await assert.rejects(runProductionDaily({ ...f, dataDir: path.join(root, 'state-data'), keyFile, fetchImpl }),
-    /reader-comprehension failed at response_headers: transport_error/);
+    /Provider HTTP 400/);
+  interruptFirstReview = false;
   const result = await runProductionDaily({ ...f, dataDir: path.join(root, 'state-data'), keyFile, fetchImpl });
   assert.equal(result.pipeline, 'run-daily.mjs');
-  assert.deepEqual(calls, ['screen', 'compose', 'comprehension', 'fidelity', 'comprehension', 'fidelity']);
+  assert.deepEqual(calls, ['screen', 'compose', 'review']);
   const validation = await cli(['validate-publication', '--publication', result.publication]);
   assert.equal(validation.status, 'structural_review_binding_passed_not_semantic_proof');
   assert.ok(fs.existsSync(path.join(f.runDir, 'store', 'raw')));
@@ -121,13 +115,12 @@ test('Mac production uses the repository funnel and reviews its output without a
   assert.deepEqual(fs.readdirSync(f.ledgerDir), ledgerBefore);
   const again = await runProductionDaily({ ...f, dataDir: path.join(root, 'state-data'), keyFile, fetchImpl });
   assert.equal(again.publication, result.publication);
-  assert.equal(calls.length, 6);
+  assert.equal(calls.length, 3);
   // Operational review retries reuse only the byte-bound writer transcript.
-  // Every semantic review is freshly executed, never copied from an old attempt.
+  // Completed model stages are reused only when their prompt and model bindings match.
   assert.equal(calls.filter(stage => stage === 'compose').length, 1);
   const changed = JSON.parse(fs.readFileSync(path.join(f.runDir, 'prepared-topics.json')));
-  changed[0].material.title = 'Changed after composition';
+  changed[0].material.title = 'Changed after review';
   fs.writeFileSync(path.join(f.runDir, 'prepared-topics.json'), JSON.stringify(changed));
-  assert.throws(() => resumeGeneratedDraft(f.runDir, sources.collectionId),
-    /Saved composer transcript no longer matches/);
+  await assert.rejects(cli(['validate-publication', '--publication', result.publication]), /stale or tampered/);
 });
