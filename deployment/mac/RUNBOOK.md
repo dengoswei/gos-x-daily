@@ -18,7 +18,16 @@ using the repository provider schema with required screen/compose/review roles.
 
 The user confirmed on November 8, 2026 that the Dot Gos Remote Compute schedule is stopped and that this Mac is the sole sender. `mac-authority.json` preserves that statement. The active standalone Codex task is `X Daily Digest 9AM`, daily at 09:00 Asia/Shanghai. Each occurrence has standing authorization to collect, write, self-check and send the finished report to the provisioned Feishu private chat. No human review, fresh login or remote reservation is part of an ordinary run.
 
-Use `$DEPLOYMENT_HOME/run.mjs` as the entry point. Source `$HOME/.zshrc` before Node or Lark CLI. The agent performs supported browser/connector collection and composition. The wrapper performs verification, offline imports, review binding, and production delivery. Direct CDP collection stays disabled. Never invoke the old `reading/automations/x-daily` workflow.
+Use `$DEPLOYMENT_HOME/run.mjs` as the entry point. Source `$HOME/.zshrc` before Node or Lark CLI. The repository supports both unattended scripted runs (`local auto`) and manual step-by-step runs (`local collect` -> `local deliver`). The wrapper performs verification, offline imports, review binding, and production delivery. Direct CDP collection stays disabled. Never invoke the old `reading/automations/x-daily` workflow.
+
+### Unattended scripted flow (no main agent session required)
+
+```sh
+source $HOME/.zshrc
+node $DEPLOYMENT_HOME/run.mjs local auto --backend apple-events --browser Dia
+```
+
+`local auto` checks same-day ledger state first (reconciling an already accepted message without recollecting), verifies `doctor` and `start-run`, invokes `local collect --run "$RUN"` (`apple-events` via AppleScript/screencapture on a `--enable-applescript-javascript` Dia or Chromium window, or optional `--backend codex-exec` invoking `codex exec --disable apps`), runs offline `import-browser` / `import-feed`, and finishes with `local deliver --run "$RUN"`. It can be scheduled directly via macOS `launchd` without a Codex Desktop agent session or `guardian_review`.
 
 The authoritative production ledger is `$HOME/.codex/automations/x-daily-digest-9am/local-delivery-ledger`. It retains the `gos-daily` namespace and `xdaily-gos-daily-YYYY-MM-DD` keys. Its forward boundary is November 8. Imported published URLs through November 6 retain their provenance. The November 7 uncertain attempt remains archived and is never retried. Preview history is not publication history. Remote execution may resume only after an explicit future ownership transfer with reconciled state.
 
@@ -134,3 +143,15 @@ Node 22+ is the source requirement. This installed release pins Node 26.8.1 and 
 The local controller, sender and private identity configuration have their own release manifest. Repository changes have a separate manifest and Git branch. Review changes before deliberately promoting new hashes. `node run.mjs test` runs all offline tests, the source scan and synthetic import-to-plan checks. Tests never prove live delivery; the verified November 8 receipt supplies that evidence. Do not run the full suite during every ordinary daily occurrence unless code changed.
 
 Back up code and private state separately. Keep ledger attempts, receipts, readbacks, published URLs, coverage and actual evidence. Code rollback must never rewind state. The pre-migration wrapper/config/runbook and manifest are in `setup/pre-mac-cutover-20261108`.
+
+### Foreground-safe unattended collection & CUA options
+
+`local auto` and `local collect` run a foreground-safe background `Dia` window (`--backend apple-events`, never calling AppleScript `activate` or `focus`) with optional OpenAI `gpt-6.1-terra` Responses API assistance (`store: false`, bounded to 3 turns) when dynamic `blogs[]` indexes yield zero static links and no CAPTCHA/anti-bot page is present:
+
+```bash
+node $DEPLOYMENT_HOME/run.mjs local auto
+node $DEPLOYMENT_HOME/run.mjs local collect --run $RUN_DIR --cua-model gpt-6.1-terra --api-key-file "$CODEX_HOME/auth.json"
+node $DEPLOYMENT_HOME/run.mjs local collect --run $RUN_DIR --no-cua --no-gmail
+```
+
+Gmail discovery is disabled unless `sources.local.json` sets an explicit `sources.gmail.account` (`mode: "auto" | "gmail-cli" | "browser"`). See [docs/MAC-UNATTENDED-COLLECTION.md](../../docs/MAC-UNATTENDED-COLLECTION.md) for window isolation, `AGY_ACCOUNT` / `?authuser=` fail-closed checks, and `launchd` wiring.

@@ -11,6 +11,7 @@ import { expectedReadback, nativeSenderArgs, normalizedReadback } from './transp
 import { effectiveSources } from '../../source-config.mjs';
 import { loadTasteConfig, saveBacklogPool } from '../../curation.mjs';
 import { acquireLeaseLock } from '../../telemetry.mjs';
+import { collectMacRun, parseCollectFlags } from './mac-collect.mjs';
 const base = deploymentHome();
 const hash = bytes => createHash('sha256').update(bytes).digest('hex');
 const read = file => JSON.parse(fs.readFileSync(file, 'utf8'));
@@ -226,23 +227,78 @@ function revise(config, date, originalId, publication) {
   return finishRevision(config,date,accepted,plan,prefix);
 }
 
+function validatedRunDir(config, runDir) {
+  const errMsg = 'Collector requires an existing frozen run directly inside the configured runs directory';
+  if (!fs.existsSync(config.runsDir) || !fs.existsSync(runDir)) {
+    throw new Error(errMsg);
+  }
+  const runsRoot = fs.realpathSync(config.runsDir);
+  const realRun = fs.realpathSync(runDir);
+  if (path.dirname(realRun) !== runsRoot || !fs.existsSync(path.join(realRun, 'run.json')) || !fs.existsSync(path.join(realRun, 'runtime.json'))) {
+    throw new Error(errMsg);
+  }
+  return realRun;
+}
+
+async function runWithStageAlert(config, stageRef, fn) {
+  try {
+    return await fn();
+  } catch (error) {
+    let alert;
+    try { alert = sendFailureAlert(config, todayInShanghai(), stageRef.current); }
+    catch (alertError) { alert = { status: 'alert_failed', error: alertError.message }; }
+    throw new Error(error.message + '\n' + JSON.stringify({ alert }));
+  }
+}
+
 export async function main(args) {
   const config=loadLocalConfig();
   const command=args[0];
   const value=flag=>args[args.indexOf(flag)+1];
+  if (command === 'collect') {
+    const opts = parseCollectFlags(args.slice(1), { requireRun: true });
+    const realRun = validatedRunDir(config, opts.runDir);
+    const deploymentPath = path.join(base, 'deployment.local.json');
+    const deployment = fs.existsSync(deploymentPath) ? read(deploymentPath) : null;
+    const apiKeyFile = opts.apiKeyFile ?? deployment?.model?.apiDraft?.keyFile ?? null;
+    return runWithStageAlert(config, { current: 'collection' }, () => collectMacRun({ ...opts, apiKeyFile, runDir: realRun }));
+  }
+  if (command === 'auto') {
+    const opts = parseCollectFlags(args.slice(1), { requireRun: false });
+    if (opts.runDir) throw new Error('local auto creates or reconciles today’s run; use local collect --run RUN for an existing run');
+    const date = todayInShanghai();
+    const current = await main(['status', '--date', date]);
+    if (current.status === 'already_accepted') return main(['reconcile', '--date', date]);
+    if (current.status === 'attempt_requires_reconciliation') {
+      throw new Error(`Delivery attempt for ${date} requires reconciliation before running auto`);
+    }
+    await main(['doctor']);
+    const created = await main(['start-run']);
+    if (created.status === 'already_accepted') return main(['reconcile', '--date', date]);
+    const collectArgs = [
+      'collect', '--run', created.run, '--backend', opts.backend, '--browser', opts.browserApp,
+      '--codex-bin', opts.codexBin, '--cua-model', opts.cuaModel,
+    ];
+    if (!opts.enableCua) collectArgs.push('--no-cua');
+    if (opts.apiKeyFile) collectArgs.push('--api-key-file', opts.apiKeyFile);
+    if (!opts.includeGmailLeads) collectArgs.push('--no-gmail');
+    const collection = await main(collectArgs);
+    const delivery = await main(['deliver', '--run', created.run]);
+    return { ...delivery, run: created.run, collection };
+  }
   if (command === 'daily' || command === 'deliver') {
     if (args.length !== 3 || args[1] !== '--run') throw new Error('Use local daily|deliver --run RUN');
     const { runProductionDaily } = await import('./daily.mjs');
     const deployment = read(path.join(base, 'deployment.local.json'));
-    let stage = 'draft';
-    try {
+    const stageRef = { current: 'draft' };
+    return runWithStageAlert(config, stageRef, async () => {
       const completed = await runProductionDaily({ runDir: args[2], runsDir: config.runsDir,
         dataDir: path.join(base, 'v2'), ledgerDir: config.ledgerDir,
         keyFile: deployment.model?.apiDraft?.keyFile, screenModel: deployment.model?.apiDraft?.models?.screen,
         composeModel: deployment.model?.apiDraft?.models?.compose,
         reviewModel: deployment.model?.apiDraft?.models?.review, modelsFile: deployment.model?.modelsFile });
       if (command === 'daily') return completed;
-      stage = 'publish';
+      stageRef.current = 'publish';
       const delivered = await main(['publish', '--publication', completed.publication]);
       if (['already_accepted', 'accepted_readback_pending', 'already_present_requires_reconciliation'].includes(delivered.status)) {
         const publication = read(completed.publication);
@@ -250,12 +306,7 @@ export async function main(args) {
         return main(['reconcile', '--date', date]);
       }
       return delivered;
-    } catch (error) {
-      let alert;
-      try { alert = sendFailureAlert(config, todayInShanghai(), stage); }
-      catch (alertError) { alert = { status: 'alert_failed', error: alertError.message }; }
-      throw new Error(error.message + '\n' + JSON.stringify({ alert }));
-    }
+    });
   }
   if (command === 'draft' || command === 'finalize') {
     throw new Error('The separate Mac generation workflow is retired. Use local daily --run RUN, which runs run-daily.mjs and reviews its exact output.');
@@ -328,7 +379,7 @@ export async function main(args) {
     const markdown = readPublicationFile(p.rootDir,p.snapshotInputs.digestPath);
     return revise(config,sources.date,value('--reply-to'),{p,sources,markdown});
   }
-  if(command !== 'publish' || !args.includes('--publication')) throw new Error('Use doctor, start-run, status --date, reconcile --date or publish --publication');
+  if(command !== 'publish' || !args.includes('--publication')) throw new Error('Use doctor, start-run, collect, auto, daily, deliver, status --date, reconcile --date or publish --publication');
   const p=publicationAt(value('--publication'),config);
   const sources=JSON.parse(readPublicationFile(p.rootDir,p.snapshotInputs.sourcesPath));
   const date=sources.date;

@@ -91,6 +91,7 @@ Next read [AGENTS.md](AGENTS.md), [EDITORIAL.md](EDITORIAL.md), the
 | Sources | Thread/quote context, ranking, rolling coverage accounting | Relevant Gmail/primary article reads, canonical materials and provenance |
 | Writing | `compose-input`, editorial prompts, structural digest validation | Authorized writer/model; it must explicitly read supplemental materials |
 | Worker routing | `worker-input` writes bounded indexes and lossless per-story files | Host coordinator spawns fresh-context subagents and assigns every candidate |
+| Scripted Mac auto run | `deployment/mac/mac-collect.mjs`, `tools/collect-mac-browser.mjs`, `local collect`, `local auto` | Logged-in Dia/Chromium browser session (`--enable-applescript-javascript`) or `codex exec` + macOS Screen Recording/Automation permissions |
 | Review | Pending review generation and exact artifact/native-payload binding | Deployment-configured author self-review or actual independent review; advisory workers cannot fabricate approval |
 | Delivery | Offline plan, explicit send gates, durable attempt/receipt ledger | Verified Lark runtime, bot/recipient, credentials and authority to send |
 | Scheduling | None | A separately configured controller/scheduler; clone does not activate it |
@@ -149,14 +150,21 @@ downloads the configured feeds into `feed-capture.json` plus hashed documents;
 imported collection as `sources.feeds` (see the runbook, section 2b). For Daily
 Papers, `publishedAt` is the listing date and `paperPublishedAt` the paper's own date.
 
-Blogs use `"type": "html-index"`: the conditional collector renders `indexUrl` in
-its CDP browser and keeps links under `articleBaseUrl` (optionally narrowed by an
-`articlePattern` regex on the path), falling back to static HTML anchors. Some
-index pages are client-rendered and yield no links without the browser.
+Blogs use `"type": "html-index"`: the collector renders `indexUrl` in a dedicated
+background browser window (`deployment/mac/mac-collect.mjs`, without stealing
+foreground focus) and keeps links under `articleBaseUrl` (optionally narrowed by
+an `articlePattern` regex on the path). When static anchor extraction yields `0`
+links on an unblocked page, `gpt-6.1-terra` (`POST /v1/responses`, `store: false`,
+bounded 3 turns, disable with `--no-cua`) assists with bounded scrolling/clicking.
+Optional Gmail newsletter leads require an explicit `sources.gmail.account`
+(`auto` via `gmail` CLI `AGY_ACCOUNT` with `?authuser=` DOM-verified browser
+fallback) and fail closed on account mismatch. See
+[docs/MAC-UNATTENDED-COLLECTION.md](docs/MAC-UNATTENDED-COLLECTION.md).
 
 ## Repository map
 
 - `cli.mjs`: offline entry points plus separately gated collection / send.
+- `deployment/mac/mac-collect.mjs`: foreground-safe dedicated-window macOS collector (`apple-events`, optional `gpt-6.1-terra` Responses API blog-index assist, and strict account-isolated Gmail discovery) plus `codex-exec` compatibility backend.
 - `run-daily.mjs`: the shared local and production pipeline for the content store, selection, backlog, composition and telemetry. Mac `local daily` calls this function directly, reviews its output and returns a publication for the sole sender. See [docs/DESIGN-FUNNEL-AND-CURATION.md](docs/DESIGN-FUNNEL-AND-CURATION.md).
 - `content-store.mjs`, `curation.mjs`, `telemetry.mjs`, `config/taste.json`: dual-layer original/card archive, 4-signal prior scorer (`author + source SNR + social/engagement - noise`), cross-day high-value backlog pool (`backlog-pool.json`), rolling source health, funnel telemetry and operational alert cards.
 - `browser-artifacts.mjs`, `thread-discovery.mjs`: evidence imports and thread context.
