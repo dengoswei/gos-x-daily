@@ -95,6 +95,39 @@ function contentStatusOf(kind, text, item) {
 const NON_ARTICLE_HOSTS = /(^|\.)(x\.com|twitter\.com|t\.co|youtube\.com|youtu\.be|instagram\.com|facebook\.com|linkedin\.com)$/;
 const NON_FETCH_FINAL_HOSTS = /(^|\.)(x\.com|twitter\.com|youtube\.com|youtu\.be|instagram\.com|facebook\.com|linkedin\.com)$/;
 const ABSTRACT_LANDING_URL_RE = /(?:^https?:\/\/(?:www\.)?arxiv\.org\/abs\/|^https?:\/\/(?:www\.)?huggingface\.co\/papers\/\d{4}\.\d{4,5}(?:[/?#]|$))/i;
+const COMPANION_SKIP_HOSTS = /(?:^|\.)(?:arxiv\.org|doi\.org|creativecommons\.org|shields\.io|mathjax\.org|cornell\.edu|scholar\.google\.com|semanticscholar\.org)$/i;
+
+export function selectCompanionRescueUrls(candidateUrls = [], outboundLinks = [], primaryFinalUrl = null) {
+  const seen = new Set();
+  const primaryCan = primaryFinalUrl ? safeCanonical(primaryFinalUrl) : null;
+  if (primaryCan) seen.add(primaryCan);
+
+  const outboundCandidates = (outboundLinks ?? [])
+    .map(l => l?.href)
+    .filter(href => {
+      try {
+        const u = new URL(href);
+        return (/^(?:www\.)?github\.com$/i.test(u.hostname) && /^\/[^/]+\/[^/#?]+\/?$/.test(u.pathname)) ||
+          /\.github\.io$/i.test(u.hostname);
+      } catch { return false; }
+    });
+
+  const out = [];
+  for (const href of [...candidateUrls.slice(1), ...outboundCandidates]) {
+    if (!href || typeof href !== 'string') continue;
+    try {
+      const u = new URL(href);
+      if (publicUrlRefusal(u) || NON_FETCH_FINAL_HOSTS.test(u.hostname) || COMPANION_SKIP_HOSTS.test(u.hostname)) continue;
+      if (isAbstractLandingUrl(u.href)) continue;
+      const can = safeCanonical(u.href);
+      if (!can || seen.has(can)) continue;
+      seen.add(can);
+      out.push(u.href);
+      if (out.length >= 2) break;
+    } catch { /* ignore invalid URL */ }
+  }
+  return out;
+}
 
 export function isAbstractLandingUrl(rawUrl) {
   return ABSTRACT_LANDING_URL_RE.test(String(rawUrl ?? '').trim());
@@ -648,6 +681,62 @@ export async function enrichTopicsWithFullText(topics, storeDir, options = {}) {
   }), { attempted: 0, fullText: 0, snippetOnly: 0, failed: 0, degradedUrls: [] });
 }
 
+async function fetchReadableDocument(startUrl, { fetchImpl, controller, topic, allowArxivHtmlFallback = true }) {
+  let current = normalizeFetchTarget(startUrl);
+  let triedArxivHtmlFallback = false;
+  let finalResponse = null;
+
+  for (let hop = 0; ; hop++) {
+    const refusal = publicUrlRefusal(current);
+    if (refusal) throw new Error(`Refused target (${refusal})`);
+    if (hop > 0 && NON_FETCH_FINAL_HOSTS.test(current.hostname)) {
+      // A t.co link that resolved to another X status or video host stays a social post, not an external article.
+      if (!topic.allObservedUrls.includes(current.href)) topic.allObservedUrls.push(current.href);
+      return { redirectedToNonArticle: true };
+    }
+    const res = await fetchImpl(current.href, {
+      redirect: 'manual',
+      signal: controller.signal,
+      headers: {
+        'User-Agent': USER_AGENT,
+        Accept: 'text/html,application/xhtml+xml,text/plain,text/markdown;q=0.9,*/*;q=0.5',
+      },
+    });
+    if ([301, 302, 303, 307, 308].includes(res.status)) {
+      if (hop >= MAX_REDIRECTS) throw new Error('Too many redirects');
+      const loc = res.headers.get('location');
+      if (!loc) throw new Error('Redirect missing Location');
+      current = new URL(loc, current);
+      continue;
+    }
+    if (!res.ok) {
+      const htmlPaper = allowArxivHtmlFallback && [404, 410].includes(res.status) && !triedArxivHtmlFallback &&
+        current.hostname === 'arxiv.org' && current.pathname.match(/^\/html\/(\d{4}\.\d{4,5}(?:v\d+)?)/);
+      if (htmlPaper) {
+        triedArxivHtmlFallback = true;
+        current = new URL(`https://arxiv.org/abs/${htmlPaper[1]}`);
+        continue;
+      }
+      throw new Error(`HTTP ${res.status}`);
+    }
+    finalResponse = { res, finalUrl: current.href };
+    break;
+  }
+
+  const contentType = (finalResponse.res.headers.get('content-type') ?? '').toLowerCase();
+  if (/application\/pdf|image\/|audio\/|video\/|octet-stream/.test(contentType)) {
+    return { binary: true, contentType, finalUrl: finalResponse.finalUrl };
+  }
+
+  const bytes = await readBoundedBytes(finalResponse.res, controller);
+  const rawText = bytes.toString('utf8');
+  const isHtml = contentType.includes('html') || /<html|<body|<article/i.test(rawText);
+  const parsed = isHtml
+    ? extractReadableArticle(rawText, finalResponse.finalUrl)
+    : { title: null, text: rawText.trim(), links: [], paywalled: false };
+  return { finalUrl: finalResponse.finalUrl, rawText, isHtml, parsed };
+}
+
 async function enrichTopicsSequentially(topics, storeDir, {
   topicIds = null,
   maxFetches = 20,
@@ -659,6 +748,28 @@ async function enrichTopicsSequentially(topics, storeDir, {
 
   const targetSet = topicIds ? new Set(topicIds) : null;
   const stats = { attempted: 0, fullText: 0, snippetOnly: 0, failed: 0, degradedUrls: [] };
+
+  const persistFetched = (topic, doc, status, mergedLinks = null) => {
+    const slug = `${topic.topicId}-${sha12(doc.finalUrl)}`;
+    if (doc.isHtml) fs.writeFileSync(path.join(fetchedDir, `${slug}.html`), doc.rawText, { mode: 0o600 });
+    const extractedPath = path.join(fetchedDir, `${slug}.txt`);
+    fs.writeFileSync(extractedPath, doc.parsed.text + '\n', { mode: 0o600 });
+    const links = mergedLinks ?? doc.parsed.links;
+    topic.fetchedArticle = {
+      modelShareable: true,
+      url: doc.finalUrl,
+      title: doc.parsed.title,
+      charCount: doc.parsed.text.length,
+      paywalled: doc.parsed.paywalled,
+      contentStatus: status,
+      rawTextPath: path.relative(root, extractedPath),
+      outboundLinks: links.slice(0, 30),
+    };
+    for (const l of links.slice(0, 30)) {
+      const c = safeCanonical(l.href);
+      if (c && !topic.allObservedUrls.includes(l.href)) topic.allObservedUrls.push(l.href);
+    }
+  };
 
   for (const topic of topics) {
     if (targetSet && !targetSet.has(topic.topicId)) continue;
@@ -693,92 +804,42 @@ async function enrichTopicsSequentially(topics, storeDir, {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(new Error('Fetch timeout')), FETCH_TIMEOUT_MS);
     try {
-      let current = normalizeFetchTarget(targetUrl);
-      let finalResponse = null;
-      let triedArxivHtmlFallback = false;
-      for (let hop = 0; ; hop++) {
-        const refusal = publicUrlRefusal(current);
-        if (refusal) throw new Error(`Refused target (${refusal})`);
-        if (hop > 0 && NON_FETCH_FINAL_HOSTS.test(current.hostname)) {
-          // A t.co link that resolved to another X status or video host stays a social post, not an external article.
-          if (!topic.allObservedUrls.includes(current.href)) topic.allObservedUrls.push(current.href);
-          break;
-        }
-        const res = await fetchImpl(current.href, {
-          redirect: 'manual',
-          signal: controller.signal,
-          headers: {
-            'User-Agent': USER_AGENT,
-            Accept: 'text/html,application/xhtml+xml,text/plain,text/markdown;q=0.9,*/*;q=0.5',
-          },
-        });
-        if ([301, 302, 303, 307, 308].includes(res.status)) {
-          if (hop >= MAX_REDIRECTS) throw new Error('Too many redirects');
-          const loc = res.headers.get('location');
-          if (!loc) throw new Error('Redirect missing Location');
-          current = new URL(loc, current);
-          continue;
-        }
-        if (!res.ok) {
-          const htmlPaper = [404, 410].includes(res.status) && !triedArxivHtmlFallback && current.hostname === 'arxiv.org' && current.pathname.match(/^\/html\/(\d{4}\.\d{4,5}(?:v\d+)?)/);
-          if (htmlPaper) {
-            triedArxivHtmlFallback = true;
-            current = new URL(`https://arxiv.org/abs/${htmlPaper[1]}`);
-            continue;
-          }
-          throw new Error(`HTTP ${res.status}`);
-        }
-        finalResponse = { res, finalUrl: current.href };
-        break;
-      }
-
-      if (!finalResponse) {
+      const primary = await fetchReadableDocument(targetUrl, { fetchImpl, controller, topic, allowArxivHtmlFallback: true });
+      if (primary.redirectedToNonArticle) {
         stats.snippetOnly += 1;
         writeJson(path.join(root, 'topics', `${topic.topicId}.json`), topic);
         continue;
       }
 
-      if (!topic.allObservedUrls.includes(finalResponse.finalUrl)) {
-        topic.allObservedUrls.unshift(finalResponse.finalUrl);
+      if (!topic.allObservedUrls.includes(primary.finalUrl)) {
+        topic.allObservedUrls.unshift(primary.finalUrl);
       }
 
-      const contentType = (finalResponse.res.headers.get('content-type') ?? '').toLowerCase();
-      if (/application\/pdf|image\/|audio\/|video\/|octet-stream/.test(contentType)) {
+      if (primary.binary) {
         stats.snippetOnly += 1;
-        topic.fetchNote = `Binary content-type (${contentType.split(';')[0]}); retained existing abstract/post text`;
+        topic.fetchNote = `Binary content-type (${primary.contentType.split(';')[0]}); retained existing abstract/post text`;
         continue;
       }
 
-      const bytes = await readBoundedBytes(finalResponse.res, controller);
-      const rawText = bytes.toString('utf8');
-      const slug = `${topic.topicId}-${sha12(finalResponse.finalUrl)}`;
-      const isHtml = contentType.includes('html') || /<html|<body|<article/i.test(rawText);
-      const parsed = isHtml
-        ? extractReadableArticle(rawText, finalResponse.finalUrl)
-        : { title: null, text: rawText.trim(), links: [], paywalled: false };
-
-      if (isHtml) fs.writeFileSync(path.join(fetchedDir, `${slug}.html`), rawText, { mode: 0o600 });
-      const extractedPath = path.join(fetchedDir, `${slug}.txt`);
-      fs.writeFileSync(extractedPath, parsed.text + '\n', { mode: 0o600 });
-
-      const relPath = path.relative(root, extractedPath);
-      const isLandingAbstractOnly = isAbstractLandingUrl(finalResponse.finalUrl);
-      const fetchedStatus = parsed.paywalled
+      const isLandingAbstractOnly = isAbstractLandingUrl(primary.finalUrl);
+      let fetchedStatus = primary.parsed.paywalled
         ? 'paywalled'
-        : (!isLandingAbstractOnly && parsed.text.length >= 800) ? 'full_text' : 'abstract_only';
-      topic.fetchedArticle = {
-        modelShareable: true,
-        url: finalResponse.finalUrl,
-        title: parsed.title,
-        charCount: parsed.text.length,
-        paywalled: parsed.paywalled,
-        contentStatus: fetchedStatus,
-        rawTextPath: relPath,
-        outboundLinks: parsed.links.slice(0, 30),
-      };
-      for (const l of parsed.links.slice(0, 30)) {
-        const c = safeCanonical(l.href);
-        if (c && !topic.allObservedUrls.includes(l.href)) topic.allObservedUrls.push(l.href);
+        : (!isLandingAbstractOnly && primary.parsed.text.length >= 800) ? 'full_text' : 'abstract_only';
+      persistFetched(topic, primary, fetchedStatus);
+
+      if (fetchedStatus !== 'full_text' && !primary.parsed.paywalled) {
+        for (const compUrl of selectCompanionRescueUrls(candidateUrls, primary.parsed.links, primary.finalUrl)) {
+          try {
+            const comp = await fetchReadableDocument(compUrl, { fetchImpl, controller, topic, allowArxivHtmlFallback: false });
+            if (comp.redirectedToNonArticle || comp.binary || comp.parsed.paywalled) continue;
+            if (isAbstractLandingUrl(comp.finalUrl) || comp.parsed.text.length < 800) continue;
+            if (!topic.allObservedUrls.includes(comp.finalUrl)) topic.allObservedUrls.push(comp.finalUrl);
+            fetchedStatus = 'full_text';
+            comp.parsed.title = comp.parsed.title || primary.parsed.title;
+            persistFetched(topic, comp, 'full_text', [...primary.parsed.links, ...comp.parsed.links]);
+            break;
+          } catch { /* retain primary abstract fallback if a companion fetch fails */ }
+        }
       }
 
       if (fetchedStatus === 'full_text') {
@@ -787,7 +848,7 @@ async function enrichTopicsSequentially(topics, storeDir, {
       } else {
         topic.contentStatus = fetchedStatus;
         stats.snippetOnly += 1;
-        stats.degradedUrls.push(finalResponse.finalUrl);
+        stats.degradedUrls.push(primary.finalUrl);
       }
       writeJson(path.join(root, 'topics', `${topic.topicId}.json`), topic);
     } catch (error) {

@@ -13,8 +13,8 @@
       "name": "Anthropic Engineering",
       "type": "html-index",
       "indexUrl": "https://www.anthropic.com/engineering",
-      "articleBaseUrl": "https://www.anthropic.com/research/",
-      "articlePattern": "^/research/(?!team/)[^/]+/?$",
+      "articleBaseUrl": "https://www.anthropic.com/",
+      "articlePattern": "^/(?:engineering|research)/(?!team/)[^/]+/?$",
       "maxArticles": 3
     },
     {
@@ -29,6 +29,38 @@
       "type": "html-index",
       "indexUrl": "https://thinkingmachines.ai/blog/",
       "articleBaseUrl": "https://thinkingmachines.ai/blog/",
+      "maxArticles": 3
+    },
+    {
+      "name": "Cursor Blog",
+      "type": "html-index",
+      "indexUrl": "https://cursor.com/blog",
+      "articleBaseUrl": "https://cursor.com/blog/",
+      "articlePattern": "^/blog/(?!topic/|page/)[^/]+/?$",
+      "maxArticles": 3
+    },
+    {
+      "name": "DeepSeek Updates",
+      "type": "html-index",
+      "indexUrl": "https://api-docs.deepseek.com/updates/",
+      "articleBaseUrl": "https://api-docs.deepseek.com/news/",
+      "articlePattern": "^/news/news\\d+/?$",
+      "maxArticles": 3
+    },
+    {
+      "name": "Hazy Research",
+      "type": "html-index",
+      "indexUrl": "https://hazyresearch.stanford.edu/blog",
+      "articleBaseUrl": "https://hazyresearch.stanford.edu/blog/",
+      "articlePattern": "^/blog/\\d{4}-\\d{2}-\\d{2}-[^/]+/?$",
+      "maxArticles": 3
+    },
+    {
+      "name": "Prime Intellect",
+      "type": "html-index",
+      "indexUrl": "https://www.primeintellect.ai/blog",
+      "articleBaseUrl": "https://www.primeintellect.ai/blog/",
+      "articlePattern": "^/blog/(?!tag/|category/|page/)[^/]+/?$",
       "maxArticles": 3
     }
   ],
@@ -201,6 +233,51 @@
       "url": "https://research.google/blog/rss/",
       "kind": "rss",
       "maxItems": 5
+    },
+    {
+      "name": "Transformer Circuits",
+      "url": "https://transformer-circuits.pub/feed.xml",
+      "kind": "atom",
+      "maxItems": 5,
+      "staleAfterDays": 365
+    },
+    {
+      "name": "Dan Luu",
+      "url": "https://danluu.com/atom.xml",
+      "kind": "atom",
+      "maxItems": 3,
+      "staleAfterDays": 365
+    },
+    {
+      "name": "Jane Street Tech Blog",
+      "url": "https://blog.janestreet.com/feed.xml",
+      "kind": "atom",
+      "maxItems": 5,
+      "staleAfterDays": 180
+    },
+    {
+      "name": "Terence Tao",
+      "url": "https://terrytao.wordpress.com/feed/",
+      "kind": "rss",
+      "maxItems": 5
+    },
+    {
+      "name": "Ai2 Blog",
+      "url": "https://allenai.org/rss.xml",
+      "kind": "rss",
+      "maxItems": 5
+    },
+    {
+      "name": "Modular Blog",
+      "url": "https://www.modular.com/blog/rss.xml",
+      "kind": "rss",
+      "maxItems": 5
+    },
+    {
+      "name": "FlashInfer releases",
+      "url": "https://github.com/flashinfer-ai/flashinfer/releases.atom",
+      "kind": "atom",
+      "maxItems": 3
     }
   ]
 }

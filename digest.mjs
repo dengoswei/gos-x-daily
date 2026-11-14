@@ -91,8 +91,13 @@ export function larkMarkdown(markdown, collection, { dispositions, renderStyle }
   // Validate the complete accounting even when detailed figures stay in the audit.
   const detailedCoverage = coverageStatusLine(collection);
   const windows = collection?.coverage?.accounting?.windows;
+  const recent = windows?.['24h']?.unscannedHours;
+  const full = windows?.['48h']?.unscannedHours;
+  const isBrowserBoundedSample = collection?.provenance?.transport === 'gos-supported-browser' && recent === 24 && full === 48;
   const summary = renderStyle === 'concise'
-    ? `采集范围说明：近24小时仍有 ${windows?.['24h']?.unscannedHours ?? '未知'} 小时、近48小时仍有 ${windows?.['48h']?.unscannedHours ?? '未知'} 小时未验证完整遍历，未看到的帖子数未知。`
+    ? (isBrowserBoundedSample
+      ? '采集范围说明：X 时间线为浏览器有界抽样（近24小时与近48小时均未做全量区间遍历验证，未看到的帖子数未知）。'
+      : `采集范围说明：近24小时仍有 ${recent ?? '未知'} 小时、近48小时仍有 ${full ?? '未知'} 小时未验证完整遍历，未看到的帖子数未知。`)
     : detailedCoverage;
   const ledger = dispositions === undefined || renderStyle === 'concise' ? '' : `\n${dispositionStatusLine(dispositions)}`;
   return `${kept.flatMap(part => part.lines).join('\n').trim()}${summary ? `\n\n${summary}` : ''}${ledger}\n`;

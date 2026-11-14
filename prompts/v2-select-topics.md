@@ -41,15 +41,15 @@ Objective priors surface *who* wrote an item and *how much attention* it receive
 
 ### Tier assignment & capacity rules
 
-- **`tier: "deep"` (target 5 to 8 items)**:
+- **`tier: "deep"` (target 6 to 8 items; use 7–8 slots on strong days)**:
   - Items whose value requires unpacking **problem formulation / bottleneck → fundamental mechanism or theoretical argument → decisive evidence / boundary**.
   - Route each `deep` item to its natural topical section: `Frameworks / Infra`, `Breakthrough Research`, `Applications / Products`, or `Long-form / Essays`.
-  - **Portfolio balance (prevent framework tunnel vision & backlog crowding)**:
-    - Balance engineering depth (`AI Infra`) with `Intelligence` (algorithms, training theory, interpretability, philosophy of intelligence), `World-Impact AI Products`, and `1–2` Hamming "Open-Door" essays or cross-domain mechanisms when strong candidates exist.
-    - Prefer **fresh** high-signal arrivals over older `fromBacklog: true` items of similar quality; use `fromBacklog` to rescue genuinely superior gems on quieter days rather than letting backlog dominate the whole issue.
+  - **Portfolio balance & full-text discipline (prevent framework tunnel vision & backlog crowding)**:
+    - Balance engineering depth (`AI Infra`) with `Intelligence` (algorithms, training theory, interpretability, philosophy of intelligence), `World-Impact AI Products`, and `1–2` Hamming "Open-Door" essays or cross-domain mechanisms when strong candidates exist — **using up to 7–8 `deep` slots rather than dropping a fresh S-tier distributed-training/infra postmortem when adding a `补读` essay or X thread**.
+    - Prefer **fresh** high-signal arrivals over older `fromBacklog: true` items of similar quality, and strongly prefer candidates with full article/blog/postmortem bodies (`full_text`) over `abstract_only` papers lacking concrete empirical benchmarks, baselines, or training budgets in their metadata.
     - Cap any single high-volume aggregator (like `Hugging Face Daily Papers`) at 2–3 slots when strong blogs, essays, products, or X threads exist; cap `robotics_embodied` at **0–1 item max**.
-- **`tier: "quick"` (target 3 to 5 items when available, always section `"Quick Hits / 快讯速览"`)**:
-  - **ONLY** for useful updates whose entire practical point fits in 1–2 crisp sentences without unpacking a complex mechanism (e.g., frontier model/API availability & pricing such as new flagship or decision APIs, SDK/framework point releases, compact open-weight or hardware spec announcements). Do not leave major model/API pricing & availability drops out when `quick` slots remain!
+- **`tier: "quick"` (target 4 to 5 items when available, always section `"Quick Hits / 快讯速览"`)**:
+  - **ONLY** for useful updates whose entire practical point fits in 1–2 crisp sentences without unpacking a complex mechanism (e.g., frontier model/API availability & pricing, major `v1.0.0`/ABI library releases, SDK/framework point releases, compact open-weight or hardware spec announcements). Use all 5 `quick` slots when major open-source library milestones co-occur with flagship model/product launches or technical X discussions.
   - **NEVER** demote a research paper or theoretical essay into `quick` just because `deep` slots are full — put strong runners-up in `deferred`!
 - **`deferred` (0 to 8 items — Rolling High-Value Backlog)**:
   - High-quality Infra, Intelligence/Theory, World-Impact, or Open-Door pieces (including promising "little acorns") that pass your editorial bar **but did not fit into today's `deep` budget**. Never fill `deferred` with routine robotics/VLA papers or minor promos.

@@ -28,6 +28,41 @@ const writePrivateJson = (file, value) => fs.writeFileSync(file, JSON.stringify(
 const defaultSleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
 const X_EXTRACT_SCRIPT = `
+  const parseCompactCount = raw => {
+    const m = String(raw ?? '').replace(/,/g, '').match(/(\\d+(?:\\.\\d+)?)\\s*([KkMm万])?/);
+    if (!m) return null;
+    const base = Number(m[1]);
+    if (!Number.isFinite(base)) return null;
+    const unit = (m[2] ?? '').toLowerCase();
+    const mult = unit === 'k' ? 1e3 : unit === 'm' ? 1e6 : unit === '万' ? 1e4 : 1;
+    return Math.round(base * mult);
+  };
+  const extractXMetrics = node => {
+    const group = node.querySelector?.('[role="group"][aria-label]');
+    const label = group?.getAttribute?.('aria-label') || '';
+    const metrics = {};
+    if (label) {
+      const patterns = [
+        ['replies', /(\\d[\\d,.]*\\s*[KkMm万]?)\\s*(?:replies|reply|条?回复)/i],
+        ['reposts', /(\\d[\\d,.]*\\s*[KkMm万]?)\\s*(?:reposts?|retweets?|次?转[发帖])/i],
+        ['likes', /(\\d[\\d,.]*\\s*[KkMm万]?)\\s*(?:likes?|次?喜欢|赞)/i],
+        ['bookmarks', /(\\d[\\d,.]*\\s*[KkMm万]?)\\s*(?:bookmarks?|次?书签|收藏)/i],
+        ['views', /(\\d[\\d,.]*\\s*[KkMm万]?)\\s*(?:views?|次?观看|查看)/i],
+      ];
+      for (const [field, re] of patterns) {
+        const hit = label.match(re);
+        const n = hit ? parseCompactCount(hit[1]) : null;
+        if (n !== null) metrics[field] = n;
+      }
+    }
+    for (const [field, testId] of [['replies', 'reply'], ['reposts', 'retweet'], ['likes', 'like'], ['bookmarks', 'bookmark']]) {
+      if (metrics[field] !== undefined) continue;
+      const el = node.querySelector?.('[data-testid="' + testId + '"]');
+      const n = el ? parseCompactCount(el.getAttribute?.('aria-label') || el.innerText || '') : null;
+      if (n !== null) metrics[field] = n;
+    }
+    return Object.keys(metrics).length ? metrics : undefined;
+  };
   const showMore = document.querySelectorAll('article[data-testid="tweet"] button[data-testid="tweet-text-show-more-link"]');
   for (const btn of showMore) {
     try { btn.click(); } catch {}
@@ -78,7 +113,8 @@ const X_EXTRACT_SCRIPT = `
         if (!linkMap.has(u.href)) linkMap.set(u.href, { href: u.href, text: (anchor.innerText || '').trim() });
       } catch {}
     }
-    items.push({ url: statusUrl, text, publishedAt, links: [...linkMap.values()] });
+    const metrics = extractXMetrics(art);
+    items.push({ url: statusUrl, text, publishedAt, links: [...linkMap.values()], ...(metrics ? { metrics } : {}) });
   }
   return { href: location.href, pathname: location.pathname, items };
 `;
@@ -141,7 +177,7 @@ export function validateGmailConfig(gmail) {
   return { account, mode, query, maxMessages };
 }
 
-function sanitizeXItems(items) {
+export function sanitizeXItems(items) {
   const seen = new Map();
   for (const item of items ?? []) {
     if (!item?.url || !item?.text?.trim()) continue;
@@ -158,7 +194,20 @@ function sanitizeXItems(items) {
         return false;
       }
     }).map(link => ({ href: new URL(link.href).href, text: String(link.text ?? '') }));
-    seen.set(item.url, { url: item.url, text: item.text.trim(), publishedAt, links });
+    const metrics = {};
+    if (item.metrics && typeof item.metrics === 'object') {
+      for (const field of ['replies', 'reposts', 'likes', 'bookmarks', 'views']) {
+        const val = item.metrics[field];
+        if (Number.isSafeInteger(val) && val >= 0) metrics[field] = val;
+      }
+    }
+    seen.set(item.url, {
+      url: item.url,
+      text: item.text.trim(),
+      publishedAt,
+      links,
+      ...(Object.keys(metrics).length ? { metrics } : {}),
+    });
   }
   return [...seen.values()];
 }
@@ -448,6 +497,12 @@ async function collectXFeedPages(driver, { targetUrl, evPrefix, evidenceUrl = ta
         await sleep(3000);
       }
     }
+    const expanded = await driver.evalJson(`
+      const btns = [...document.querySelectorAll('article[data-testid="tweet"] button[data-testid="tweet-text-show-more-link"]')];
+      for (const btn of btns) { try { btn.click(); } catch {} }
+      return btns.length;
+    `);
+    if (Number(expanded) > 0) await sleep(400);
     const extracted = await driver.evalJson(X_EXTRACT_SCRIPT);
     await sleep(250);
     const evId = `${evPrefix}-${String(step).padStart(2, '0')}`;
@@ -794,6 +849,27 @@ async function assistBlogIndexWithTerra(driver, blog, { cua, sleep = defaultSlee
   return [];
 }
 
+export function inferBlogPublishedAt(rawPub, pathname, nowMs = Date.now()) {
+  if (rawPub) {
+    const parsed = Date.parse(rawPub);
+    if (Number.isFinite(parsed) && parsed <= nowMs) return new Date(parsed).toISOString();
+  }
+  const pathStr = String(pathname ?? '');
+  let ymd = null;
+  const isoSlug = pathStr.match(/\/(20\d{2})-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])(?:-|$|\/)/);
+  if (isoSlug) {
+    ymd = `${isoSlug[1]}-${isoSlug[2]}-${isoSlug[3]}`;
+  } else {
+    const newsSlug = pathStr.match(/\/news\/news(\d{2})(0[1-9]|1[0-2])(0[1-9]|[12]\d|3[01])(?:\/|$)/);
+    if (newsSlug) ymd = `20${newsSlug[1]}-${newsSlug[2]}-${newsSlug[3]}`;
+  }
+  if (!ymd) return null;
+  const iso = `${ymd}T00:00:00.000Z`;
+  const ts = Date.parse(iso);
+  if (!Number.isFinite(ts) || new Date(ts).toISOString().slice(0, 10) !== ymd || ts > nowMs) return null;
+  return iso;
+}
+
 async function collectBlogs(driver, blogs, { clock = Date.now, sleep = defaultSleep, fetchImpl = globalThis.fetch, cua = null, limitations }) {
   const out = [];
   const checks = {};
@@ -851,8 +927,7 @@ async function collectBlogs(driver, blogs, { clock = Date.now, sleep = defaultSl
         const artObj = new URL(art.canonicalHref);
         if (!art.text || art.text.length < 120 || artObj.origin !== baseObj.origin ||
             !artObj.pathname.startsWith(baseObj.pathname) || artObj.pathname === baseObj.pathname) continue;
-        const publishedAt = (art.pub && Number.isFinite(Date.parse(art.pub)) && Date.parse(art.pub) <= clock())
-          ? new Date(art.pub).toISOString() : null;
+        const publishedAt = inferBlogPublishedAt(art.pub, artObj.pathname, clock());
         counter += 1;
         const evId = `blog-${String(counter).padStart(2, '0')}`;
         await driver.screenshot(evId, artObj.href);

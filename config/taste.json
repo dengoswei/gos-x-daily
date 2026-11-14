@@ -56,6 +56,13 @@
       "names": [
         "Anthropic Engineering",
         "Thinking Machines",
+        "Cursor Blog",
+        "DeepSeek Updates",
+        "Hazy Research",
+        "Transformer Circuits",
+        "Dan Luu",
+        "Jane Street Tech Blog",
+        "Terence Tao",
         "Lilian Weng",
         "SemiAnalysis",
         "Chips and Cheese",
@@ -69,7 +76,16 @@
       ],
       "domains": [
         "anthropic.com/engineering",
+        "anthropic.com/research",
         "thinkingmachines.ai",
+        "cursor.com/blog",
+        "api-docs.deepseek.com",
+        "deepseek.com",
+        "hazyresearch.stanford.edu",
+        "transformer-circuits.pub",
+        "danluu.com",
+        "blog.janestreet.com",
+        "terrytao.wordpress.com",
         "lilianweng.github.io",
         "semianalysis.com",
         "chipsandcheese.com",
@@ -89,6 +105,10 @@
         "Claude Blog",
         "Qwen blog",
         "PyTorch blog",
+        "Prime Intellect",
+        "Ai2 Blog",
+        "Modular Blog",
+        "FlashInfer releases",
         "vLLM releases",
         "SGLang releases",
         "Hugging Face blog",
@@ -104,7 +124,10 @@
         "openai.com",
         "deepmind.google",
         "qwenlm.github.io",
-        "pytorch.org/blog"
+        "pytorch.org/blog",
+        "primeintellect.ai",
+        "allenai.org",
+        "modular.com/blog"
       ]
     },
     "tierB": {

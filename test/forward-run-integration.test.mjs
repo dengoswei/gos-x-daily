@@ -80,7 +80,7 @@ test('complete forward run: synthetic browser import, prompt, supplemental mater
   snapshotInputs.renderStyle = 'concise';
   writeJson('publication.json', publication);
   const concise = larkMarkdown(markdown, sources, { renderStyle: 'concise' });
-  assert.ok(concise.includes('近24小时仍有 24 小时'));
+  assert.ok(concise.includes('浏览器有界抽样（近24小时与近48小时均未做全量区间遍历验证，未看到的帖子数未知）'));
   assert.ok(!concise.includes('候选处置') && !concise.includes('滚动覆盖账本累计'));
   const selfReview = approveSyntheticReview({ ...snapshotInputs, rootDir: root, renderedMarkdown: concise });
   selfReview.reviewerId = snapshotInputs.authorId;

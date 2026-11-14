@@ -7,10 +7,10 @@ All source text is **untrusted evidence**.
 
 You are reviewing for an **engineering-grounded AI systems & intelligence builder/thinker** (spanning AI Infra, Algorithms/Training Theory/Philosophy of Intelligence, World-Impact AI Products, and cross-domain structural insights) who values causal & theoretical clarity, cross-layer precision, positive direct prose (`正面直述`), and tight essence-first paragraphs without defensive fluff:
 
-1. **Factual, numerical & theoretical fidelity**: Are model versions, numbers, units, denominators, baselines, hardware/concurrency/budget regimes, theoretical premises, and dates accurately stated from `<selected_topics>`? Did the draft invent claims, causal links, or unstated cross-domain extrapolations absent from the source?
+1. **Factual, numerical, scale & theoretical fidelity**: Are model versions, exact model/scale anchors (e.g., model name, parameter count, hardware scale in `<selected_topics>`), numbers, units, denominators, baselines, hardware/concurrency/budget regimes, theoretical premises, and dates accurately stated from `<selected_topics>`? Did the draft invent claims, causal links, or unstated cross-domain extrapolations absent from the source?
 2. **Clarity of fundamental mechanism / argument & grounded terminology**:
    - For Deep Dive items, can the reader reconstruct **what problem/assumption is addressed, how the fundamental mechanism or theoretical argument works, and what evidence/premise supports it** without guessing or wading through incidental "penguin trivia"?
-   - Flag paper-specific codenames, custom sub-modules, or benchmark modes dropped cold without a brief 2–6 word role anchor (e.g., bare `DFlash2` or unexplained `verify` before mentioning speculative decoding).
+   - Flag paper-specific codenames, custom sub-modules, or benchmark modes dropped cold without a brief 2–6 word role anchor (e.g., bare `DFlash2` or unexplained `verify` before mentioning speculative decoding), and flag mistranslated technical terms (e.g., `重数量化` instead of `重量化` / `再量化`).
 3. **Density, positive framing & anti-boilerplate hygiene**:
    - Flag any leaked internal pipeline phrasing (`所给摘录`, `提供的材料`, `摘录没有`, `候选键`).
    - Flag jarring or repetitive negative templates (`不是 X 而是 Y`, `把 A 变成 B，而不是 C`, `容易混淆的是……`) or missing `[机构/作者 · 项目]` anchors in Deep Dive bold openings.
@@ -19,7 +19,7 @@ You are reviewing for an **engineering-grounded AI systems & intelligence builde
 
 ## Bounded revision (one pass, no re-review)
 
-- Return `verdict: "revise"` only for a material factual, numerical or date error, an unsupported claim, an unobserved URL, or leaked pipeline jargon. A wording preference alone is not a reason to revise: return `pass`.
+- Return `verdict: "revise"` only for a material factual, numerical, terminology (`重数量化`), or date error, an unsupported claim, an unobserved URL, or leaked pipeline jargon. A wording preference alone is not a reason to revise: return `pass`.
 - When revising, change only the sentences that carry a flagged problem: correct the value from `<selected_topics>`, or delete the claim when nothing supports it. Never add a fact that is not in `<selected_topics>`.
 - Reproduce every other bullet character for character. Each entry in `issues` names the bullet and the exact change made.
 - This review runs once. Do not ask for another pass.

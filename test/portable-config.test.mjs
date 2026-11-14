@@ -35,12 +35,14 @@ test('default public example stays portable and collection/delivery stay disable
 test('example sources use generic blog indexes and the broad-AI public feed list, without topic filters', () => {
   const sources = JSON.parse(fs.readFileSync(new URL('../config/sources.json', import.meta.url), 'utf8'));
   assert.deepEqual(sources.blogs.map(blog => [blog.name, blog.type]),
-    [['Anthropic Engineering', 'html-index'], ['Claude Blog', 'html-index'], ['Thinking Machines', 'html-index']]);
+    [['Anthropic Engineering', 'html-index'], ['Claude Blog', 'html-index'], ['Thinking Machines', 'html-index'],
+      ['Cursor Blog', 'html-index'], ['DeepSeek Updates', 'html-index'], ['Hazy Research', 'html-index'], ['Prime Intellect', 'html-index']]);
   assert.deepEqual(sources.feeds.map(feed => feed.name), ['Hugging Face Daily Papers', 'OpenAI News', 'Google DeepMind blog', 'Google AI blog',
     'Hugging Face blog', 'Qwen blog', 'Interconnects', 'Ahead of AI', 'Lilian Weng', 'smol.ai AI News', 'PyTorch blog', 'NVIDIA Developer blog',
     'SemiAnalysis', 'Chips and Cheese', 'vLLM releases', 'SGLang releases', 'Simon Willison', 'Latent Space', 'One Useful Thing',
     'The Pragmatic Engineer', 'Dwarkesh Podcast', 'Import AI', 'Karpathy blog', 'Sebastian Raschka blog', 'Deep (Learning) Focus', 'arg min',
-    'Windows On Theory', 'Google Research blog']);
+    'Windows On Theory', 'Google Research blog', 'Transformer Circuits', 'Dan Luu', 'Jane Street Tech Blog', 'Terence Tao',
+    'Ai2 Blog', 'Modular Blog', 'FlashInfer releases']);
   for (const feed of sources.feeds) assert.deepEqual(Object.keys(feed).filter(key => key !== 'staleAfterDays').sort(), ['kind', 'maxItems', 'name', 'url']);
   assert.equal(validateFeedConfig(sources), sources.feeds);
 });

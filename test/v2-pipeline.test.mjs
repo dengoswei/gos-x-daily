@@ -43,7 +43,7 @@ test('auto dispositions retain cited browser-deep candidate ownership without a 
   assert.doesNotThrow(() => validateDispositions(dispositions, collection, markdown));
 });
 import { makeRuntime } from '../runtime.mjs';
-import { runDailyV2, validateV2Digest, selectTopicsHeuristic, buildScreenShortlist, normalizeDigestSectionOrder } from '../run-daily.mjs';
+import { runDailyV2, validateV2Digest, selectTopicsHeuristic, buildScreenShortlist, normalizeDigestSectionOrder, replaceAbstractOnlyDeepPapers } from '../run-daily.mjs';
 import { runEditorialBenchmarkSuite, evaluateDigestMarkdown } from '../editorial-eval.mjs';
 import { frozenApiRun } from '../deployment/mac/openai-draft.mjs';
 import { openRun } from '../prototype/run-packets.mjs';
@@ -1182,4 +1182,79 @@ test('original-source enrichment uses bounded parallel requests', async t => {
   } });
   assert.equal(peak, 3);
   assert.equal(stats.fullText, 7);
+});
+
+test('arXiv /html/ 404 rescues full text via companion GitHub repo without breaking pure-abstract fail-closed checks', async t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'xdaily-companion-rescue-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  fs.mkdirSync(path.join(dir, 'topics'), { recursive: true });
+  const topics = [{
+    topicId: 'paper-with-github',
+    primaryUrl: 'https://huggingface.co/papers/2611.20001',
+    allObservedUrls: ['https://huggingface.co/papers/2611.20001', 'https://github.com/org/exp-handoff-rl'],
+    contentStatus: 'abstract_only',
+    cards: [{ kind: 'feed', url: 'https://huggingface.co/papers/2611.20001', contentStatus: 'abstract_only', sourceLabel: 'Hugging Face Daily Papers' }],
+  }];
+  const fetchedUrls = [];
+  const stats = await enrichTopicsWithFullText(topics, dir, {
+    fetchImpl: async url => {
+      fetchedUrls.push(url);
+      if (url === 'https://arxiv.org/html/2611.20001') return new Response('Not Found', { status: 404 });
+      if (url === 'https://arxiv.org/abs/2611.20001') {
+        return new Response('<html><body><main>Short abstract without benchmark table.</main></body></html>',
+          { status: 200, headers: { 'content-type': 'text/html' } });
+      }
+      if (url === 'https://github.com/org/exp-handoff-rl') {
+        return new Response(`<html><body><article>${'Benchmark tables, training budget, and holdout scores for experience handoff RL. '.repeat(25)}</article></body></html>`,
+          { status: 200, headers: { 'content-type': 'text/html' } });
+      }
+      throw new Error(`Unexpected URL: ${url}`);
+    },
+  });
+  assert.equal(stats.fullText, 1);
+  assert.equal(stats.snippetOnly, 0);
+  assert.equal(topics[0].contentStatus, 'full_text');
+  assert.equal(topics[0].fetchedArticle.url, 'https://github.com/org/exp-handoff-rl');
+  assert.equal(modelTopic(topics[0]).contentStatus, 'full_text');
+  assert.deepEqual(fetchedUrls, [
+    'https://arxiv.org/html/2611.20001',
+    'https://arxiv.org/abs/2611.20001',
+    'https://github.com/org/exp-handoff-rl',
+  ]);
+});
+
+test('replaceAbstractOnlyDeepPapers swaps an abstract-only deep paper for an unselected full-text systems candidate', async () => {
+  const weakPaper = {
+    topicId: 'weak-abs-paper',
+    title: 'Sparse Paper Abstract Without Numbers',
+    category: 'paper',
+    priorScore: 7.2,
+    contentStatus: 'abstract_only',
+    dedupStatus: 'fresh',
+    primaryUrl: 'https://arxiv.org/abs/2611.30001',
+    allObservedUrls: ['https://arxiv.org/abs/2611.30001'],
+    cards: [{ kind: 'feed', url: 'https://arxiv.org/abs/2611.30001', contentStatus: 'abstract_only', sourceLabel: 'HF' }],
+  };
+  const strongSystems = {
+    topicId: 'strong-europa-post',
+    title: 'EUROPA: Pretraining a 951.9B MoE on Shared GH200 Infrastructure',
+    category: 'infra_eng',
+    priorScore: 6.8,
+    contentStatus: 'full_text',
+    dedupStatus: 'fresh',
+    primaryUrl: 'https://europa.example/blog/gh200-moe',
+    allObservedUrls: ['https://europa.example/blog/gh200-moe'],
+    cards: [{ kind: 'supplement', url: 'https://europa.example/blog/gh200-moe', contentStatus: 'full_text', sourceLabel: 'Substack' }],
+  };
+  const plan = [{ topicId: 'weak-abs-paper', tier: 'deep', section: 'Breakthrough Research', followUp: false, reason: 'Screen pick' }];
+  const deferredMap = new Map();
+  const res = await replaceAbstractOnlyDeepPapers(plan, [weakPaper, strongSystems], {
+    sortedForSelection: [weakPaper, strongSystems],
+    modelsFile: 'fake.json',
+    deferredMap,
+  });
+  assert.equal(res.replaced, 1);
+  assert.equal(plan[0].topicId, 'strong-europa-post');
+  assert.equal(plan[0].section, 'Frameworks / Infra');
+  assert.match(deferredMap.get('weak-abs-paper'), /abstract-only paper/i);
 });

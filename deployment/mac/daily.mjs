@@ -6,7 +6,7 @@ import { runDailyV2, validateV2Digest } from '../../run-daily.mjs';
 import { loadModels } from '../../prototype/run-packets.mjs';
 import { assertCollection, coverageStatusLine } from '../../digest.mjs';
 import { canonicalUrl, citedUrls, candidateKeys } from '../../binding.mjs';
-import { renderTelemetryMarkdown, acquireLeaseLock } from '../../telemetry.mjs';
+import { renderCompactTelemetryLine, renderTelemetryMarkdown, acquireLeaseLock } from '../../telemetry.mjs';
 import { frozenApiRun, readApiKey } from './openai-draft.mjs';
 import { buildReviewSnapshot, validateReview } from '../../review.mjs';
 import { publicationGates } from '../../digest.mjs';
@@ -68,6 +68,7 @@ export function preparePublication(runDir, revisionOf) {
     fullText: available, snippetOnly: prepared.length - available };
   save(path.join(runDir, 'telemetry.json'), telemetryData);
   const telemetry = renderTelemetryMarkdown(telemetryData);
+  const compactTelemetry = renderCompactTelemetryLine(telemetryData);
   const scopeNote = '统计口径：候选计数只包括本轮直接采集，话题计数还包括公开补充与历史缓存，一篇成稿可能综合多个来源。正文可用表示已保存正文材料，不代表已完整通读每个页面。';
   const coverage = coverageStatusLine(sources) + '\n\n' + telemetry + '\n\n' + scopeNote;
   const keys = new Set(candidateKeys(sources));
@@ -93,12 +94,12 @@ export function preparePublication(runDir, revisionOf) {
       sources: row.material.observations.map(item => ({ url: item.url, contentStatus: item.contentStatus,
         preservedCharacters: item.text.length })) })) };
   const accountingText = 'Deterministic pipeline accounting from preserved prepare-state, prepared-topics, dispositions and telemetry snapshots:\n' + JSON.stringify(accounting);
-  fs.writeFileSync(path.join(runDir, 'collection-coverage.md'), coverage + '\n\n' + accountingText + '\n', { mode: 0o600 });
+  fs.writeFileSync(path.join(runDir, 'collection-coverage.md'), compactTelemetry + '\n\n' + coverage + '\n\n' + accountingText + '\n', { mode: 0o600 });
   const revised = revisionOf
     ? body.replace(/^(# X AI 日报 [^\n]+)\n/, '$1\n' + Number(sources.date.slice(5, 7)) + ' 月 ' + Number(sources.date.slice(-2)) + ' 日修订版。本版替代今天此前的日报。\n')
     : body;
   // The self-check panel is rendered once, inside the audit section that the coverage evidence binds.
-  const markdown = revised + '\n\n本次采集范围以本次冻结的来源与时间窗口为准。\n\n' +
+  const markdown = revised + '\n\n' + compactTelemetry + '\n\n' +
     sources.digestMarker + '\n\n## 差异补充\n\n' + coverage + '\n';
   fs.writeFileSync(path.join(runDir, 'digest.publication.md'), markdown, { mode: 0o600 });
 
@@ -121,7 +122,7 @@ export function preparePublication(runDir, revisionOf) {
       if (chunk.trim().length >= 8) excerpts.push({ id: `source-${index + 1}-${part}`, kind: 'public', path: backing, url, text: chunk });
     }
   }
-  excerpts.push({ id: 'pipeline-coverage', kind: 'coverage', path: 'collection-coverage.md', text: coverage });
+  excerpts.push({ id: 'pipeline-coverage', kind: 'coverage', path: 'collection-coverage.md', text: compactTelemetry + '\n\n' + coverage });
   for (let start = 0, part = 1; start < accountingText.length; start += 2800, part++) {
     excerpts.push({ id: `pipeline-accounting-${part}`, kind: 'coverage', path: 'collection-coverage.md',
       text: accountingText.slice(Math.min(start, Math.max(0, accountingText.length - 8)), start + 2800) });

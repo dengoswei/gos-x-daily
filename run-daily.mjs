@@ -230,6 +230,77 @@ export function selectTopicsHeuristic(topics, { maxDeep = 7, maxQuick = 4, maxPe
 }
 
 /**
+ * Replaces abstract-only selected Deep Dive papers when an unselected full-text
+ * non-robotics technical source with strong prior score is available.
+ */
+export async function replaceAbstractOnlyDeepPapers(selectedPlan, storeTopics, {
+  sortedForSelection = storeTopics,
+  modelsFile = null,
+  storeDir,
+  fetchImpl = globalThis.fetch,
+  deferredMap = new Map(),
+  maxReplacements = 2,
+  minPriorScore = 4.0,
+} = {}) {
+  const getProjected = id => {
+    const raw = storeTopics.find(t => t.topicId === id);
+    return raw ? (modelsFile ? modelTopic(raw) : raw) : null;
+  };
+  const weakDeepIndices = [];
+  for (let i = 0; i < selectedPlan.length; i++) {
+    const plan = selectedPlan[i];
+    if (plan.tier !== 'deep') continue;
+    const proj = getProjected(plan.topicId);
+    if (proj && proj.category === 'paper' && proj.contentStatus !== 'full_text') {
+      weakDeepIndices.push(i);
+    }
+  }
+  if (!weakDeepIndices.length) return { replaced: 0 };
+
+  const pickedIds = new Set(selectedPlan.map(p => p.topicId));
+  const pool = sortedForSelection.filter(c =>
+    !pickedIds.has(c.topicId) &&
+    c.dedupStatus !== 'seen_recently' &&
+    c.category !== 'case_study_pr' &&
+    !isRoboticsEmbodiedTopic(c) &&
+    !(!c.fromBacklog && (c.curationSignals?.ageDecay ?? 0) >= 6.0) &&
+    (c.priorScore ?? 0) >= minPriorScore,
+  );
+
+  let replaced = 0;
+  let onDemandEnrichCount = 0;
+  for (const idx of weakDeepIndices) {
+    if (replaced >= maxReplacements) break;
+    let winner = pool.find(c => !pickedIds.has(c.topicId) && getProjected(c.topicId)?.contentStatus === 'full_text');
+    if (!winner && storeDir) {
+      for (const c of pool) {
+        if (onDemandEnrichCount >= 2) break;
+        if (pickedIds.has(c.topicId) || getProjected(c.topicId)?.contentStatus === 'full_text') continue;
+        onDemandEnrichCount += 1;
+        await enrichTopicsWithFullText(storeTopics, storeDir, { topicIds: [c.topicId], maxFetches: 1, fetchImpl });
+        if (getProjected(c.topicId)?.contentStatus === 'full_text') {
+          winner = c;
+          break;
+        }
+      }
+    }
+    if (!winner) continue;
+    const replacedPlan = selectedPlan[idx];
+    deferredMap.set(replacedPlan.topicId, 'Deferred abstract-only paper in favor of full-text technical source');
+    selectedPlan[idx] = {
+      topicId: winner.topicId,
+      tier: 'deep',
+      section: sectionForTopic(winner),
+      followUp: winner.dedupStatus === 'follow_up_candidate',
+      reason: 'Promoted full-text technical source over abstract-only paper',
+    };
+    pickedIds.add(winner.topicId);
+    replaced += 1;
+  }
+  return { replaced };
+}
+
+/**
  * Builds the bounded Stage 2 LLM screening shortlist with "Hamming Open-Door" diversity protection:
  * On high-volume days (e.g., 150 fresh topics + 350 recalled backlog topics), a flat `slice(0, 45)`
  * can let historical backlog entries or framework-only items crowd out fresh arrivals, long-form
@@ -697,6 +768,16 @@ export async function runDailyV2({
             failed: 0,
             degradedUrls: [],
           };
+
+      if (fetchFullTextOnline && !resumingModels && !selectedTopicsPath) {
+        await replaceAbstractOnlyDeepPapers(selectedPlan, storeTopics, {
+          sortedForSelection,
+          modelsFile,
+          storeDir,
+          fetchImpl,
+          deferredMap,
+        });
+      }
 
       // Assemble complete L0 materials & full observed URL allowlist
       const topicById = new Map((modelsFile ? storeTopics.map(modelTopic).filter(Boolean) : storeTopics).map(t => [t.topicId, t]));

@@ -46,13 +46,13 @@ export async function main(argv = process.argv.slice(2), pointer) {
     const deployment = read(path.join(base, 'deployment.local.json'));
     return { status: 'mac_release_verified', repo, revision: manifest.revision, filesVerified, cloudSourceFiles: manifest.cloudSourceFiles,
       productionFilesChanged: manifest.productionFilesChanged, testOnlyPatches: manifest.testOnlyPatches, node: process.version,
-      compositionPromptSha256: hash(fs.readFileSync(path.join(repo, 'prompts/compose-digest.md'))),
+      compositionPromptSha256: hash(fs.readFileSync(path.join(repo, 'prompts/v2-compose-digest.md'))),
       editorialSha256: hash(fs.readFileSync(path.join(repo, 'EDITORIAL.md'))),
       runtime: { config: path.join(base, 'runtime.local.json'), lookbackHours: runtime.lookbackHours, sourcesFile: runtime.sourcesFile, dataDir: runtime.dataDir, collectionEnabled: runtime.collectionEnabled, larkEnabled: runtime.lark.enabled },
       controller: deployment.controller, model: deployment.model, delivery: deployment.delivery,
       dailyPipeline: { entry: 'run-daily.mjs', command: 'local daily --run RUN',
         enabled: Boolean(deployment.model?.apiDraft?.keyFile), model: 'gpt-6.1-sol', reasoningEffort: 'high',
-        stages: ['screen', 'compose', 'reader-comprehension', 'reader-fidelity', 'author-comprehension', 'author-fidelity'], sends: false },
+        stages: ['screen', 'compose', 'review'], sends: false },
       schedule: 'Codex X Daily Digest 9AM, Asia/Shanghai; retired Dot remote schedule', localController: read(path.join(base, 'mac-authority.json')) };
   }
   if (command === 'test') {

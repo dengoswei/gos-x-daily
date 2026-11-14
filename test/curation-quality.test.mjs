@@ -5,8 +5,9 @@ import os from 'node:os';
 import path from 'node:path';
 import { buildContentStore } from '../content-store.mjs';
 import { scoreTopicPrior } from '../curation.mjs';
-import { buildTelemetry, collectSourceStatuses } from '../telemetry.mjs';
+import { buildTelemetry, collectSourceStatuses, renderCompactTelemetryLine } from '../telemetry.mjs';
 import { validateFeedConfig } from '../feed-import.mjs';
+import { evaluateBulletProse } from '../editorial-eval.mjs';
 
 test('the fetched original behind one post is not a second share', t => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'curation-quality-'));
@@ -86,4 +87,29 @@ test('feed config rejects a non-positive staleness threshold', () => {
   for (const staleAfterDays of [0, -1, 1.5, '30']) {
     assert.throws(() => validateFeedConfig({ feeds: [{ ...feed, staleAfterDays }] }), /staleAfterDays/);
   }
+});
+
+test('compact telemetry line summarizes OK vs WARN cleanly and prose evaluator catches mistranslated 重数量化', () => {
+  const okLine = renderCompactTelemetryLine(buildTelemetry({
+    date: '2026-11-14',
+    sources: [{ id: 'feed:OpenAI', label: 'OpenAI News', kind: 'feed', status: 'ok', items: 2 }],
+    funnel: { rawItems: 10, clusteredTopics: 8, publishedDeepDive: 5, publishedQuickHits: 3, publishedTotal: 8 },
+  }));
+  assert.match(okLine, /^本次采集范围与运行自检 \[OK\]：可用信源 1\/1/);
+  assert.ok(!okLine.includes('关注：'));
+
+  const warnLine = renderCompactTelemetryLine(buildTelemetry({
+    date: '2026-11-14',
+    sources: [
+      { id: 'feed:OpenAI', label: 'OpenAI News', kind: 'feed', status: 'ok', items: 2 },
+      { id: 'blog:Missing', label: 'Missing Blog', kind: 'blog', status: 'unattempted', items: 0 },
+    ],
+    funnel: { rawItems: 10, clusteredTopics: 8, publishedDeepDive: 5, publishedQuickHits: 3, publishedTotal: 8 },
+  }));
+  assert.match(warnLine, /^本次采集范围与运行自检 \[WARN\]：.*关注：.*Missing Blog/);
+
+  const badBullet = '- **[Test · Quant]：通过重数量化保持期望一致的反向训练配方。** 11 月 14 日发布，面向 Inkling 2 Small 模型，对转置张量做反量化后再以随机舍入转换至 MXFP8，在 8 张 GPU 上相比全 MXFP8 预训练提速 8%，计算效率开销约 2%，验证于标准 MoE 负载下。 [原文](https://example.invalid/quant)';
+  const evalRes = evaluateBulletProse(badBullet, { tier: 'deep' });
+  assert.equal(evalRes.passed, false);
+  assert.ok(evalRes.issues.includes('mistranslated_jargon(重数量化)'));
 });

@@ -19,6 +19,7 @@ const defaultDatasetPath = path.join(repoRoot, 'examples', 'editorial-eval-cases
 const NEGATIVE_CONTRAST_RE = /不是[^，。；\n]{1,24}而是|把[^，。；\n]{1,20}变成[^，。；\n]{1,20}，?而不是|不只是[^，。；\n]{1,20}，?还包括|容易混淆的(?:是|地方)/g;
 const STRAWMAN_DISCLAIMER_RE = /不能合并为一个?统一(?:加速)?倍数|不等于整个索引按?同比例缩小|这只是功能开放[，,]?不代表|不能将其扩展为整个[^，。；\n]{1,18}的安全保证|不意味着[^，。；\n]{1,24}已有评测保证/g;
 const PIPELINE_JARGON_RE = /所给摘录|提供的材料|摘录(?:没有|未|中)|候选键/g;
+const MISTRANSLATED_JARGON_RE = /重数量化/g;
 const COLD_JARGON_PATTERNS = [
   { name: 'bare_verify_without_speculative_anchor', test: text => /\bverify\s*(?:步|耗时|阶段)/i.test(text) && !/投机|草稿|draft|speculative/i.test(text) },
   { name: 'bare_smithy_without_api_model_anchor', test: text => /\bSmithy\b/.test(text) && !/API\s*模型|接口定义|IDL/i.test(text) },
@@ -59,6 +60,7 @@ export function evaluateBulletProse(bulletText, { tier = 'deep' } = {}) {
   const negativeContrastHits = [...raw.matchAll(NEGATIVE_CONTRAST_RE)].map(m => m[0]);
   const strawmanDisclaimerHits = [...raw.matchAll(STRAWMAN_DISCLAIMER_RE)].map(m => m[0]);
   const pipelineJargonHits = [...raw.matchAll(PIPELINE_JARGON_RE)].map(m => m[0]);
+  const mistranslatedJargonHits = [...raw.matchAll(MISTRANSLATED_JARGON_RE)].map(m => m[0]);
   const coldJargonHits = COLD_JARGON_PATTERNS.filter(p => p.test(raw)).map(p => p.name);
   const hasInternalBlankLine = /\n\s*\n/.test(raw);
   const hasTrailingLinks = /\[[^\]]+\]\(https?:\/\/[^)]+\)\s*$/.test(raw);
@@ -73,6 +75,7 @@ export function evaluateBulletProse(bulletText, { tier = 'deep' } = {}) {
   if (negativeContrastHits.length) issues.push(`jarring_negative_contrast(${negativeContrastHits.join('|')})`);
   if (strawmanDisclaimerHits.length) issues.push(`strawman_disclaimer_tail(${strawmanDisclaimerHits.join('|')})`);
   if (pipelineJargonHits.length) issues.push(`pipeline_jargon(${pipelineJargonHits.join('|')})`);
+  if (mistranslatedJargonHits.length) issues.push(`mistranslated_jargon(${mistranslatedJargonHits.join('|')})`);
   if (coldJargonHits.length) issues.push(`cold_unanchored_jargon(${coldJargonHits.join('|')})`);
   if (hasInternalBlankLine) issues.push('internal_blank_line_detaches_links');
   if (!hasTrailingLinks) issues.push('missing_inline_markdown_link');

@@ -534,11 +534,8 @@ export function buildTelemetry({ date = shanghaiDate(), sources = [], funnel = {
   };
 }
 
-/**
- * Concise, human- and agent-readable self-check footer replacing repetitive coverage disclaimers.
- */
-export function renderTelemetryMarkdown(telemetry) {
-  const { overallHealth, sourceSummary, sources, funnel, recommendations } = telemetry;
+function formatTelemetryParts(telemetry) {
+  const { sources, funnel } = telemetry;
   const byKind = kind => sources.filter(s => s.kind === kind && s.status !== 'unattempted');
 
   const sourceParts = [];
@@ -583,6 +580,28 @@ export function renderTelemetryMarkdown(telemetry) {
   const backlogOut = (funnel.backlogSaved ?? 0) > 0
     ? ` → 遗珠池留存 ${funnel.backlogSaved} 条`
     : '';
+
+  return { sourceParts, deepText, pubBreakdown, backlogIn, backlogOut };
+}
+
+/**
+ * Single-line reader-facing status footer summarizing source coverage, funnel counts, and any health warnings.
+ */
+export function renderCompactTelemetryLine(telemetry) {
+  const { overallHealth, sourceSummary, funnel, recommendations } = telemetry;
+  const { sourceParts, pubBreakdown } = formatTelemetryParts(telemetry);
+  const srcText = sourceParts.length ? `（${sourceParts.join(' · ')}）` : '';
+  const base = `本次采集范围与运行自检 [${overallHealth}]：可用信源 ${sourceSummary.usable}/${sourceSummary.configured}${srcText}，入库 ${funnel.rawItems} 条 → 聚合 ${funnel.clusteredTopics} 话题 → 成稿 ${funnel.publishedTotal} 条${pubBreakdown}。`;
+  if (overallHealth === 'OK' || !recommendations?.length) return base;
+  return `${base} 关注：${recommendations.map(r => r.reason).join('；')}。`;
+}
+
+/**
+ * Concise, human- and agent-readable self-check footer replacing repetitive coverage disclaimers.
+ */
+export function renderTelemetryMarkdown(telemetry) {
+  const { overallHealth, sourceSummary, sources, funnel, recommendations } = telemetry;
+  const { sourceParts, deepText, pubBreakdown, backlogIn, backlogOut } = formatTelemetryParts(telemetry);
 
   const unattemptedRows = sources.filter(s => s.status === 'unattempted');
   const statusHeader = sourceSummary.unattempted > 0

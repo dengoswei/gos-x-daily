@@ -23,7 +23,10 @@ history or promise exhaustive X recall.
   and filter/deep-read counts come from `knownCandidates`, which can retain prior
   observations in the rolling horizon; they are not this capture's item counts.
   Any other case reports unscanned hours per window and likewise labels the
-  link/filter/deep-read counts as cumulative rolling-ledger observations.
+  link/filter/deep-read counts as cumulative rolling-ledger observations. Under
+  `renderStyle: "concise"`, fully unscanned `gos-supported-browser` runs render
+  `采集范围说明：X 时间线为浏览器有界抽样（近24小时与近48小时均未做全量区间遍历验证，未看到的帖子数未知）。`
+  while preserving the detailed coverage ledger in `collection-coverage.md` and `## 差异补充`.
 - Preserve partial results and exact failure reasons, actual timestamps, source
   dates and quote context. No missing receipt or history implies novelty.
 

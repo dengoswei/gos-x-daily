@@ -4,7 +4,14 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
-import { collectMacRun, createAppleEventsBrowserDriver, parseCollectFlags, validateGmailConfig } from '../deployment/mac/mac-collect.mjs';
+import {
+  collectMacRun,
+  createAppleEventsBrowserDriver,
+  inferBlogPublishedAt,
+  parseCollectFlags,
+  sanitizeXItems,
+  validateGmailConfig,
+} from '../deployment/mac/mac-collect.mjs';
 import { macHome } from './helpers/mac-fixture.mjs';
 
 const sha256 = value => createHash('sha256').update(value).digest('hex');
@@ -711,4 +718,44 @@ test('subscribed posts keep a reserved share of the supplement queue ahead of ti
   assert.equal(queue[4], timelineUrls[0]);
   assert.deepEqual(queue.slice(-3), [...subscriptionUrls.slice(4), 'https://mail.example/a']);
   assert.equal(queue.length, 37);
+});
+
+test('sanitizeXItems retains non-negative engagement metrics and rejects malformed fields', () => {
+  const cleaned = sanitizeXItems([
+    {
+      url: 'https://x.com/alice/status/1',
+      text: 'Post with engagement',
+      publishedAt: '2026-11-14T01:00:00Z',
+      links: [{ href: 'https://example.com/a', text: 'a' }],
+      metrics: { replies: 12, reposts: 34, likes: 120, bookmarks: 45, views: 5200, ignored: 99 },
+    },
+    {
+      url: 'https://x.com/bob/status/2',
+      text: 'Post with invalid metrics',
+      publishedAt: null,
+      links: [],
+      metrics: { bookmarks: -3, likes: 1.5, views: '500' },
+    },
+  ]);
+  assert.deepEqual(cleaned[0].metrics, { replies: 12, reposts: 34, likes: 120, bookmarks: 45, views: 5200 });
+  assert.equal(cleaned[1].metrics, undefined);
+});
+
+test('inferBlogPublishedAt parses DeepSeek newsYYMMDD and Hazy ISO path slugs when DOM lacks dates', () => {
+  const now = Date.parse('2026-11-14T10:00:00.000Z');
+  assert.equal(inferBlogPublishedAt('2026-11-13T12:30:00Z', '/news/news261101', now), '2026-11-13T12:30:00.000Z');
+  assert.equal(inferBlogPublishedAt(null, '/news/news261113', now), '2026-11-13T00:00:00.000Z');
+  assert.equal(inferBlogPublishedAt(null, '/blog/2026-10-12-ncm', now), '2026-10-12T00:00:00.000Z');
+  assert.equal(inferBlogPublishedAt(null, '/news/news261120', now), null);
+  assert.equal(inferBlogPublishedAt(null, '/news/news260231', now), null);
+});
+
+test('Anthropic Engineering blog pattern covers both /engineering/ and /research/ paths', () => {
+  const cfg = JSON.parse(fs.readFileSync(new URL('../config/sources.json', import.meta.url), 'utf8'));
+  const anthropic = cfg.blogs.find(b => b.name === 'Anthropic Engineering');
+  const re = new RegExp(anthropic.articlePattern);
+  assert.equal(re.test('/engineering/claude-code-sandboxing'), true);
+  assert.equal(re.test('/research/constitutional-classifiers'), true);
+  assert.equal(re.test('/research/team/alignment'), false);
+  assert.equal(re.test('/news/claude-4'), false);
 });
