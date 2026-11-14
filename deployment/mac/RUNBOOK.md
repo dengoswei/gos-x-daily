@@ -150,8 +150,10 @@ Back up code and private state separately. Keep ledger attempts, receipts, readb
 
 ```bash
 node $DEPLOYMENT_HOME/run.mjs local auto
-node $DEPLOYMENT_HOME/run.mjs local collect --run $RUN_DIR --cua-model gpt-6.1-terra --api-key-file "$CODEX_HOME/auth.json"
+node $DEPLOYMENT_HOME/run.mjs local collect --run $RUN_DIR --cua-model gpt-6.1-terra --api-key-file /absolute/path/to/openai.env
 node $DEPLOYMENT_HOME/run.mjs local collect --run $RUN_DIR --no-cua --no-gmail
 ```
+
+The key file must hold exactly one `CODEX_API_KEY=...` line (a JSON `auth.json` is not accepted); an unusable key is recorded as a collection limitation, not silently ignored. Collection limitations are written to `collection-limitations.json` in the run directory.
 
 Gmail discovery is disabled unless `sources.local.json` sets an explicit `sources.gmail.account` (`mode: "auto" | "gmail-cli" | "browser"`). See [docs/MAC-UNATTENDED-COLLECTION.md](../../docs/MAC-UNATTENDED-COLLECTION.md) for window isolation, `AGY_ACCOUNT` / `?authuser=` fail-closed checks, and `launchd` wiring.

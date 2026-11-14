@@ -121,3 +121,16 @@ test('start-run freezes the roster in a new run directory and refuses unsafe env
   assert.match(f.local(['start-run']).stderr, /Mac cutover incomplete/);
   assert.equal(fs.readdirSync(path.join(f.home, 'runs')).length, 2);
 });
+
+test('identity check reads the signed-in user from identities.user and still refuses another user there', t => {
+  const f = macHome(t);
+  const nested = openId => ({ auth: { appId: profile, brand: 'feishu', identities: { bot: { available: true, status: 'ready' }, user: { openId } } } });
+  f.stubWith(nested('ou_' + 'b'.repeat(32)));
+  assert.match(f.local(['publish', '--publication', f.publication]).stderr, /identity mismatch/);
+  f.stubWith({ auth: { appId: profile, brand: 'feishu', identities: { bot: { available: true, status: 'ready' } } } });
+  assert.match(f.local(['publish', '--publication', f.publication]).stderr, /identity mismatch/);
+  assert.equal(f.sends().length, 0);
+  f.stubWith(nested(userId));
+  assert.equal(f.local(['publish', '--publication', f.publication]).status, 0);
+  assert.equal(f.sends().length, 1);
+});

@@ -50,7 +50,9 @@ function cli(config, args, timeout = 55000) {
 }
 export function verifyIdentity(config, timeout) {
   const state = cli(config, ['auth', 'status'], timeout);
-  if (state.appId !== config.profile || state.brand !== 'feishu' || state.userOpenId !== config.userId ||
+  // Newer lark-cli releases report the signed-in user under identities.user instead of the top level.
+  const userOpenId = state.userOpenId ?? state.identities?.user?.openId;
+  if (state.appId !== config.profile || state.brand !== 'feishu' || userOpenId !== config.userId ||
       state.identities?.bot?.available !== true || state.identities?.bot?.status !== 'ready') throw new Error('Provisioned bot/recipient identity mismatch');
   return { appId: state.appId, bot: 'ready' };
 }
@@ -277,7 +279,7 @@ export async function main(args) {
     if (created.status === 'already_accepted') return main(['reconcile', '--date', date]);
     const collectArgs = [
       'collect', '--run', created.run, '--backend', opts.backend, '--browser', opts.browserApp,
-      '--codex-bin', opts.codexBin, '--cua-model', opts.cuaModel,
+      '--codex-bin', opts.codexBin, '--cua-model', opts.cuaModel, '--cdp-endpoint', opts.cdpEndpoint,
     ];
     if (!opts.enableCua) collectArgs.push('--no-cua');
     if (opts.apiKeyFile) collectArgs.push('--api-key-file', opts.apiKeyFile);

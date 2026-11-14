@@ -15,6 +15,7 @@ function makeCollectRunFixture(t, {
   mailEmails = ['newsletter@example.com'],
   blogLinks = ['https://example.com/blog/post-one'],
   blockedBlog = false,
+  karpathyTime = null,
 } = {}) {
   const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'xdaily-mac-collect-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
@@ -81,7 +82,7 @@ function makeCollectRunFixture(t, {
         return {
           href: currentUrl,
           pathname: '/karpathy',
-          items: [{ url: 'https://x.com/karpathy/status/1003', text: 'Synthetic Karpathy post', publishedAt: postTime, links: [] }],
+          items: [{ url: 'https://x.com/karpathy/status/1003', text: 'Synthetic Karpathy post', publishedAt: karpathyTime ?? postTime, links: [] }],
         };
       }
       if (currentUrl.startsWith('https://substack.com/')) {
@@ -552,4 +553,150 @@ test('gpt-6.1-terra Responses API assists empty dynamic blog indexes statelessly
   });
   assert.equal(blockedCalls, 0);
   assert.ok(blockedRes.limitations.some(msg => msg.includes('anti-bot/CAPTCHA')));
+});
+
+const baseDeps = f => ({ browser: f.browser, fetchFeeds: f.fetchFeeds, fetchImpl: f.fetchImpl, clock: f.clock, sleep: f.sleep });
+
+test('Gmail CLI reads no mail unless sendAs positively lists the configured account', async t => {
+  const prevEnv = process.env.GOS_GMAIL_CLI;
+  t.after(() => {
+    if (prevEnv === undefined) delete process.env.GOS_GMAIL_CLI;
+    else process.env.GOS_GMAIL_CLI = prevEnv;
+  });
+  for (const sendAsJson of ['{"sendAs":[]}', '{}', '{"sendAs":[{"sendAsEmail":"other@example.com"}]}']) {
+    const f = makeCollectRunFixture(t, { gmail: { account: 'newsletter@example.com', mode: 'gmail-cli' } });
+    const readMarker = path.join(f.root, 'read-invoked');
+    const fakeCliPath = path.join(f.root, 'fake-gmail.sh');
+    fs.writeFileSync(fakeCliPath, `#!/bin/sh
+if [ "$2" = "sendas" ]; then echo '${sendAsJson}'; exit 0; fi
+touch "${readMarker}"
+echo '{"urls":["https://example.com/newsletter-public-original"]}'
+`, { mode: 0o755 });
+    process.env.GOS_GMAIL_CLI = fakeCliPath;
+    const res = await collectMacRun({ runDir: f.runDir, backend: 'apple-events', maxFollowingPages: 1, maxSearchPages: 1, deps: baseDeps(f) });
+    assert.equal(fs.existsSync(readMarker), false, `mail was read for sendAs ${sendAsJson}`);
+    assert.ok(res.limitations.some(msg => msg.includes('did not confirm newsletter@example.com')), sendAsJson);
+    const sups = JSON.parse(fs.readFileSync(path.join(f.runDir, 'supplements.public.json'), 'utf8'));
+    assert.equal(sups.some(s => s.url.includes('newsletter-public-original')), false);
+  }
+});
+
+function markerDriver(t, { findCgWindowId, screencapture }) {
+  const runDir = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'xdaily-driver-'));
+  t.after(() => fs.rmSync(runDir, { recursive: true, force: true }));
+  const state = { probe: '', title: 'User Visible Page Title', closed: false, titles: [] };
+  const driver = createAppleEventsBrowserDriver({
+    browserApp: 'Dia', runDir, startedAt: '2026-11-14T02:35:00.000Z',
+    clock: () => Date.parse('2026-11-14T02:36:00.000Z'), sleep: async () => {},
+    osascript: (script, argv) => {
+      if (script.includes('make new window')) {
+        state.probe = String(argv[1]).match(/gos-xdaily-bg-[a-f0-9]+/)[0];
+        return 'win-1\ntab-1\n';
+      }
+      if (script.includes('close window id')) { state.closed = true; return 'ok'; }
+      if (script.includes('javascript')) {
+        const js = argv[4];
+        if (js.includes('1 + 1 === 2')) return JSON.stringify({ __ok: true, value: { ok: true, title: state.probe, ready: 'complete' } });
+        const set = js.match(/document\.title = ("(?:[^"\\]|\\.)*")/);
+        if (set) {
+          const prev = state.title;
+          state.title = JSON.parse(set[1]);
+          state.titles.push(state.title);
+          return JSON.stringify({ __ok: true, value: js.includes('return prev') ? prev : true });
+        }
+        return JSON.stringify({ __ok: true, value: true });
+      }
+      return '';
+    },
+    findCgWindowId: (app, marker) => findCgWindowId(marker, state),
+    screencapture,
+  });
+  return { driver, state, runDir };
+}
+
+test('background driver fails closed instead of binding or capturing a window without its own marker', async t => {
+  const unbound = markerDriver(t, { findCgWindowId: () => null, screencapture: () => { throw new Error('must not capture'); } });
+  await assert.rejects(unbound.driver.init(), /No capturable background window/);
+  assert.equal(unbound.state.closed, true);
+
+  const markers = [];
+  const captured = [];
+  const rebound = markerDriver(t, {
+    findCgWindowId: (marker, state) => { markers.push(marker); return marker === state.probe ? '11' : '22'; },
+    screencapture: (cgId, absPath) => {
+      captured.push(cgId);
+      if (cgId === '11') throw new Error('stale window id');
+      fs.writeFileSync(absPath, Buffer.alloc(5000, 0x41));
+    },
+  });
+  await rebound.driver.init();
+  await rebound.driver.screenshot('shot-01', 'https://example.com/');
+  assert.deepEqual(captured, ['11', '22']);
+  assert.match(markers[1], /^gos-xdaily-bg-[a-f0-9]{8}$/);
+  assert.notEqual(markers[1], rebound.state.probe);
+  assert.ok(!markers.includes('User Visible Page Title'));
+  assert.equal(rebound.state.title, 'User Visible Page Title');
+
+  const lost = markerDriver(t, {
+    findCgWindowId: (marker, state) => (marker === state.probe ? '11' : null),
+    screencapture: () => { throw new Error('stale window id'); },
+  });
+  await lost.driver.init();
+  await assert.rejects(lost.driver.screenshot('shot-01', 'https://example.com/'), /refusing to capture another window/);
+  assert.equal(lost.state.title, 'User Visible Page Title');
+  assert.equal(fs.existsSync(path.join(lost.runDir, 'evidence', 'shot-01.jpg')), false);
+});
+
+test('CUA assist stops without another request once a click leaves the blog origin', async t => {
+  const f = makeCollectRunFixture(t, { blogLinks: [] });
+  let clicked = false;
+  const origEval = f.browser.evalJson;
+  f.browser.evalJson = async js => {
+    if (js.includes('el.click()')) { clicked = true; return true; }
+    if (clicked && js.includes('blocked') && js.includes('candidates')) {
+      return { href: 'https://accounts.example.org/private', title: 'Private', blocked: false, textSample: 'PRIVATE-PAGE-TEXT', candidates: [] };
+    }
+    return origEval(js);
+  };
+  let views = 0;
+  f.browser.captureViewBase64 = async () => { views += 1; return Buffer.from('VIEW').toString('base64'); };
+  const bodies = [];
+  const res = await collectMacRun({
+    runDir: f.runDir, backend: 'apple-events', maxFollowingPages: 1, maxSearchPages: 1,
+    deps: { ...baseDeps(f), apiKey: 'test-openai-key',
+      responsesFetch: async (_url, init) => {
+        bodies.push(init.body);
+        return new Response(JSON.stringify({ output: [{ type: 'function_call', call_id: 'c1', name: 'inspect_blog_index',
+          arguments: JSON.stringify({ action: 'click', selector: 'a.external', scroll_y: null, article_urls: [] }) }] }),
+          { status: 200, headers: { 'content-type': 'application/json' } });
+      } },
+  });
+  assert.equal(clicked, true);
+  assert.equal(bodies.length, 1);
+  assert.equal(views, 1);
+  assert.ok(!bodies.join('').includes('PRIVATE-PAGE-TEXT'));
+  assert.ok(res.limitations.some(msg => msg.includes('navigated outside its configured origin')));
+});
+
+test('unusable CUA key is a recorded limitation that survives resume, and observed post times are not rewritten', async t => {
+  const saved = {};
+  for (const name of ['OPENAI_API_KEY', 'CODEX_API_KEY', 'OPENAI_API_KEY_FILE']) { saved[name] = process.env[name]; delete process.env[name]; }
+  t.after(() => { for (const [name, value] of Object.entries(saved)) if (value !== undefined) process.env[name] = value; });
+
+  const futureTime = '2026-11-14T02:50:00.000Z';
+  const f = makeCollectRunFixture(t, { blogLinks: [], karpathyTime: futureTime });
+  const jsonKeyFile = path.join(f.root, 'auth.json');
+  fs.writeFileSync(jsonKeyFile, JSON.stringify({ OPENAI_API_KEY: 'not-a-codex-key-line' }));
+  const res = await collectMacRun({
+    runDir: f.runDir, backend: 'apple-events', maxFollowingPages: 1, maxSearchPages: 1, apiKeyFile: jsonKeyFile,
+    deps: { ...baseDeps(f), responsesFetch: async () => { throw new Error('no key, no request'); } },
+  });
+  assert.ok(res.limitations.some(msg => /had no usable API key \(auth\.json: Expected one CODEX_API_KEY/.test(msg)), JSON.stringify(res.limitations));
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(f.runDir, 'collection-limitations.json'), 'utf8')), res.limitations);
+
+  const bundle = JSON.parse(fs.readFileSync(path.join(f.runDir, 'browser-capture.json'), 'utf8'));
+  assert.equal(bundle.feeds.karpathy.pages[0].items[0].publishedAt, futureTime);
+
+  const resumed = await collectMacRun({ runDir: f.runDir, backend: 'apple-events', deps: { clock: f.clock } });
+  assert.deepEqual(resumed.limitations, res.limitations);
 });

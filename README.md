@@ -164,7 +164,7 @@ fallback) and fail closed on account mismatch. See
 ## Repository map
 
 - `cli.mjs`: offline entry points plus separately gated collection / send.
-- `deployment/mac/mac-collect.mjs`: foreground-safe dedicated-window macOS collector (`apple-events`, optional `gpt-6.1-terra` Responses API blog-index assist, and strict account-isolated Gmail discovery) plus `codex-exec` compatibility backend.
+- `deployment/mac/mac-collect.mjs`: foreground-safe dedicated-window macOS collector (`apple-events`, optional `gpt-6.1-terra` Responses API blog-index assist, and strict account-isolated Gmail discovery) plus `codex-exec` compatibility backend. The same flow runs on other systems through `deployment/mac/cdp-browser-driver.mjs` (`--backend cdp`, loopback DevTools endpoint, gated by `collectionEnabled` and `X_DAILY_ALLOW_COLLECTION=1`).
 - `run-daily.mjs`: the shared local and production pipeline for the content store, selection, backlog, composition and telemetry. Mac `local daily` calls this function directly, reviews its output and returns a publication for the sole sender. See [docs/DESIGN-FUNNEL-AND-CURATION.md](docs/DESIGN-FUNNEL-AND-CURATION.md).
 - `content-store.mjs`, `curation.mjs`, `telemetry.mjs`, `config/taste.json`: dual-layer original/card archive, 4-signal prior scorer (`author + source SNR + social/engagement - noise`), cross-day high-value backlog pool (`backlog-pool.json`), rolling source health, funnel telemetry and operational alert cards.
 - `browser-artifacts.mjs`, `thread-discovery.mjs`: evidence imports and thread context.

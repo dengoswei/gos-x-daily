@@ -1,10 +1,10 @@
-// Scripted Mac source collector for Gos X Daily.
-// Drives an authorized macOS browser (Apple Events or headless codex exec) plus public feeds,
+// Scripted source collector for Gos X Daily. One collection flow, pluggable browser drivers:
+// apple-events (macOS Dia/Chromium), cdp (any OS, loopback DevTools endpoint) or codex exec; plus public feeds,
 // writing browser-capture.json, feed-capture.json, sources.json, sources.merged.json, and supplements.public.json.
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { createHash, randomBytes } from 'node:crypto';
+import { randomBytes } from 'node:crypto';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { makeRuntime, validateWatchProfiles, defaultWatchProfiles } from '../../runtime.mjs';
 import { publicUrlRefusal } from '../../feed.mjs';
@@ -13,10 +13,13 @@ import { fetchFeeds } from '../../tools/fetch-feeds.mjs';
 import { collectionFromBrowserArtifacts, verifyEvidenceFiles } from '../../browser-artifacts.mjs';
 import { main as runCli } from '../../cli.mjs';
 import { readApiKey } from './openai-draft.mjs';
+import { createCdpBrowserDriver, recordScreenshotEvidence, loopbackCdpEndpoint, DEFAULT_CDP_ENDPOINT } from './cdp-browser-driver.mjs';
+import { assertCollectionAllowed } from '../../runtime.mjs';
 
 const CAPTURE_WINDOW_GUARD_MS = 115 * 60 * 1000;
 const SUPPLEMENTS_MAX_CHARS = 32000;
 const BLOG_MAX_CHARS = 24000;
+const LIMITATIONS_FILE = 'collection-limitations.json';
 const SOCIAL_DISCOVERY_HOSTS = new Set(['x.com', 'www.x.com', 'twitter.com', 'www.twitter.com', 't.co']);
 const NON_ARTICLE_HOSTS = /(?:^|\.)(?:x\.com|twitter\.com|youtube\.com|youtu\.be|instagram\.com|facebook\.com|linkedin\.com)$/i;
 
@@ -80,10 +83,15 @@ const X_EXTRACT_SCRIPT = `
   return { href: location.href, pathname: location.pathname, items };
 `;
 
+const BACKENDS = ['apple-events', 'cdp', 'codex-exec'];
+// Apple Events exists only on macOS; everywhere else the signed-in browser is reached over CDP.
+export const defaultBackend = (platform = process.platform) => (platform === 'darwin' ? 'apple-events' : 'cdp');
+
 export function parseCollectFlags(argv = [], { requireRun = true } = {}) {
   let runDir = null;
-  let backend = 'apple-events';
+  let backend = defaultBackend();
   let browserApp = 'Dia';
+  let cdpEndpoint = DEFAULT_CDP_ENDPOINT;
   let codexBin = 'codex';
   let includeGmailLeads = true;
   let cuaModel = 'gpt-6.1-terra';
@@ -101,6 +109,7 @@ export function parseCollectFlags(argv = [], { requireRun = true } = {}) {
     if (arg === '--run') { runDir = path.resolve(takeValue(i, arg)); i++; }
     else if (arg === '--backend') { backend = takeValue(i, arg); i++; }
     else if (arg === '--browser') { browserApp = takeValue(i, arg); i++; }
+    else if (arg === '--cdp-endpoint') { cdpEndpoint = loopbackCdpEndpoint(takeValue(i, arg)).origin; i++; }
     else if (arg === '--codex-bin') { codexBin = takeValue(i, arg); i++; }
     else if (arg === '--cua-model') { cuaModel = takeValue(i, arg); i++; }
     else if (arg === '--api-key-file') { apiKeyFile = path.resolve(takeValue(i, arg)); i++; }
@@ -108,11 +117,11 @@ export function parseCollectFlags(argv = [], { requireRun = true } = {}) {
     else if (arg === '--no-gmail') { includeGmailLeads = false; }
     else throw new Error(`Unknown collection option: ${arg}`);
   }
-  if (!['apple-events', 'codex-exec'].includes(backend)) {
+  if (!BACKENDS.includes(backend)) {
     throw new Error(`Unsupported collection backend: ${backend}`);
   }
   if (requireRun && !runDir) throw new Error('Use --run RUN_DIR to collect into a frozen run directory');
-  return { runDir, backend, browserApp, codexBin, includeGmailLeads, cuaModel, enableCua, apiKeyFile };
+  return { runDir, backend, browserApp, cdpEndpoint, codexBin, includeGmailLeads, cuaModel, enableCua, apiKeyFile };
 }
 
 export function validateGmailConfig(gmail) {
@@ -132,17 +141,14 @@ export function validateGmailConfig(gmail) {
   return { account, mode, query, maxMessages };
 }
 
-function sanitizeXItems(items, clock = Date.now) {
-  const nowMs = clock();
+function sanitizeXItems(items) {
   const seen = new Map();
   for (const item of items ?? []) {
     if (!item?.url || !item?.text?.trim()) continue;
     let publishedAt = null;
     if (item.publishedAt) {
       const parsed = Date.parse(item.publishedAt);
-      if (Number.isFinite(parsed)) {
-        publishedAt = new Date(Math.min(parsed, nowMs)).toISOString();
-      }
+      if (Number.isFinite(parsed)) publishedAt = new Date(parsed).toISOString();
     }
     const links = (item.links ?? []).filter(link => {
       try {
@@ -164,32 +170,29 @@ function defaultOsascript(script, args = []) {
   }).trim();
 }
 
+// Binds only the window whose title carries our marker; any other window of the browser is the user's.
 function defaultFindCgWindowId(browserApp, markerTitle = '') {
+  if (!markerTitle) return null;
   const swiftCode = `
 import CoreGraphics
 let target = CommandLine.arguments.count > 1 ? CommandLine.arguments[1] : "Dia"
 let marker = CommandLine.arguments.count > 2 ? CommandLine.arguments[2] : ""
 if let list = CGWindowListCopyWindowInfo([.excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] {
   var matched: Int? = nil
-  var fallback: Int? = nil
   for w in list {
     let owner = (w[kCGWindowOwnerName as String] as? String) ?? ""
-    guard owner == target || owner.localizedCaseInsensitiveContains(target) else { continue }
+    guard !marker.isEmpty, owner == target else { continue }
     guard (w[kCGWindowLayer as String] as? Int) == 0 else { continue }
     guard let bounds = w[kCGWindowBounds as String] as? [String: Any],
           let h = bounds["Height"] as? Double, h >= 400,
           let num = w[kCGWindowNumber as String] as? Int else { continue }
     let name = (w[kCGWindowName as String] as? String) ?? ""
-    if !marker.isEmpty && name.contains(marker) {
+    if name.contains(marker) {
       matched = num
       break
     }
-    let onscreen = (w[kCGWindowIsOnscreen as String] as? Bool) ?? true
-    if fallback == nil && onscreen {
-      fallback = num
-    }
   }
-  if let num = matched ?? fallback {
+  if let num = matched {
     print(num)
   }
 }`;
@@ -366,12 +369,20 @@ export function createAppleEventsBrowserDriver({
     throw new Error(`${browserApp} JS evaluation failed (${last?.reason ?? 'unknown'})`);
   }
 
-  function refreshCgWindowId() {
-    const titleRes = tryEvalJson('return document.title');
-    const marker = titleRes.ok && titleRes.value ? String(titleRes.value) : '';
-    const next = findCgWindowId(browserApp, marker);
-    if (next) cgWindowId = next;
-    return cgWindowId;
+  // A page title can equal a title in one of the user's windows, so re-bind through a fresh unique marker.
+  async function rebindCgWindowId() {
+    const marker = `gos-xdaily-bg-${randomBytes(4).toString('hex')}`;
+    const swapped = tryEvalJson(`const prev = document.title; document.title = ${JSON.stringify(marker)}; return prev;`);
+    if (!swapped.ok) throw new Error(`Cannot re-bind the dedicated ${browserApp} window (${swapped.reason}); refusing to capture another window.`);
+    try {
+      await sleep(300);
+      const next = findCgWindowId(browserApp, marker);
+      if (!next) throw new Error(`Dedicated ${browserApp} window was not found by its marker; refusing to capture another window.`);
+      cgWindowId = next;
+      return next;
+    } finally {
+      tryEvalJson(`document.title = ${JSON.stringify(String(swapped.value ?? ''))}; return true;`);
+    }
   }
 
   async function captureViewBase64() {
@@ -380,7 +391,7 @@ export function createAppleEventsBrowserDriver({
       try {
         screencapture(cgWindowId, tmpPath);
       } catch {
-        screencapture(refreshCgWindowId(), tmpPath);
+        screencapture(await rebindCgWindowId(), tmpPath);
       }
       return fs.readFileSync(tmpPath).toString('base64');
     } finally {
@@ -391,23 +402,14 @@ export function createAppleEventsBrowserDriver({
   async function screenshot(id, urlForManifest) {
     if (!/^[a-zA-Z0-9-]{1,100}$/.test(id)) throw new Error(`Invalid evidence ID: ${id}`);
     await sleep(200);
-    const relPath = `evidence/${id}.jpg`;
-    const absPath = path.join(runDir, relPath);
+    const absPath = path.join(runDir, `evidence/${id}.jpg`);
     try {
       screencapture(cgWindowId, absPath);
     } catch {
-      screencapture(refreshCgWindowId(), absPath);
+      screencapture(await rebindCgWindowId(), absPath);
     }
-    let bytes = fs.readFileSync(absPath);
-    if (bytes.length < 4096) {
-      screencapture(refreshCgWindowId(), absPath);
-      bytes = fs.readFileSync(absPath);
-    }
-    const sha256 = createHash('sha256').update(bytes).digest('hex');
-    const capturedAt = new Date(Math.max(clock(), Date.parse(startedAt) + 1000)).toISOString();
-    const entry = { id, kind: 'screenshot', url: urlForManifest, capturedAt, path: relPath, sha256 };
-    evidence.push(entry);
-    return entry;
+    if (fs.statSync(absPath).size < 4096) screencapture(await rebindCgWindowId(), absPath);
+    return recordScreenshotEvidence(evidence, { runDir, id, url: urlForManifest, startedAt, clock, capture: () => {} });
   }
 
   async function close() {
@@ -450,7 +452,7 @@ async function collectXFeedPages(driver, { targetUrl, evPrefix, evidenceUrl = ta
     await sleep(250);
     const evId = `${evPrefix}-${String(step).padStart(2, '0')}`;
     await driver.screenshot(evId, evidenceUrl);
-    const items = sanitizeXItems(extracted?.items, clock);
+    const items = sanitizeXItems(extracted?.items);
     for (const item of items) uniqueUrls.add(item.url);
     pages.push({ evidenceId: evId, items });
     if (stopAtCount && uniqueUrls.size >= stopAtCount && step >= Math.min(4, maxPages)) break;
@@ -654,10 +656,19 @@ async function inspectBlogIndexForCua(driver) {
   `);
 }
 
+function leftBlogOrigin(snapshot, blog) {
+  const allowed = new Set([new URL(blog.indexUrl).origin, new URL(blog.articleBaseUrl).origin]);
+  try { return !allowed.has(new URL(snapshot?.href).origin); } catch { return true; }
+}
+
 async function assistBlogIndexWithTerra(driver, blog, { cua, sleep = defaultSleep, fetchImpl = globalThis.fetch, limitations }) {
   const snapshot = await inspectBlogIndexForCua(driver);
   if (snapshot?.blocked) {
     limitations.push(`Blog ${blog.name} index gated by anti-bot/CAPTCHA page; skipped without CUA bypass.`);
+    return [];
+  }
+  if (leftBlogOrigin(snapshot, blog)) {
+    limitations.push(`Blog ${blog.name} index landed outside its configured origin; skipped without sending the page to CUA.`);
     return [];
   }
   const responsesFetch = cua.responsesFetch ?? fetchImpl;
@@ -752,6 +763,10 @@ async function assistBlogIndexWithTerra(driver, blog, { cua, sleep = defaultSlee
         limitations.push(`Blog ${blog.name} index gated by anti-bot/CAPTCHA page; skipped without CUA bypass.`);
         return [];
       }
+      if (leftBlogOrigin(updatedSnapshot, blog)) {
+        limitations.push(`Blog ${blog.name} CUA action navigated outside its configured origin; stopped without sending that page to CUA.`);
+        return [];
+      }
       input.push({
         type: 'function_call_output',
         call_id: call.call_id,
@@ -783,6 +798,9 @@ async function collectBlogs(driver, blogs, { clock = Date.now, sleep = defaultSl
       const basePath = new URL(blog.articleBaseUrl).pathname;
       await driver.openUrl(blog.indexUrl, { settleMs: 3000, waitSelector: `main a[href*="${basePath}"], article a[href]` });
       let discovered = await extractBlogLinksFromDom(driver, blog);
+      if (discovered.length === 0 && cua?.enabled && !cua.apiKey) {
+        limitations.push(`Blog ${blog.name} index yielded 0 links and CUA (${cua.model}) had no usable API key (${cua.keyProblem}).`);
+      }
       if (discovered.length === 0 && cua?.enabled && cua?.apiKey) {
         try {
           discovered = await assistBlogIndexWithTerra(driver, blog, { cua, sleep, fetchImpl, limitations });
@@ -926,8 +944,8 @@ function defaultGmailCli({ account, query, maxMessages = 3 }) {
   }
   const sendAsList = sendAsParsed.sendAs ?? sendAsParsed.data?.sendAs ?? [];
   const lower = account.toLowerCase();
-  if (Array.isArray(sendAsList) && sendAsList.length > 0 && !sendAsList.some(entry => String(entry?.sendAsEmail || '').toLowerCase() === lower)) {
-    throw new Error(`Gmail CLI active mailbox does not include ${account}`);
+  if (!Array.isArray(sendAsList) || !sendAsList.some(entry => String(entry?.sendAsEmail || '').toLowerCase() === lower)) {
+    throw new Error(`Gmail CLI did not confirm ${account} as the active mailbox`);
   }
   return execFileSync(bin, ['readonly', 'read', '--max', String(maxMessages), '--json', '--', query], execOpts);
 }
@@ -1212,6 +1230,7 @@ async function collectViaDriver(driver, {
     discoveredUrls.push(...substack.discoveredUrls, ...gmailUrls);
     const supplements = await collectPublicSupplements(discoveredUrls, { limit: supplementsLimit, fetchImpl, clock });
     writePrivateJson(path.join(runDir, 'supplements.public.json'), supplements);
+    writePrivateJson(path.join(runDir, LIMITATIONS_FILE), limitations);
     return { bundle, supplementsCount: supplements.length, limitations };
   } finally {
     await driver.close?.();
@@ -1225,18 +1244,18 @@ function defaultCodexExec(codexBin, args, cwd) {
 }
 
 function resolveOpenAiApiKey({ apiKeyFile, deps }) {
-  if (typeof deps?.apiKey === 'string' && deps.apiKey.trim()) return deps.apiKey.trim();
-  const candidates = [apiKeyFile, process.env.OPENAI_API_KEY_FILE || null].filter(Boolean);
-  for (const file of candidates) {
-    if (fs.existsSync(file)) {
-      try {
-        const key = readApiKey(file);
-        if (key) return key;
-      } catch { /* ignore unreadable optional key file */ }
+  if (typeof deps?.apiKey === 'string' && deps.apiKey.trim()) return { key: deps.apiKey.trim(), problem: null };
+  const problems = [];
+  for (const file of [apiKeyFile, process.env.OPENAI_API_KEY_FILE || null].filter(Boolean)) {
+    try {
+      return { key: readApiKey(file), problem: null };
+    } catch (error) {
+      problems.push(`${path.basename(file)}: ${error.code ?? error.message}`);
     }
   }
   const envKey = (process.env.OPENAI_API_KEY || process.env.CODEX_API_KEY || '').trim();
-  return envKey || null;
+  if (envKey) return { key: envKey, problem: null };
+  return { key: null, problem: problems.join('; ') || 'no key file or environment key configured' };
 }
 
 function buildCodexCollectionPrompt({ runDir, date, startedAt, windowStartIso, frozenSources, includeGmailLeads, gmailConfig }) {
@@ -1256,8 +1275,9 @@ function buildCodexCollectionPrompt({ runDir, date, startedAt, windowStartIso, f
 
 export async function collectMacRun({
   runDir,
-  backend = 'apple-events',
+  backend = defaultBackend(),
   browserApp = 'Dia',
+  cdpEndpoint = DEFAULT_CDP_ENDPOINT,
   codexBin = 'codex',
   maxFollowingPages = 14,
   maxSearchPages = 6,
@@ -1277,8 +1297,8 @@ export async function collectMacRun({
   const runJson = readJson(path.join(realRunDir, 'run.json'));
   const frozenSources = readJson(path.join(realRunDir, 'sources.frozen.json'));
   const gmailConfig = includeGmailLeads ? validateGmailConfig(frozenSources.gmail) : null;
-  const apiKey = enableCua ? resolveOpenAiApiKey({ apiKeyFile, deps }) : null;
-  const cua = { enabled: enableCua, model: cuaModel, apiKey, responsesFetch: deps.responsesFetch };
+  const resolvedKey = enableCua ? resolveOpenAiApiKey({ apiKeyFile, deps }) : { key: null, problem: null };
+  const cua = { enabled: enableCua, model: cuaModel, apiKey: resolvedKey.key, keyProblem: resolvedKey.problem, responsesFetch: deps.responsesFetch };
   const runtimeFile = path.join(realRunDir, 'runtime.json');
   const runtimeConfig = readJson(runtimeFile);
   const startedAt = new Date(runJson.startedAt).toISOString();
@@ -1294,23 +1314,33 @@ export async function collectMacRun({
     ? Promise.resolve({ output: feedBundlePath, reused: true })
     : (deps.fetchFeeds ?? fetchFeeds)(frozenSources, realRunDir, { fetchImpl, clock: () => new Date(clock()) });
 
-  let limitations = [];
+  const limitationsPath = path.join(realRunDir, LIMITATIONS_FILE);
+  let limitations = fs.existsSync(limitationsPath) ? readJson(limitationsPath) : [];
   let supplementsCount = fs.existsSync(path.join(realRunDir, 'supplements.public.json'))
     ? readJson(path.join(realRunDir, 'supplements.public.json')).length
     : 0;
 
   if (!fs.existsSync(browserBundlePath)) {
-    if (backend === 'apple-events') {
-      const driver = deps.browser ?? createAppleEventsBrowserDriver({
-        browserApp,
-        runDir: realRunDir,
-        startedAt,
-        osascript: deps.osascript,
-        findCgWindowId: deps.findCgWindowId,
-        screencapture: deps.screencapture,
-        clock,
-        sleep,
-      });
+    if (backend === 'apple-events' || backend === 'cdp') {
+      // The repository keeps CDP collection off by default; this backend needs both explicit switches.
+      if (backend === 'cdp') {
+        assertCollectionAllowed(makeRuntime({ ...runtimeConfig, sources: frozenSources }), { authorized: true, env: deps.env ?? process.env });
+      }
+      const driver = deps.browser ?? (backend === 'cdp'
+        ? createCdpBrowserDriver({
+          endpoint: cdpEndpoint, runDir: realRunDir, startedAt,
+          fetchImpl: deps.cdpFetch, WebSocketImpl: deps.WebSocketImpl, clock, sleep,
+        })
+        : createAppleEventsBrowserDriver({
+          browserApp,
+          runDir: realRunDir,
+          startedAt,
+          osascript: deps.osascript,
+          findCgWindowId: deps.findCgWindowId,
+          screencapture: deps.screencapture,
+          clock,
+          sleep,
+        }));
       const collected = await collectViaDriver(driver, {
         runDir: realRunDir,
         startedAt,
