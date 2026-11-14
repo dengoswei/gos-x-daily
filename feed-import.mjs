@@ -30,6 +30,7 @@ export function validateFeedConfig(sources) {
     https(feed.url, `feed ${feed.name}`);
     if (!kinds.includes(feed.kind)) throw new Error(`Feed ${feed.name} kind must be one of ${kinds.join('|')}`);
     if (!Number.isInteger(feed.maxItems) || feed.maxItems < 1 || feed.maxItems > 100) throw new Error(`Feed ${feed.name} maxItems must be an integer 1..100`);
+    if (feed.staleAfterDays !== undefined && (!Number.isInteger(feed.staleAfterDays) || feed.staleAfterDays < 1)) throw new Error(`Feed ${feed.name} staleAfterDays must be a positive integer`);
   }
   return feeds;
 }
@@ -415,7 +416,8 @@ export function mergeFeedDocuments(runtime, collection, bundle, baseDir, { maxTe
     }
     undated += kept.filter(entry => !entry.publishedAt).length;
     items.push(...kept);
-    checks[feed.name] = { attempted: true, items: kept.length, status: 'ok' };
+    checks[feed.name] = { attempted: true, items: kept.length, status: 'ok', newestEntryAt: dated[0]?.publishedAt ?? null,
+      ...(Number.isFinite(feed.staleAfterDays) ? { staleAfterDays: feed.staleAfterDays } : {}) };
     evidence.push({ id: document.id, kind: 'fetched_document', path: document.path, sha256: document.sha256, url: document.url, capturedAt: document.fetchedAt });
   }
   if (undated) warnings.push(`feeds: ${undated} item(s) lack publication dates; do not claim all are fresh`);

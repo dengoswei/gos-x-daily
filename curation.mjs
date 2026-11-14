@@ -196,6 +196,10 @@ export function scoreTopicPrior(topic, taste = loadTasteConfig(), { reportDate =
     domainAdjustment = taste.domainWeights?.intelligenceTheoryBoost ?? 1.0;
   }
 
+  // A trusted author vouches for on-topic work; off-topic shares keep only a fraction of the boost.
+  const offTopic = domainTag === 'general' && (topic.category ?? 'general') === 'general';
+  if (offTopic && authorBoost > 0) authorBoost = Number((authorBoost * (taste.authors?.offTopicFactor ?? 0.25)).toFixed(2));
+
   // (5) Noise penalties (commercial case studies, hiring/giveaways)
   const textSample = `${topic.title ?? ''} ${(topic.cards ?? []).map(c => c.tldr ?? '').join(' ')}`;
   let noisePenalty = 0;
@@ -217,6 +221,9 @@ export function scoreTopicPrior(topic, taste = loadTasteConfig(), { reportDate =
       const daysHeld = Math.max(0, Math.round((reportMs - Date.parse(topic.firstSeenDate)) / DAY_MS));
       ageDecay = Number((daysHeld * (taste.backlog?.dailyDecay ?? 0.6)).toFixed(2));
     }
+    // A blog index lists its archive; without a publication date the post cannot be assumed fresh.
+    const undatedBlog = !topic.publishedAt && !topic.fromBacklog && (topic.cards ?? []).length > 0 && (topic.cards ?? []).every(c => c.kind === 'blog');
+    if (undatedBlog) ageDecay = Math.max(ageDecay, taste.backlog?.undatedBlogDecay ?? 4.0);
     const pubMs = topic.publishedAt ? Date.parse(topic.publishedAt) : NaN;
     if (Number.isFinite(pubMs) && Number.isFinite(reportMs)) {
       const pubAgeDays = (reportMs - pubMs) / DAY_MS;
@@ -246,6 +253,7 @@ export function scoreTopicPrior(topic, taste = loadTasteConfig(), { reportDate =
       ...(Object.keys(m).length ? { metrics: m } : {}),
       ...(noisePenalty ? { noisePenalty } : {}),
       ...(ageDecay ? { ageDecay } : {}),
+      ...(offTopic && authorTier !== 'standard' ? { authorOffTopic: true } : {}),
       ...(llmCarryBonus ? { llmCarryBonus } : {}),
     },
   };

@@ -91,12 +91,14 @@ $$S_{\text{prior}} = W_{\text{author}} + W_{\text{source}} + W_{\text{social}} +
 1. **Author Confidence ($W_{\text{author}}$)**:
    - **Tier-S (`+6.0`)**: Known high-signal researchers, systems authors, and essayists (e.g., `karpathy`, `srush_nlp`, `tri_dao`, `simonw`, `emollick`, `natolambert`, `rasbt`, `cHHillee`, `lianminzheng`, `woosuk_k`, `lilianweng`, etc.). Guaranteed entry into Stage 2 review even for standalone text threads.
    - **Tier-A (`+3.5`)**: Official lab/framework accounts (`OpenAI`, `AnthropicAI`, `GoogleDeepMind`, `Alibaba_Qwen`, `deepseek_ai`, `vllm_project`, `lmsysorg`, `PyTorch`).
+   - **Off-topic shares**: when a topic is neither a core pillar domain nor a non-`general` category, the author boost is scaled by `authors.offTopicFactor` (default `0.25`), so a trusted author's unrelated link does not outrank on-topic work.
+   - **Undated blog captures**: a blog-index article with no publication date takes `backlog.undatedBlogDecay` (default `4.0`), because an index lists its archive and unknown age is not freshness.
 2. **Source Signal-to-Noise Ratio ($W_{\text{source}}$)**:
    - **Tier-S (`+5.0`, low-frequency, high-density)**: `Anthropic Engineering`, `Thinking Machines`, `Lilian Weng`, `SemiAnalysis`, `Chips and Cheese`, `Interconnects`, `Ahead of AI`, `Latent Space`, `simonwillison.net`, `oneusefulthing.org`, `pragmaticengineer.com`.
    - **Tier-A (`+3.0`, official primary releases)**: `OpenAI News`, `Google DeepMind blog`, `Claude Blog`, `Qwen blog`, `PyTorch blog`, `vLLM releases`, `SGLang releases`, `Hugging Face blog`.
    - **Tier-B (`+1.0`, high-volume aggregators)**: `Hugging Face Daily Papers`, `smol.ai AI News`, generic `arxiv.org` — low base prior; must earn promotion through social/upvote signals or strong Stage 2 substance.
 3. **Social & Community Endorsement ($W_{\text{social}}$, log-scaled)**:
-   - **In-network `fanIn`**: `+2.8` per additional independent X post/source sharing the same subject (capped at 4 extra posts) — the strongest signal within a curated following graph.
+   - **In-network `fanIn`**: `+2.8` per additional independent X post/source sharing the same subject (capped at 4 extra posts; the fetched original behind a post's own link is not an extra share) — the strongest signal within a curated following graph.
    - **X Native Metrics** (`readFeedDom`): Log-scaled weighted engagement (`bookmarks * 4 + reposts * 3 + replies * 2 + likes + views / 500`), prioritizing bookmarks and reposts over raw likes.
    - **Community Upvotes / Stars**: Log-scaled `upvotes` and `numComments` on HF Daily Papers plus `githubStars`.
 4. **Noise Penalties ($P_{\text{noise}}$)**:

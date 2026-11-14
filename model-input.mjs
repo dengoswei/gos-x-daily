@@ -1,8 +1,8 @@
-// Browser-only subscription, mail and Xiaohongshu bodies remain in the local store.
-// Public originals discovered through them enter separately as public supplements.
+// Mail and Xiaohongshu bodies remain in the local store; public originals discovered
+// through them enter separately as public supplements.
 import { isAbstractLandingUrl } from './content-store.mjs';
 
-const shareableKinds = new Set(['x', 'watch', 'feed', 'blog', 'supplement']);
+const shareableKinds = new Set(['x', 'watch', 'feed', 'blog', 'supplement', 'substack']);
 export const isModelShareableCard = card => shareableKinds.has(card.kind) || card.modelShareable === true;
 
 function fetchedArticleIsFullText(fetchedArticle) {

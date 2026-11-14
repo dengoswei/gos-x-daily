@@ -174,7 +174,9 @@ test('merge filters to the lookback window, caps newest first and records proven
   assert.equal(merged.stats.feeds, merged.sources.feeds.length);
   assert.equal(merged.stats.feeds, 4);
   assert.deepEqual(merged.checks.feeds['Synthetic Missing'], { attempted: false, items: 0, status: 'not_fetched' });
-  assert.deepEqual(merged.checks.feeds['Synthetic Atom'], { attempted: true, items: 1, status: 'ok' });
+  const { newestEntryAt, ...atomCheck } = merged.checks.feeds['Synthetic Atom'];
+  assert.deepEqual(atomCheck, { attempted: true, items: 1, status: 'ok' });
+  assert.ok(Number.isFinite(Date.parse(newestEntryAt)));
   assert.ok(merged.warnings.includes('Synthetic Missing was not fetched in this run'));
   const fetched = merged.provenance.evidence.filter(entry => entry.kind === 'fetched_document');
   assert.deepEqual(fetched.map(entry => entry.id), ['feed-1', 'feed-2', 'feed-3']);

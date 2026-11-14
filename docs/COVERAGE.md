@@ -96,6 +96,8 @@ and limitations. Use these reporting statuses (not importer status enums):
   capped, interrupted, excerpt-only or has unresolved date/image limits.
 - `unavailable` / 不可用: an actual attempt yielded no usable evidence; give the reason.
 - `unattempted` / 未尝试: no actual attempt; give the reason. Do not relabel unavailable.
+  A blog index that was opened and yielded no article link is `empty`, with the
+  cause recorded in `collection-limitations.json`, not `unattempted`.
 
 Reconcile actual capture/read evidence with normalized importer counts. A source
 with `stats.blogs: 0`, an absent normalized entry or an importer “未采集” warning

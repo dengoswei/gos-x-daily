@@ -31,9 +31,11 @@ test('review retains composer evidence tails and distinguishes observed links fr
 });
 
 test('legacy and logged-in source bodies require public provenance before entering model packets', () => {
-  for (const kind of ['backlog', 'mail', 'xhs', 'substack']) {
+  for (const kind of ['backlog', 'mail', 'xhs']) {
     assert.equal(modelTopic({ cards: [{ kind, text: 'private source', url: 'https://example.com/private' }] }), null);
   }
+  const subscribed = modelTopic({ cards: [{ kind: 'substack', title: 'Subscribed post', url: 'https://writer.substack.com/p/post', sourceLabel: 'substack' }] });
+  assert.deepEqual(subscribed.allObservedUrls, ['https://writer.substack.com/p/post']);
   const safe = modelTopic({ title: 'private title', primaryUrl: 'https://example.com/private',
     allObservedUrls: ['https://example.com/private'], cards: [
       { kind: 'xhs', title: 'private title', url: 'https://example.com/private' },
@@ -60,7 +62,7 @@ test('Mac production uses the repository funnel and reviews its output without a
   fs.writeFileSync(runFile, JSON.stringify({ ...JSON.parse(fs.readFileSync(runFile)), revisionOf: 'synthetic-original-message' }));
   const sourcesPath = path.join(f.runDir, 'sources.json');
   const sources = JSON.parse(fs.readFileSync(sourcesPath, 'utf8'));
-  sources.sources.substack.push({ url: 'https://example.com/private-subscription', text: 'PRIVATE-SUBSCRIPTION-MUST-STAY-LOCAL', publishedAt: sources.collectedAt });
+  sources.sources.substack.push({ url: 'https://example.com/subscribed-post', text: 'Subscribed post preview', publishedAt: sources.collectedAt });
   sources.sources.xiaohongshu = [{ profileId: 'synthetic', notes: [{ url: 'https://example.com/private-note', text: 'PRIVATE-XHS-MUST-STAY-LOCAL' }] }];
   fs.writeFileSync(sourcesPath, JSON.stringify(sources));
   fs.writeFileSync(path.join(f.runDir, 'sources.frozen.json'), JSON.stringify({ watchProfiles: [], blogs: [], feeds: [] }));
@@ -75,7 +77,7 @@ test('Mac production uses the repository funnel and reviews its output without a
     const all = body.messages.map(row => row.content).join('\n');
     const last = body.messages.at(-1).content;
     assert.ok(!all.includes(f.secret));
-    assert.ok(!/PRIVATE-(SUBSCRIPTION|XHS)-MUST-STAY-LOCAL|private-subscription|private-note/.test(all));
+    assert.ok(!/PRIVATE-XHS-MUST-STAY-LOCAL|private-note/.test(all));
     let content;
     if (!body.response_format && all.includes('two-stage curation')) {
       calls.push('screen');
@@ -111,7 +113,10 @@ test('Mac production uses the repository funnel and reviews its output without a
   assert.ok(packet.excerpts.some(row => row.id.startsWith('pipeline-accounting-') && row.text.includes('sourceCandidateCount')));
   assert.ok(packet.excerpts.some(row => row.text.includes('same_day_revision') && row.text.includes('replacement takes effect')));
   assert.ok(packet.materialsPaths.includes('run.json'));
-  assert.match(fs.readFileSync(path.join(f.runDir, 'digest.publication.md'), 'utf8'), /一篇成稿可能综合多个来源/);
+  const published = fs.readFileSync(path.join(f.runDir, 'digest.publication.md'), 'utf8');
+  assert.match(published, /一篇成稿可能综合多个来源/);
+  assert.equal(published.split('### 运行自检').length - 1, 1, 'the self-check panel is published once');
+  assert.ok(published.indexOf('### 运行自检') > published.indexOf('## 差异补充'));
   assert.deepEqual(fs.readdirSync(f.ledgerDir), ledgerBefore);
   const again = await runProductionDaily({ ...f, dataDir: path.join(root, 'state-data'), keyFile, fetchImpl });
   assert.equal(again.publication, result.publication);

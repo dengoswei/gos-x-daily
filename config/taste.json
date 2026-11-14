@@ -60,7 +60,12 @@
         "SemiAnalysis",
         "Chips and Cheese",
         "Interconnects",
-        "Ahead of AI"
+        "Ahead of AI",
+        "Simon Willison",
+        "Latent Space",
+        "One Useful Thing",
+        "The Pragmatic Engineer",
+        "Karpathy blog"
       ],
       "domains": [
         "anthropic.com/engineering",
@@ -86,7 +91,14 @@
         "PyTorch blog",
         "vLLM releases",
         "SGLang releases",
-        "Hugging Face blog"
+        "Hugging Face blog",
+        "Dwarkesh Podcast",
+        "Import AI",
+        "Sebastian Raschka blog",
+        "Deep (Learning) Focus",
+        "arg min",
+        "Windows On Theory",
+        "Google Research blog"
       ],
       "domains": [
         "openai.com",

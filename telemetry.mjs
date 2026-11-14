@@ -213,6 +213,9 @@ export function appendAcceptedReceipt(receiptsFile, { date, messageId, chatId = 
 /**
  * Extracts normalized per-source status records from a collection (browser + feeds + supplements).
  */
+// Past this age a feed's newest entry suggests a moved or abandoned feed URL rather than a quiet author.
+const DEFAULT_FEED_STALE_DAYS = 120;
+
 export function collectSourceStatuses(collection, { configuredSources = null, extraSources = [] } = {}) {
   const rows = [];
   const checks = collection?.checks ?? {};
@@ -295,6 +298,11 @@ export function collectSourceStatuses(collection, { configuredSources = null, ex
       kind: 'feed',
       status,
       items: f?.items ?? 0,
+      ...(f?.newestEntryAt && Number.isFinite(Date.parse(f.newestEntryAt)) ? {
+        newestEntryAt: f.newestEntryAt,
+        newestEntryAgeDays: Math.max(0, Math.floor((Date.parse(collection?.collectedAt ?? collection?.provenance?.startedAt ?? new Date().toISOString()) - Date.parse(f.newestEntryAt)) / 86400000)),
+        staleAfterDays: f.staleAfterDays ?? DEFAULT_FEED_STALE_DAYS,
+      } : {}),
       ...(errMatch ? { error: errMatch[1].trim() } : f?.status && f.status !== 'ok' ? { error: f.status } : {}),
     });
   }
@@ -435,6 +443,16 @@ export function buildTelemetry({ date = shanghaiDate(), sources = [], funnel = {
         reason: `${s.label} 本次抓取失败 (${s.error ?? 'error'})`,
       });
     }
+  }
+
+  const staleFeeds = sources.filter(s => s.kind === 'feed' && Number.isFinite(s.newestEntryAgeDays) && s.newestEntryAgeDays > (s.staleAfterDays ?? DEFAULT_FEED_STALE_DAYS));
+  if (staleFeeds.length > 0) {
+    recommendations.push({
+      level: 'WARN',
+      target: 'stale_feeds',
+      label: '疑似失效 Feed',
+      reason: `${staleFeeds.map(s => `${s.label}（最新条目距今 ${s.newestEntryAgeDays} 天）`).join('、')}：feed 地址可能已迁移或停更`,
+    });
   }
 
   const xRow = sources.find(s => s.id === 'xFollowing');

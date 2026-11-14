@@ -485,7 +485,7 @@ async function collectSubstackFeed(driver, { clock = Date.now, sleep = defaultSl
           try {
             const u = new URL(a.getAttribute('href'), location.origin);
             if (u.protocol !== 'https:' || u.username || u.password) continue;
-            if (!/\\/p\\/|\\/home\\/post\\/|\\/note\\//.test(u.pathname)) continue;
+            if (!/\\/p\\/|\\/home\\/post\\//.test(u.pathname)) continue;
             u.hash = '';
             if (seen.has(u.href)) continue;
             const container = a.closest('article, [role="article"], div[class*="feed"], div[class*="item"], div[class*="post"]') || a.parentElement;
@@ -506,7 +506,11 @@ async function collectSubstackFeed(driver, { clock = Date.now, sleep = defaultSl
         if (item.publishedAt && Number.isFinite(Date.parse(item.publishedAt)) && Date.parse(item.publishedAt) <= nowMs) {
           publishedAt = new Date(item.publishedAt).toISOString();
         }
-        if (/\.substack\.com\/p\//.test(item.url)) discoveredUrls.add(item.url);
+        // Publications on custom domains keep the /p/ post path; substack.com itself only hosts notes and reader views.
+        try {
+          const post = new URL(item.url);
+          if (post.hostname !== 'substack.com' && post.pathname.startsWith('/p/')) discoveredUrls.add(item.url);
+        } catch {}
         return { url: item.url, text: item.text.trim(), publishedAt, links: [] };
       });
       pages.push({ evidenceId: evId, items });
@@ -792,8 +796,10 @@ async function assistBlogIndexWithTerra(driver, blog, { cua, sleep = defaultSlee
 
 async function collectBlogs(driver, blogs, { clock = Date.now, sleep = defaultSleep, fetchImpl = globalThis.fetch, cua = null, limitations }) {
   const out = [];
+  const checks = {};
   let counter = 0;
   for (const blog of blogs ?? []) {
+    const check = checks[blog.name] = { attempted: true, status: 'ok', indexLinks: 0, items: 0 };
     try {
       const basePath = new URL(blog.articleBaseUrl).pathname;
       await driver.openUrl(blog.indexUrl, { settleMs: 3000, waitSelector: `main a[href*="${basePath}"], article a[href]` });
@@ -808,6 +814,11 @@ async function collectBlogs(driver, blogs, { clock = Date.now, sleep = defaultSl
           limitations.push(`Blog ${blog.name} CUA (${cua.model}) error: ${cuaError.message}`);
         }
       }
+      check.indexLinks = (discovered ?? []).length;
+      if (check.indexLinks === 0) {
+        check.status = 'no_candidates';
+        limitations.push(`Blog ${blog.name} index yielded 0 article links under ${blog.articleBaseUrl}; the site layout or articleBaseUrl may have changed.`);
+      }
       for (const artUrl of (discovered ?? []).slice(0, blog.maxArticles ?? 3)) {
         await driver.openUrl(artUrl, { settleMs: 3000, waitSelector: 'article, main, time[datetime]' });
         const art = await driver.evalJson(`
@@ -817,7 +828,13 @@ async function collectBlogs(driver, blogs, { clock = Date.now, sleep = defaultSl
           const container = document.querySelector('article, main') || document.body;
           const text = (container ? container.innerText : '').trim().slice(0, ${BLOG_MAX_CHARS});
           let pub = document.querySelector('time[datetime]')?.getAttribute('datetime') || null;
-          if (!pub) pub = document.querySelector('meta[property="article:published_time"], meta[name="pubdate"], meta[name="date"]')?.getAttribute('content') || null;
+          if (!pub) pub = document.querySelector('meta[property="article:published_time"], meta[itemprop="datePublished"], meta[name="pubdate"], meta[name="date"]')?.getAttribute('content') || null;
+          if (!pub) {
+            for (const node of document.querySelectorAll('script[type="application/ld+json"]')) {
+              const hit = (node.textContent || '').match(/"datePublished"\\s*:\\s*"([^"]+)"/);
+              if (hit) { pub = hit[1]; break; }
+            }
+          }
           const links = [];
           const seen = new Set();
           for (const a of (container ? container.querySelectorAll('a[href]') : [])) {
@@ -840,12 +857,14 @@ async function collectBlogs(driver, blogs, { clock = Date.now, sleep = defaultSl
         const evId = `blog-${String(counter).padStart(2, '0')}`;
         await driver.screenshot(evId, artObj.href);
         out.push({ blog: blog.name, url: artObj.href, text: art.text, publishedAt, links: art.links, evidenceId: evId });
+        check.items += 1;
       }
     } catch (error) {
+      check.status = 'failed';
       limitations.push(`Blog ${blog.name} capture error: ${error.message}`);
     }
   }
-  return out;
+  return { items: out, checks };
 }
 
 function filterPublicNewsletterUrls(rawHrefs) {
@@ -1086,6 +1105,12 @@ async function fetchPublicSupplement(rawUrl, { fetchImpl = globalThis.fetch, clo
   }
 }
 
+// Timeline links alone can fill every supplement slot, so subscribed posts get a reserved share at the front.
+export function orderSupplementQueue({ subscriptionUrls = [], timelineUrls = [], mailUrls = [], limit = 12 } = {}) {
+  const reserved = Math.ceil(limit / 3);
+  return [...subscriptionUrls.slice(0, reserved), ...timelineUrls, ...subscriptionUrls.slice(reserved), ...mailUrls];
+}
+
 async function collectPublicSupplements(urls, { limit = 12, fetchImpl = globalThis.fetch, clock = Date.now } = {}) {
   const candidates = [...new Set(urls)].slice(0, Math.max(limit * 2, 18));
   const supplements = [];
@@ -1191,7 +1216,7 @@ async function collectViaDriver(driver, {
 
     const substack = await collectSubstackFeed(driver, { clock, sleep, limitations });
     const xiaohongshu = await collectXiaohongshu(driver, frozenSources.xiaohongshuProfiles ?? [], { sleep, limitations });
-    const blogs = await collectBlogs(driver, frozenSources.blogs ?? [], { clock, sleep, fetchImpl, cua, limitations });
+    const { items: blogs, checks: blogChecks } = await collectBlogs(driver, frozenSources.blogs ?? [], { clock, sleep, fetchImpl, cua, limitations });
     const gmailUrls = includeGmailLeads && gmailConfig
       ? await discoverGmailPublicUrls(driver, { gmailConfig, gmailCli, sleep, limitations })
       : [];
@@ -1216,18 +1241,19 @@ async function collectViaDriver(driver, {
         ...(substack.feed ? { substack: substack.feed } : {}),
       },
       blogs,
+      blogChecks,
       xiaohongshu,
       deepArticles: [],
     };
     writePrivateJson(path.join(runDir, 'browser-capture.json'), bundle);
 
-    const discoveredUrls = [];
+    const timelineUrls = [];
     for (const page of [...xFollowing.pages, ...xSearch.pages, ...Object.values(watchFeeds).flatMap(f => f.pages ?? [])]) {
       for (const item of page.items ?? []) {
-        for (const link of item.links ?? []) discoveredUrls.push(link.href);
+        for (const link of item.links ?? []) timelineUrls.push(link.href);
       }
     }
-    discoveredUrls.push(...substack.discoveredUrls, ...gmailUrls);
+    const discoveredUrls = orderSupplementQueue({ subscriptionUrls: substack.discoveredUrls, timelineUrls, mailUrls: gmailUrls, limit: supplementsLimit });
     const supplements = await collectPublicSupplements(discoveredUrls, { limit: supplementsLimit, fetchImpl, clock });
     writePrivateJson(path.join(runDir, 'supplements.public.json'), supplements);
     writePrivateJson(path.join(runDir, LIMITATIONS_FILE), limitations);

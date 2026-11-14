@@ -97,8 +97,9 @@ export function preparePublication(runDir, revisionOf) {
   const revised = revisionOf
     ? body.replace(/^(# X AI 日报 [^\n]+)\n/, '$1\n' + Number(sources.date.slice(5, 7)) + ' 月 ' + Number(sources.date.slice(-2)) + ' 日修订版。本版替代今天此前的日报。\n')
     : body;
+  // The self-check panel is rendered once, inside the audit section that the coverage evidence binds.
   const markdown = revised + '\n\n本次采集范围以本次冻结的来源与时间窗口为准。\n\n' +
-    telemetry.replace(/^- /gm, '') + '\n\n' + scopeNote + '\n\n' + sources.digestMarker + '\n\n## 差异补充\n\n' + coverage + '\n';
+    sources.digestMarker + '\n\n## 差异补充\n\n' + coverage + '\n';
   fs.writeFileSync(path.join(runDir, 'digest.publication.md'), markdown, { mode: 0o600 });
 
   const urls = [...new Set(citedUrls(body))];

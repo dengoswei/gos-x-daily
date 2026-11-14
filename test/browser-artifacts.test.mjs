@@ -108,14 +108,18 @@ test('source URLs, evidence IDs, timestamps, active tab and failure states are v
 
 test('official articles and configured notes preserve evidence and enforce source limits', () => {
   const bundle = fixture();
-  bundle.blogs = [{ blog: 'Anthropic Engineering', url: 'https://www.anthropic.com/engineering/synthetic', text: 'Synthetic article', evidenceId: 'blog' }];
+  bundle.blogs = [{ blog: 'Anthropic Engineering', url: 'https://www.anthropic.com/research/synthetic', text: 'Synthetic article', evidenceId: 'blog' }];
   bundle.evidence.push(evidence('blog', bundle.blogs[0].url));
   const profile = config.xiaohongshuProfiles[0];
   bundle.evidence.push(evidence('profile', profile.url));
   const notes = [1, 2, 3].map(i => ({ url: `https://www.xiaohongshu.com/explore/synthetic${i}`, text: 'Synthetic note', publishedAt: `2026-10-${String(10 + i)}T12:00:00Z`, evidenceId: `note-${i}` }));
   for (const note of notes) bundle.evidence.push(evidence(note.evidenceId, note.url));
   bundle.xiaohongshu = [{ profileId: profile.profileId, evidenceId: 'profile', notes }];
+  // The collector's own item count is never trusted; only that the index was attempted.
+  bundle.blogChecks = { 'Anthropic Engineering': { attempted: true, status: 'ok', items: 99 }, 'Claude Blog': { attempted: true, status: 'no_candidates', items: 0 } };
   const collection = convert(bundle);
+  assert.deepEqual(collection.checks.blogs, { 'Anthropic Engineering': { attempted: true, items: 1, status: 'ok' },
+    'Claude Blog': { attempted: true, items: 0, status: 'no_candidates' } });
   assert.equal(collection.stats.blogs, 1);
   assert.equal(collection.stats.xiaohongshu, 2);
   assert.equal(collection.sources.xiaohongshu[0].notes[0].url, notes[2].url);

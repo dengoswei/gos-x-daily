@@ -522,7 +522,8 @@ export function buildContentStore(collection, storeDir, { softHistory = null, su
       publishedAt: lead.publishedAt ?? sorted.find(c => c.publishedAt)?.publishedAt ?? null,
       ...(lead.paperPublishedAt ? { paperPublishedAt: lead.paperPublishedAt } : {}),
       firstSeenDate: collection?.date ?? null,
-      fanIn: sorted.length,
+      // A supplement is the fetched original behind a link, so it never counts as an extra share.
+      fanIn: Math.max(1, sorted.filter(c => c.kind !== 'supplement').length),
       sources: [...new Set(sorted.map(c => c.sourceLabel))],
       ...(Object.keys(mergedMetrics).length ? { metrics: mergedMetrics } : {}),
       contentStatus: bestStatus,

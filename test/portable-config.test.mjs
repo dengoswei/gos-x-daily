@@ -38,8 +38,10 @@ test('example sources use generic blog indexes and the broad-AI public feed list
     [['Anthropic Engineering', 'html-index'], ['Claude Blog', 'html-index'], ['Thinking Machines', 'html-index']]);
   assert.deepEqual(sources.feeds.map(feed => feed.name), ['Hugging Face Daily Papers', 'OpenAI News', 'Google DeepMind blog', 'Google AI blog',
     'Hugging Face blog', 'Qwen blog', 'Interconnects', 'Ahead of AI', 'Lilian Weng', 'smol.ai AI News', 'PyTorch blog', 'NVIDIA Developer blog',
-    'SemiAnalysis', 'Chips and Cheese', 'vLLM releases', 'SGLang releases']);
-  for (const feed of sources.feeds) assert.deepEqual(Object.keys(feed).sort(), ['kind', 'maxItems', 'name', 'url']);
+    'SemiAnalysis', 'Chips and Cheese', 'vLLM releases', 'SGLang releases', 'Simon Willison', 'Latent Space', 'One Useful Thing',
+    'The Pragmatic Engineer', 'Dwarkesh Podcast', 'Import AI', 'Karpathy blog', 'Sebastian Raschka blog', 'Deep (Learning) Focus', 'arg min',
+    'Windows On Theory', 'Google Research blog']);
+  for (const feed of sources.feeds) assert.deepEqual(Object.keys(feed).filter(key => key !== 'staleAfterDays').sort(), ['kind', 'maxItems', 'name', 'url']);
   assert.equal(validateFeedConfig(sources), sources.feeds);
 });
 

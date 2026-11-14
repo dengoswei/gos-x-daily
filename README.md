@@ -139,7 +139,9 @@ profile (`[]`, `0`, `{ attempted: false }` when it is not configured).
 ### Feeds and blog indexes
 
 `feeds` in the sources file lists public feeds as `{ name, url, kind, maxItems }`
-with `kind` one of `rss`, `atom` or `hf-daily-papers`. The example list is broad
+with `kind` one of `rss`, `atom` or `hf-daily-papers`. The self-check panel warns
+when a feed's newest entry is older than `staleAfterDays` (default 120), which
+usually means the feed URL moved; raise it per feed for authors who post rarely. The example list is broad
 across AI research, products, tooling and opinion. Any GitHub project's releases
 can be added the same way with `https://github.com/<owner>/<repo>/releases.atom`
 and `"kind": "atom"`.

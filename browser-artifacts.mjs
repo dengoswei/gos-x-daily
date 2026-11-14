@@ -116,6 +116,8 @@ export function collectionFromBrowserArtifacts(runtime, bundle) {
       found = mergeItems(found, (page.items ?? []).map(raw => item(raw, page.evidenceId, predicate)));
     }
     if (group === 'xFollowing' && feed.status !== 'ok') throw new Error(`X Following unavailable: ${feed.status}`);
+    // Notes are short social posts, not subscribed articles.
+    if (group === 'substack') found = found.filter(value => !new URL(value.url).pathname.includes('/note/'));
     const undated = found.filter(value => !value.publishedAt).length;
     if (!profile) found = found.filter(value => !value.publishedAt || (Date.parse(value.publishedAt) >= Date.parse(window.start) && Date.parse(value.publishedAt) < Date.parse(window.end)));
     else {
@@ -152,6 +154,13 @@ export function collectionFromBrowserArtifacts(runtime, bundle) {
       blogs.push(item(raw, raw.evidenceId, url => url.origin === base.origin && url.pathname.startsWith(base.pathname) && url.pathname !== base.pathname));
     }
     if (candidates.length > (blog.maxArticles ?? 3)) warnings.push(`${blog.name} capped at ${blog.maxArticles ?? 3} articles`);
+    const reported = bundle.blogChecks?.[blog.name];
+    if (reported?.attempted === true) {
+      const accepted = blogs.filter(entry => entry.blog === blog.name).length;
+      checks.blogs ??= {};
+      checks.blogs[blog.name] = { attempted: true, items: accepted,
+        status: reported.status === 'failed' ? 'failed' : accepted > 0 ? 'ok' : 'no_candidates' };
+    }
   }
   if ((bundle.blogs ?? []).some(raw => !(runtime.sources.blogs ?? []).some(blog => blog.name === raw.blog))) throw new Error('Artifact contains an unconfigured blog');
   const xiaohongshu = [];

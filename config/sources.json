@@ -1,6 +1,11 @@
 {
   "watchProfiles": [
-    { "handle": "karpathy", "name": "Karpathy", "required": true, "latest": 10 }
+    {
+      "handle": "karpathy",
+      "name": "Karpathy",
+      "required": true,
+      "latest": 10
+    }
   ],
   "xiaohongshuProfiles": [],
   "blogs": [
@@ -8,14 +13,15 @@
       "name": "Anthropic Engineering",
       "type": "html-index",
       "indexUrl": "https://www.anthropic.com/engineering",
-      "articleBaseUrl": "https://www.anthropic.com/engineering/",
+      "articleBaseUrl": "https://www.anthropic.com/research/",
+      "articlePattern": "^/research/(?!team/)[^/]+/?$",
       "maxArticles": 3
     },
     {
       "name": "Claude Blog",
       "type": "html-index",
-      "indexUrl": "https://claude.com/blog",
-      "articleBaseUrl": "https://claude.com/blog/",
+      "indexUrl": "https://claude.com/resources/articles",
+      "articleBaseUrl": "https://claude.com/resources/articles/",
       "maxArticles": 3
     },
     {
@@ -79,7 +85,8 @@
       "name": "Lilian Weng",
       "url": "https://lilianweng.github.io/index.xml",
       "kind": "rss",
-      "maxItems": 10
+      "maxItems": 10,
+      "staleAfterDays": 365
     },
     {
       "name": "smol.ai AI News",
@@ -101,7 +108,7 @@
     },
     {
       "name": "SemiAnalysis",
-      "url": "https://semianalysis.com/feed/",
+      "url": "https://newsletter.semianalysis.com/feed",
       "kind": "rss",
       "maxItems": 10
     },
@@ -121,6 +128,78 @@
       "name": "SGLang releases",
       "url": "https://github.com/sgl-project/sglang/releases.atom",
       "kind": "atom",
+      "maxItems": 5
+    },
+    {
+      "name": "Simon Willison",
+      "url": "https://simonwillison.net/atom/entries/",
+      "kind": "atom",
+      "maxItems": 5
+    },
+    {
+      "name": "Latent Space",
+      "url": "https://www.latent.space/feed",
+      "kind": "rss",
+      "maxItems": 5
+    },
+    {
+      "name": "One Useful Thing",
+      "url": "https://www.oneusefulthing.org/feed",
+      "kind": "rss",
+      "maxItems": 3
+    },
+    {
+      "name": "The Pragmatic Engineer",
+      "url": "https://newsletter.pragmaticengineer.com/feed",
+      "kind": "rss",
+      "maxItems": 3
+    },
+    {
+      "name": "Dwarkesh Podcast",
+      "url": "https://www.dwarkesh.com/feed",
+      "kind": "rss",
+      "maxItems": 3
+    },
+    {
+      "name": "Import AI",
+      "url": "https://jack-clark.net/feed/",
+      "kind": "rss",
+      "maxItems": 3
+    },
+    {
+      "name": "Karpathy blog",
+      "url": "https://karpathy.bearblog.dev/feed/",
+      "kind": "atom",
+      "maxItems": 3
+    },
+    {
+      "name": "Sebastian Raschka blog",
+      "url": "https://sebastianraschka.com/rss_feed.xml",
+      "kind": "rss",
+      "maxItems": 3
+    },
+    {
+      "name": "Deep (Learning) Focus",
+      "url": "https://cameronrwolfe.substack.com/feed",
+      "kind": "rss",
+      "maxItems": 3
+    },
+    {
+      "name": "arg min",
+      "url": "https://www.argmin.net/feed",
+      "kind": "rss",
+      "maxItems": 3
+    },
+    {
+      "name": "Windows On Theory",
+      "url": "https://windowsontheory.org/feed/",
+      "kind": "rss",
+      "maxItems": 3
+    },
+    {
+      "name": "Google Research blog",
+      "url": "https://research.google/blog/rss/",
+      "kind": "rss",
       "maxItems": 5
     }
   ]

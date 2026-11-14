@@ -182,6 +182,7 @@ test('apple-events collector builds valid browser-capture, imports sources, and 
   assert.equal(bundle.transport, 'gos-supported-browser');
   assert.ok(!bundle.evidence.some(e => e.url.includes('mail.google.com')));
   assert.equal(bundle.blogs.length, 1);
+  assert.equal(Object.values(bundle.blogChecks).filter(check => check.attempted && check.items === 1 && check.status === 'ok').length, 1);
   assert.equal(bundle.xiaohongshu.length, 1);
 
   const merged = JSON.parse(fs.readFileSync(path.join(f.runDir, 'sources.merged.json'), 'utf8'));
@@ -699,4 +700,15 @@ test('unusable CUA key is a recorded limitation that survives resume, and observ
 
   const resumed = await collectMacRun({ runDir: f.runDir, backend: 'apple-events', deps: { clock: f.clock } });
   assert.deepEqual(resumed.limitations, res.limitations);
+});
+
+test('subscribed posts keep a reserved share of the supplement queue ahead of timeline links', async () => {
+  const { orderSupplementQueue } = await import('../deployment/mac/mac-collect.mjs');
+  const subscriptionUrls = Array.from({ length: 6 }, (_, i) => `https://writer${i}.substack.com/p/post`);
+  const timelineUrls = Array.from({ length: 30 }, (_, i) => `https://news.example/story/${i}`);
+  const queue = orderSupplementQueue({ subscriptionUrls, timelineUrls, mailUrls: ['https://mail.example/a'], limit: 12 });
+  assert.deepEqual(queue.slice(0, 4), subscriptionUrls.slice(0, 4));
+  assert.equal(queue[4], timelineUrls[0]);
+  assert.deepEqual(queue.slice(-3), [...subscriptionUrls.slice(4), 'https://mail.example/a']);
+  assert.equal(queue.length, 37);
 });

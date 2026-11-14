@@ -67,10 +67,10 @@ After importing browser and feed bundles into RUN/sources.merged.json, save publ
 supplemental originals as RUN/supplements.public.json. Each array entry has title,
 url, text, publishedAt, sourceLabel and reading limits. Private mail bodies remain
 local discovery evidence. Use their public originals as supplements. The model
-projection (`model-input.mjs`) excludes subscription, Xiaohongshu and mail cards
+projection (`model-input.mjs`) excludes Xiaohongshu and mail cards
 unless explicitly marked model-shareable. Keep these private cards unmarked.
 Authorized public feeds, blogs, verified public
-supplements and user-authorized X/watch timeline text (`https://api.openai.com/v1`,
+supplements and user-authorized X/watch timeline and Substack subscription text (`https://api.openai.com/v1`,
 `store: false`) enter model prompts; screenshots stay local. Do not run ad-hoc
 anonymous X scraping/embed checks that fail with HTTP 403, and do not place private
 snippets in the public-supplement file. Legacy backlog bodies without recorded
