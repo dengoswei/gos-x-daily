@@ -111,13 +111,14 @@ $$S_{\text{prior}} = W_{\text{author}} + W_{\text{source}} + W_{\text{social}} +
 
 ### Stage 2: LLM Qualitative Editorial Assessment (`prompts/v2-select-topics.md`)
 
-The top ~45 candidates ranked by $S_{\text{prior}}$ are evaluated by the LLM (or local Host Agent in `--prepare-only` mode) on three editorial criteria:
+The diversity-guarded shortlist (48 candidates, `buildScreenShortlist`) is evaluated by the LLM (or local Host Agent in `--prepare-only` mode). Each row carries an `excerpt`: the first `screen.excerptChars` (default 1,200) characters of the best available body, preferring a fetched article over the longest observation, plus `excerptSource` and `bodyChars` (`addScreenExcerpts`). Excerpts are read through `loadTopicFullMaterial` over the `modelTopic` projection, so the editor receives exactly the public material the composer would, never mail, Xiaohongshu, out-of-store or unshareable fetched text. The editor judges on three editorial criteria:
 1. **Novel Insight (重要新见解)**: Counter-intuitive findings, newly explained mechanisms, or resolved paradoxes.
 2. **Empirical & Engineering Lesson (一手经验)**: Firsthand training/serving/production trade-offs, ablations, failure modes, and measured costs (distinguishing primary work from secondhand recaps).
 3. **Consequential Judgment (重要判断)**: High-leverage architectural directions, major open-weight releases, or rigorous evaluation benchmarks.
 
 ### Strict `Deep Dive` vs. `Quick Hits` Boundary
 - **`Deep Dive` (`tier: "deep"`, 5–8 items)**: Items whose value requires unpacking `obstacle -> concrete mechanism -> experimental setup & boundary`. Diversity guard caps any single feed (e.g., Daily Papers) at 2–3 items when other strong sources exist.
+- **Editor-ranked replacement (`replaceAbstractOnlyDeepPapers`)**: `deferred` is the editor's ranked runner-up list (best first, optional `section`). If a selected deep paper is still not full text after enrichment, it is replaced by the editor's highest-ranked eligible runner-up that has, or can be fetched to, full text (at most 2 replacements and 2 on-demand fetches). A candidate the editor did not rank is never substituted, whatever its prior score; with no eligible runner-up the editor's pick stays. The heuristic selector has no editor and falls back to its own prior ranking; an explicit `--selected-topics` plan is never adjusted. Every swap or kept pick is recorded in `prepare-state.json` as `selectionAdjustments`.
 - **`Quick Hits / 快讯速览` (`tier: "quick"`, 0–5 items, rendered first)**: **Strictly** for items whose entire value fits in 1–2 crisp sentences without methodological exposition (routine product betas, UI connectors, minor SDK/framework point releases). **Research papers are never dumped into Quick Hits as overflow.**
 
 ---

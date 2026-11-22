@@ -80,13 +80,17 @@ export function parseSelectedPlanPayload(payload, validTopicIds) {
     });
   }
   if (!out.length) throw new Error('Topic selector returned 0 selected topics');
+  // `deferred` is the editor's ranked runner-up list (best first); Map order keeps that rank.
   const deferred = new Map();
+  const deferredSections = new Map();
   for (const d of Array.isArray(payload?.deferred) ? payload.deferred : []) {
-    if (d && validTopicIds.has(d.topicId) && !seen.has(d.topicId)) {
+    if (d && validTopicIds.has(d.topicId) && !seen.has(d.topicId) && !deferred.has(d.topicId)) {
       deferred.set(d.topicId, String(d.reason ?? 'High-value runner-up deferred for backlog').trim());
+      if (DEEP_SECTIONS.has(d.section)) deferredSections.set(d.topicId, d.section);
     }
   }
   out.deferredMap = deferred;
+  out.deferredSections = deferredSections;
   return out;
 }
 
@@ -231,11 +235,15 @@ export function selectTopicsHeuristic(topics, { maxDeep = 7, maxQuick = 4, maxPe
 }
 
 /**
- * Replaces abstract-only selected Deep Dive papers when an unselected full-text
- * non-robotics technical source with strong prior score is available.
+ * Replaces a selected Deep Dive paper whose full text could not be retrieved.
+ * When an editor chose (`alternates` given), only the editor's own ranked runner-ups
+ * are eligible, in the editor's order; with no eligible alternate the editor's pick stays.
+ * The heuristic selector has no editor, so it falls back to its own prior ranking.
  */
 export async function replaceAbstractOnlyDeepPapers(selectedPlan, storeTopics, {
   sortedForSelection = storeTopics,
+  alternates = null,
+  alternateSections = new Map(),
   modelsFile = null,
   storeDir,
   fetchImpl = globalThis.fetch,
@@ -256,49 +264,70 @@ export async function replaceAbstractOnlyDeepPapers(selectedPlan, storeTopics, {
       weakDeepIndices.push(i);
     }
   }
-  if (!weakDeepIndices.length) return { replaced: 0 };
+  const adjustments = [];
+  if (!weakDeepIndices.length) return { replaced: 0, adjustments };
 
   const pickedIds = new Set(selectedPlan.map(p => p.topicId));
-  const pool = sortedForSelection.filter(c =>
+  const eligible = c => c &&
     !pickedIds.has(c.topicId) &&
     c.dedupStatus !== 'seen_recently' &&
     c.category !== 'case_study_pr' &&
     !isRoboticsEmbodiedTopic(c) &&
-    !(!c.fromBacklog && (c.curationSignals?.ageDecay ?? 0) >= 6.0) &&
-    (c.priorScore ?? 0) >= minPriorScore,
-  );
+    !(!c.fromBacklog && (c.curationSignals?.ageDecay ?? 0) >= 6.0);
+  const editorRanked = Array.isArray(alternates);
+  const byId = new Map(sortedForSelection.map(c => [c.topicId, c]));
+  const pool = editorRanked
+    ? alternates.map(id => byId.get(id)).filter(eligible)
+    : sortedForSelection.filter(c => eligible(c) && (c.priorScore ?? 0) >= minPriorScore);
 
   let replaced = 0;
   let onDemandEnrichCount = 0;
   for (const idx of weakDeepIndices) {
     if (replaced >= maxReplacements) break;
-    let winner = pool.find(c => !pickedIds.has(c.topicId) && getProjected(c.topicId)?.contentStatus === 'full_text');
-    if (!winner && storeDir) {
+    const isFull = c => getProjected(c.topicId)?.contentStatus === 'full_text';
+    const tryFetch = async c => {
+      if (!storeDir || onDemandEnrichCount >= 2) return false;
+      onDemandEnrichCount += 1;
+      await enrichTopicsWithFullText(storeTopics, storeDir, { topicIds: [c.topicId], maxFetches: 1, fetchImpl });
+      return isFull(c);
+    };
+    let winner = null;
+    if (editorRanked) {
+      // Preserve the editor's rank: fetch a higher-ranked alternate before taking a lower one.
       for (const c of pool) {
+        if (pickedIds.has(c.topicId)) continue;
+        if (isFull(c) || await tryFetch(c)) { winner = c; break; }
+      }
+    } else {
+      winner = pool.find(c => !pickedIds.has(c.topicId) && isFull(c)) ?? null;
+      for (const c of winner ? [] : pool) {
+        if (pickedIds.has(c.topicId) || isFull(c)) continue;
+        if (await tryFetch(c)) { winner = c; break; }
         if (onDemandEnrichCount >= 2) break;
-        if (pickedIds.has(c.topicId) || getProjected(c.topicId)?.contentStatus === 'full_text') continue;
-        onDemandEnrichCount += 1;
-        await enrichTopicsWithFullText(storeTopics, storeDir, { topicIds: [c.topicId], maxFetches: 1, fetchImpl });
-        if (getProjected(c.topicId)?.contentStatus === 'full_text') {
-          winner = c;
-          break;
-        }
       }
     }
-    if (!winner) continue;
+    if (!winner) {
+      adjustments.push({ kept: selectedPlan[idx].topicId, reason: editorRanked ? 'no full-text editor alternate' : 'no full-text candidate' });
+      continue;
+    }
     const replacedPlan = selectedPlan[idx];
-    deferredMap.set(replacedPlan.topicId, 'Deferred abstract-only paper in favor of full-text technical source');
+    deferredMap.set(replacedPlan.topicId, 'Deferred abstract-only paper in favor of a full-text runner-up');
+    const editorReason = deferredMap.get(winner.topicId);
+    deferredMap.delete(winner.topicId);
     selectedPlan[idx] = {
       topicId: winner.topicId,
       tier: 'deep',
-      section: sectionForTopic(winner),
+      section: alternateSections.get(winner.topicId) ?? sectionForTopic(winner),
       followUp: winner.dedupStatus === 'follow_up_candidate',
-      reason: 'Promoted full-text technical source over abstract-only paper',
+      reason: editorRanked
+        ? `Editor runner-up promoted over abstract-only paper${editorReason ? `: ${editorReason}` : ''}`
+        : 'Promoted full-text technical source over abstract-only paper',
     };
+    adjustments.push({ replaced: replacedPlan.topicId, with: winner.topicId, source: editorRanked ? 'editor_alternate' : 'prior_ranking' });
     pickedIds.add(winner.topicId);
     replaced += 1;
   }
-  return { replaced };
+  return { replaced, adjustments };
 }
 
 /**
@@ -338,6 +367,31 @@ export function buildScreenShortlist(compactTopics, { limit = 48 } = {}) {
   takeMatching(() => true, limit);
 
   return chosen.sort((a, b) => (b.priorScore ?? 0) - (a.priorScore ?? 0));
+}
+
+export const SCREEN_EXCERPT_CHARS = 1200;
+
+/**
+ * Adds a bounded body excerpt to each shortlisted screening row so the editor judges
+ * substance, not only a title and one-line summary. The excerpt comes from the same
+ * projected material the composer receives (`loadTopicFullMaterial` over `modelTopic`
+ * in model mode), preferring fetched full text, then the longest observation.
+ */
+export function addScreenExcerpts(shortlist, topicById, storeDir, { excerptChars = SCREEN_EXCERPT_CHARS } = {}) {
+  return shortlist.map(row => {
+    const topic = topicById.get(row.topicId);
+    if (!topic || !storeDir || !(excerptChars > 0)) return row;
+    const material = loadTopicFullMaterial(topic, storeDir);
+    const bodies = [
+      ...(material.fetchedFullText?.text ? [{ source: 'fetched_full_text', text: material.fetchedFullText.text }] : []),
+      ...material.observations.map(obs => ({ source: 'observation', text: obs.text ?? '' }))
+        .sort((a, b) => b.text.length - a.text.length),
+    ].map(body => ({ ...body, text: body.text.replace(/\s+/g, ' ').trim() })).filter(body => body.text);
+    if (!bodies.length) return row;
+    const best = bodies[0];
+    const { tldr, ...rest } = row;
+    return { ...rest, excerpt: best.text.slice(0, excerptChars), excerptSource: best.source, bodyChars: best.text.length };
+  });
 }
 
 /**
@@ -530,6 +584,7 @@ export async function runDailyV2({
     let observedUrlSet = null;
     let warnings = [];
     let draftMarkdown = null;
+    let selectionAdjustments = [];
 
     const hasPreparedState = Boolean(existingRunDir && fs.existsSync(path.join(existingRunDir, 'prepare-state.json')));
     const resumingFinalize = Boolean(hasPreparedState && finalizeDigestPath);
@@ -733,10 +788,14 @@ export async function runDailyV2({
       fs.writeFileSync(candidateTopicsPath, JSON.stringify(compactTopics, null, 2) + '\n', { mode: 0o600 });
       // For LLM Stage 2 screening, pass a diversity-guarded top shortlist so AI Infra, Intelligence/Theory,
       // World-Impact Products, and Hamming "Open-Door" essays/cross-domain leads all reach the Chief Editor.
-      const screenShortlist = buildScreenShortlist(compactTopics, { limit: 48 });
+      const screenTopicById = new Map(selectableTopics.map(t => [t.topicId, t]));
+      const shortlisted = buildScreenShortlist(compactTopics, { limit: 48 });
+      const screenShortlist = addScreenExcerpts(shortlisted.length ? shortlisted : compactTopics.slice(0, 48), screenTopicById, storeDir,
+        { excerptChars: taste.screen?.excerptChars ?? SCREEN_EXCERPT_CHARS });
       fs.writeFileSync(selectPromptPath, `${readPrompt('v2-select-topics.md')}\n\n${tagged('topics_json', modelJson(screenShortlist))}\n`, { mode: 0o600 });
 
       const validTopicIds = new Set(selectableTopics.map(t => t.topicId));
+      let selectionSource = 'heuristic';
       if (resumingModels) {
         const saved = JSON.parse(fs.readFileSync(path.join(runDir, 'prepare-state.json'), 'utf8'));
         selectedPlan = saved.selectedPlan;
@@ -745,12 +804,14 @@ export async function runDailyV2({
         const customRaw = JSON.parse(fs.readFileSync(selectedTopicsPath, 'utf8'));
         selectedPlan = parseSelectedPlanPayload(customRaw, validTopicIds);
         deferredMap = selectedPlan.deferredMap ?? new Map();
+        selectionSource = 'explicit';
       } else if (runStage && roles?.screen) {
+        selectionSource = 'editor';
         selectedPlan = await runStage({
           stage: 'screen',
           label: 'v2-select-topics',
           system: readPrompt('v2-select-topics.md'),
-          prompt: tagged('topics_json', modelJson(screenShortlist.length ? screenShortlist : compactTopics.slice(0, 48))),
+          prompt: tagged('topics_json', modelJson(screenShortlist)),
           parse: text => parseSelectionResponse(text, validTopicIds),
         });
         deferredMap = selectedPlan.deferredMap ?? new Map();
@@ -777,13 +838,17 @@ export async function runDailyV2({
           };
 
       if (fetchFullTextOnline && !resumingModels && !selectedTopicsPath) {
-        await replaceAbstractOnlyDeepPapers(selectedPlan, storeTopics, {
+        const replacement = await replaceAbstractOnlyDeepPapers(selectedPlan, storeTopics, {
           sortedForSelection,
+          // An editor's choice is only adjusted with that editor's own ranked runner-ups.
+          alternates: selectionSource === 'editor' ? [...deferredMap.keys()] : null,
+          alternateSections: selectedPlan.deferredSections ?? new Map(),
           modelsFile,
           storeDir,
           fetchImpl,
           deferredMap,
         });
+        selectionAdjustments = replacement.adjustments;
       }
 
       // Assemble complete L0 materials & full observed URL allowlist
@@ -822,6 +887,7 @@ export async function runDailyV2({
         topics: storeTopics,
         selectedPlan,
         deferredEntries: [...deferredMap.entries()],
+        selectionAdjustments,
         backlogStats,
         deepFetchStats,
         observedUrls: [...observedUrlSet],

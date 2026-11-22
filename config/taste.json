@@ -166,5 +166,8 @@
     "maxAgeDays": 365,
     "dailyDecay": 0.6,
     "minPriorScoreToEnter": 5.5
+  },
+  "screen": {
+    "excerptChars": 1200
   }
 }
