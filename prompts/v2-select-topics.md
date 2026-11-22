@@ -43,6 +43,10 @@ Objective priors surface *who* wrote an item and *how much attention* it receive
 3. **World-Scale Impact & Paradigm Shift (真实世界 Impact / 基础范式演进)**: Does this product, open-weight model, scientific AI system, or benchmark genuinely shift what problems humans/agents can solve in the real world?
 4. **Structural Isomorphism ("Open-Door" Clue / 底层相通的跨界启发)**: Even if its surface domain looks distant, does its underlying formulation provide a clean, transferable clue for AI Infra, learning theory, or agent systems?
 
+### Pillar tag
+
+Tag every `selected` item with `pillar`: `infra` (Pillar 1), `intelligence` (Pillar 2), `world_impact` (Pillar 3) or `open_door` (a cross-domain structural-isomorphism pick). The runner tracks the rolling mix of published Deep Dives against the ~15–25% open-door target; tag what the item is, not what would balance the mix.
+
 ### Tier assignment & capacity rules
 
 - **`tier: "deep"` (target 6 to 8 items; use 7–8 slots on strong days)**:
@@ -72,6 +76,7 @@ Return exactly one fenced `json` block and nothing else:
       "topicId": "topic-0001",
       "tier": "deep",
       "section": "Frameworks / Infra",
+      "pillar": "infra",
       "followUp": false,
       "reason": "Concrete empirical finding on long-tail reasoning latency eating token/s gains"
     },
@@ -79,6 +84,7 @@ Return exactly one fenced `json` block and nothing else:
       "topicId": "topic-0008",
       "tier": "quick",
       "section": "Quick Hits / 快讯速览",
+      "pillar": "world_impact",
       "followUp": false,
       "reason": "Useful collaborative spreadsheet beta explainable in one sentence"
     }

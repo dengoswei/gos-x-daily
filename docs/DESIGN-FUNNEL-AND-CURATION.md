@@ -163,3 +163,14 @@ The reviewer runs once and returns `{ verdict, issues, advisories, revisedMarkdo
 - `revise` is only for material problems (fact, number, date, meaning-changing mistranslation, unsupported claim, unobserved URL, leaked pipeline phrasing). The revision must keep the title, every heading, text outside items, the item count, order and sections; it may not add a link to an item (removing one together with its claim is allowed); it must change at least one item; and it lists at least one `issues` entry per changed item. Unchanged items are compared after per-line trimming, as the validator and renderer read them.
 - A violation is a parse error: the stage runner retries once with the error message, then fails the run instead of publishing an unbounded rewrite.
 - `editorial-review.json` records `revisionContract: "bounded-v1"`; the publication gate (`validateReview`) re-proves the bound for such records. Records written before this contract carry no marker and remain readable for reconciliation. Because the review prompt changed, a review checkpoint recorded before this contract no longer matches its prompt hash and is refused on resume (fail-closed); such an in-flight run needs a fresh model-artifacts directory.
+
+---
+
+## 8. Measuring the Mix (`editorial-stats.mjs`)
+
+The Stage 2 editor tags each selected item with `pillar` (`infra | intelligence | world_impact | open_door`); an invalid or missing tag falls back to the prior's domain tag, else `unclassified`. Each completed run writes one row per report date to `state/editorial-stats.jsonl` (a rerun replaces its date; rows older than 400 days are pruned):
+
+- **Pillar mix**: published Deep Dives by pillar, plus published Quick Hits. Selected items that did not reach the final text do not count.
+- **Per-source yield**: for each source label, topics ingested → shortlisted → selected → published.
+
+`telemetry.editorialStats` carries the rolling 7-day pillar mix (with shares, `null` when nothing was published) and the 30-day source yield. `npm run stats:editorial -- --data-dir DATA [--as-of YYYY-MM-DD]` prints the same report. Use it to check the ~15–25% open-door target and to tune `taste.json` tiers from data. These numbers are internal: never rendered to readers, never part of health or approval.

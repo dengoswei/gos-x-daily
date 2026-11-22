@@ -46,6 +46,7 @@ import { sha256 } from './review.mjs';
 import { modelTopic } from './model-input.mjs';
 import { sourceCategoryHints } from './source-config.mjs';
 import { evaluateDigestMarkdown } from './editorial-lint.mjs';
+import { PILLARS, buildDailyEditorialStats, appendEditorialStats, rollingEditorialStats } from './editorial-stats.mjs';
 
 const repoRoot = path.dirname(fileURLToPath(import.meta.url));
 const readPrompt = name => fs.readFileSync(path.join(repoRoot, 'prompts', name), 'utf8');
@@ -78,6 +79,7 @@ export function parseSelectedPlanPayload(payload, validTopicIds) {
       section,
       followUp: Boolean(row.followUp),
       reason: String(row.reason ?? '').trim(),
+      ...(PILLARS.includes(row.pillar) ? { pillar: row.pillar } : {}),
     });
   }
   if (!out.length) throw new Error('Topic selector returned 0 selected topics');
@@ -613,6 +615,7 @@ export async function runDailyV2({
     let draftMarkdown = null;
     let selectionAdjustments = [];
     let screenedTopicIds = null;
+    let screenShortlistIds = null;
 
     const hasPreparedState = Boolean(existingRunDir && fs.existsSync(path.join(existingRunDir, 'prepare-state.json')));
     const resumingFinalize = Boolean(hasPreparedState && finalizeDigestPath);
@@ -633,6 +636,7 @@ export async function runDailyV2({
       storeTopics = saved.topics;
       selectedPlan = saved.selectedPlan;
       deferredMap = new Map(saved.deferredEntries ?? []);
+      screenShortlistIds = Array.isArray(saved.screenShortlistIds) ? new Set(saved.screenShortlistIds) : null;
       backlogStats = saved.backlogStats ?? backlogStats;
       deepFetchStats = saved.deepFetchStats;
       observedUrlSet = new Set(saved.observedUrls ?? []);
@@ -821,6 +825,7 @@ export async function runDailyV2({
       const shortlisted = buildScreenShortlist(compactTopics, { limit: 48 });
       const screenShortlist = addScreenExcerpts(shortlisted.length ? shortlisted : compactTopics.slice(0, 48), screenTopicById, storeDir,
         { excerptChars: taste.screen?.excerptChars ?? SCREEN_EXCERPT_CHARS });
+      screenShortlistIds = new Set(screenShortlist.map(row => row.topicId));
       fs.writeFileSync(selectPromptPath, `${readPrompt('v2-select-topics.md')}\n\n${tagged('topics_json', modelJson(screenShortlist))}\n`, { mode: 0o600 });
 
       const validTopicIds = new Set(selectableTopics.map(t => t.topicId));
@@ -918,6 +923,7 @@ export async function runDailyV2({
         selectedPlan,
         deferredEntries: [...deferredMap.entries()],
         selectionAdjustments,
+        screenShortlistIds: [...(screenShortlistIds ?? [])],
         backlogStats,
         deepFetchStats,
         observedUrls: [...observedUrlSet],
@@ -1040,6 +1046,14 @@ export async function runDailyV2({
       backlogEvicted = savedPool.evicted;
     }
 
+    let editorialStats = null;
+    if (persistBacklog) {
+      const statsFile = path.join(workspace.stateDir, 'editorial-stats.jsonl');
+      appendEditorialStats(statsFile, buildDailyEditorialStats({ date: reportDate, topics: storeTopics,
+        shortlistIds: screenShortlistIds, selectedPlan, citedUrls: digestStats.citedUrls }));
+      editorialStats = rollingEditorialStats(statsFile, { asOf: reportDate });
+    }
+
     telemetry = buildTelemetry({
       date: reportDate,
       sources: trackedSources,
@@ -1061,6 +1075,7 @@ export async function runDailyV2({
       },
       stageUsage: usage.report(),
       editorialLint,
+      editorialStats,
       warnings,
       reclaimedLocks,
     });
