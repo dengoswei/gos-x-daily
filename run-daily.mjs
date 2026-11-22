@@ -612,6 +612,7 @@ export async function runDailyV2({
     let warnings = [];
     let draftMarkdown = null;
     let selectionAdjustments = [];
+    let screenedTopicIds = null;
 
     const hasPreparedState = Boolean(existingRunDir && fs.existsSync(path.join(existingRunDir, 'prepare-state.json')));
     const resumingFinalize = Boolean(hasPreparedState && finalizeDigestPath);
@@ -747,6 +748,7 @@ export async function runDailyV2({
           reportDate,
           softHistory,
           maxAgeDays: taste.backlog?.maxAgeDays,
+          undeferredMaxAgeDays: taste.backlog?.undeferredMaxAgeDays,
         });
         backlogStats = mergeBacklogIntoTopics(storeTopics, loadedBacklog.entries, storeDir, { taste, reportDate });
         storeCounts.topics = storeTopics.length;
@@ -834,6 +836,7 @@ export async function runDailyV2({
         selectionSource = 'explicit';
       } else if (runStage && roles?.screen) {
         selectionSource = 'editor';
+        screenedTopicIds = new Set(screenShortlist.map(row => row.topicId));
         selectedPlan = await runStage({
           stage: 'screen',
           label: 'v2-select-topics',
@@ -1019,6 +1022,7 @@ export async function runDailyV2({
 
     const persistBacklog = Boolean(runtimeHooks.recordHistoryOnLocalRun || runtimeHooks.persistBacklogOnLocalRun !== false);
     let savedBacklogCount = 0;
+    let backlogEvicted = null;
     if (persistBacklog) {
       for (const tp of storeTopics) tp._storeDir = storeDir;
       const savedPool = saveBacklogPool(workspace.stateDir, {
@@ -1026,10 +1030,14 @@ export async function runDailyV2({
         topics: storeTopics,
         citedUrls: runtimeHooks.publicationPending ? [] : digestStats.citedUrls,
         deferredTopicIds: deferredMap,
+        // Only an editor's view of the shortlist counts as a screening; heuristics judge nothing.
+        screenedTopicIds,
+        selectedTopicIds: new Set(selectedPlan.map(row => row.topicId)),
         taste,
       });
       for (const tp of storeTopics) delete tp._storeDir;
       savedBacklogCount = savedPool.savedCount;
+      backlogEvicted = savedPool.evicted;
     }
 
     telemetry = buildTelemetry({
@@ -1040,6 +1048,7 @@ export async function runDailyV2({
         backlogRecalled: backlogStats.recalledStandalone,
         backlogAccumulated: backlogStats.accumulatedWithFresh,
         backlogSaved: savedBacklogCount,
+        ...(backlogEvicted ? { backlogEvicted } : {}),
         dedupSkipped7d: storeCounts.dedupSkipped7d,
         dedupFollowUps: storeCounts.dedupFollowUps,
         clusteredTopics: storeCounts.topics,

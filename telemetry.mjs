@@ -518,6 +518,7 @@ export function buildTelemetry({ date = shanghaiDate(), sources = [], funnel = {
       backlogRecalled: funnel.backlogRecalled ?? 0,
       backlogAccumulated: funnel.backlogAccumulated ?? 0,
       backlogSaved: funnel.backlogSaved ?? 0,
+      ...(funnel.backlogEvicted ? { backlogEvicted: funnel.backlogEvicted } : {}),
       dedupSkipped7d: funnel.dedupSkipped7d ?? 0,
       dedupFollowUps: funnel.dedupFollowUps ?? 0,
       clusteredTopics: funnel.clusteredTopics ?? 0,

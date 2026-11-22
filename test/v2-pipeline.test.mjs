@@ -856,17 +856,20 @@ test('4-signal prior curation & rolling evergreen backlog: social metrics parsed
   assert.equal(expiredCheck.expiredCount, 2);
 
   const lastDay = '2027-11-10';
+  // Only the editor-deferred gem keeps the one-year retention; the undeferred lead expired after 30 days.
   const yearOldPool = loadBacklogPool(stateDir, { reportDate: lastDay });
-  assert.equal(yearOldPool.entries.length, 2);
+  assert.equal(yearOldPool.entries.length, 1);
+  assert.equal(yearOldPool.expiredCount, 1);
+  assert.ok(yearOldPool.entries.every(entry => entry.deferredByLlm));
   const recalled = [];
   const recallStoreDir = path.join(dir, 'year-old-store');
   mergeBacklogIntoTopics(recalled, yearOldPool.entries, recallStoreDir, { reportDate: lastDay });
-  assert.ok(recalled.some(topic => !topic.deferredByLlm && topic.priorScore < 5.5));
+  assert.ok(recalled.every(topic => topic.deferredByLlm && topic.priorScore < 5.5), 'a decayed deferred gem is retained despite its score');
   for (const topic of recalled) topic._storeDir = recallStoreDir;
-  assert.equal(saveBacklogPool(stateDir, { reportDate: lastDay, topics: recalled }).savedCount, 2);
+  assert.equal(saveBacklogPool(stateDir, { reportDate: lastDay, topics: recalled }).savedCount, 1);
   const yearExpired = loadBacklogPool(stateDir, { reportDate: '2027-11-11' });
   assert.equal(yearExpired.entries.length, 0);
-  assert.equal(yearExpired.expiredCount, 2);
+  assert.equal(yearExpired.expiredCount, 1);
 });
 
 test('backlog defaults to 1,000 candidates and retains the highest-scoring entries', t => {
