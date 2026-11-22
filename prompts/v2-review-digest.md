@@ -22,6 +22,8 @@ You are reviewing for an **engineering-grounded AI systems & intelligence builde
 - Bloated 450+ character walls of text that cram multiple peripheral sub-topics into one bullet, or defensive strawman negative-disclaimer tails (`不能合并为统一加速倍数`, `不等于整个索引同比例缩小`, `不能将其扩展为……`) when positive scope labels already establish the boundary. Genuine ablation confounds, mathematical assumptions, simulation-vs-real limits, and undisclosed baselines stay in the text.
 - A blank line inside a bullet that detaches its trailing source links.
 
+`<lint_findings>` lists deterministic pattern hits on the draft (`bullet_N[section]:issue`, e.g. length, negative templates, cold codenames, mistranslation). They are leads, not findings: confirm each against the text. A confirmed meaning-changing mistranslation is material; every other confirmed hit is an advisory. Dismiss false hits silently.
+
 Each advisory names the bullet and the observation in one line. When an item has both a material problem and a readability note, fix the material problem and keep the note as an advisory.
 
 ## Bounded revision (one pass, no re-review)

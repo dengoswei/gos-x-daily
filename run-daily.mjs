@@ -45,6 +45,7 @@ import { DEEP_SECTION_ORDER as CANONICAL_DEEP_ORDER, digestLayoutPrompt, QUICK_S
 import { sha256 } from './review.mjs';
 import { modelTopic } from './model-input.mjs';
 import { sourceCategoryHints } from './source-config.mjs';
+import { evaluateDigestMarkdown } from './editorial-lint.mjs';
 
 const repoRoot = path.dirname(fileURLToPath(import.meta.url));
 const readPrompt = name => fs.readFileSync(path.join(repoRoot, 'prompts', name), 'utf8');
@@ -491,6 +492,32 @@ export function validateV2Digest(markdown, { date, observedUrlSet }) {
   };
 }
 
+/**
+ * Every selected topic must reach the reader: at least one item cites one of the topic's
+ * own observed addresses. Merging genuine duplicates into one item that cites both is fine.
+ */
+export function assertSelectedCoverage(markdown, selectedPlan, topicsById) {
+  const cited = new Set(parseDigestStructure(markdown).bullets.flatMap(b => citedUrls(b.text)).map(safeCanonical).filter(Boolean));
+  const missing = [];
+  for (const plan of selectedPlan) {
+    const topic = topicsById.get(plan.topicId);
+    if (!topic) continue;
+    const own = [topic.primaryUrl, ...(topic.discussionUrls ?? []), ...(topic.allObservedUrls ?? []), topic.fetchedArticle?.url,
+      ...(topic.cards ?? []).map(card => card.url)].map(u => (u ? safeCanonical(u) : null)).filter(Boolean);
+    if (!own.some(u => cited.has(u))) missing.push(`${plan.topicId} (${String(topic.title ?? '').slice(0, 80)})`);
+  }
+  if (missing.length) {
+    throw new Error(`Digest omits ${missing.length} selected topic(s): ${missing.join('; ')}. Write one item for each selected topic, citing its own URL`);
+  }
+}
+
+/** Compact lint summary for telemetry and the reviewer; pattern hits, never approval. */
+export function summarizeEditorialLint(markdown, { maxIssues = 20 } = {}) {
+  const lint = evaluateDigestMarkdown(markdown);
+  return { notApproval: true, totalBullets: lint.totalBullets, cleanBullets: lint.cleanBullets,
+    issueCount: lint.digestIssues.length, issues: lint.digestIssues.slice(0, maxIssues) };
+}
+
 const nonEmptyStrings = value => Array.isArray(value) && value.every(item => typeof item === 'string' && item.trim());
 
 /**
@@ -924,6 +951,7 @@ export async function runDailyV2({
           throw new Error('Supply --models models.json for API composition, or use --prepare-only then --finalize-digest DRAFT.md');
         }
 
+        const storeTopicById = new Map(storeTopics.map(t => [t.topicId, t]));
         draftMarkdown = await runStage({
           stage: 'compose',
           label: 'v2-compose',
@@ -932,6 +960,7 @@ export async function runDailyV2({
           parse: text => {
             const md = normalizeDigestSectionOrder(extractBlock(text, 'markdown'));
             validateV2Digest(md, { date: reportDate, observedUrlSet });
+            assertSelectedCoverage(md, selectedPlan, storeTopicById);
             return md;
           },
         });
@@ -944,7 +973,8 @@ export async function runDailyV2({
             stage: 'review',
             label: 'v2-review',
             system: readPrompt('v2-review-digest.md'),
-            prompt: tagged('draft_markdown', draftMarkdown) + '\n\n' + tagged('selected_topics', modelJson(selectedMaterials)),
+            prompt: tagged('draft_markdown', draftMarkdown) + '\n\n' + tagged('selected_topics', modelJson(selectedMaterials)) +
+              '\n\n' + tagged('lint_findings', modelJson(summarizeEditorialLint(draftMarkdown).issues)),
             parse: text => parseReviewResponse(text, { draftMarkdown, date: reportDate, observedUrlSet }),
           });
           fs.writeFileSync(path.join(runDir, 'editorial-review.json'), JSON.stringify({
@@ -962,6 +992,9 @@ export async function runDailyV2({
     lock.heartbeat(currentStage);
     draftMarkdown = normalizeDigestSectionOrder(draftMarkdown);
     const digestStats = validateV2Digest(draftMarkdown, { date: reportDate, observedUrlSet });
+    assertSelectedCoverage(draftMarkdown, selectedPlan, new Map(storeTopics.map(t => [t.topicId, t])));
+    const editorialLint = summarizeEditorialLint(draftMarkdown);
+    fs.writeFileSync(path.join(runDir, 'editorial-lint.json'), JSON.stringify(editorialLint, null, 2) + '\n', { mode: 0o600 });
 
     // Stage 7: Auto-generate dispositions + Update Rolling High-Value Backlog + Self-Check Telemetry Panel
     currentStage = 'finalize_artifacts';
@@ -1018,6 +1051,7 @@ export async function runDailyV2({
         publishedTotal: digestStats.bulletsCount,
       },
       stageUsage: usage.report(),
+      editorialLint,
       warnings,
       reclaimedLocks,
     });

@@ -47,6 +47,10 @@ The **v2 architecture (`run-daily.mjs`, `content-store.mjs`, `curation.mjs`, `te
                                      ▼
             5. Source-Faithful Composition + Single-Pass Review + Telemetry Self-Check
                ├── Deterministic URL allowlist gate + pipeline-jargon blocker (`validateV2Digest`)
+               ├── Selected-topic coverage: every selected topic is cited by one item (`assertSelectedCoverage`,
+               │   at compose with one retry and again before publication on every path)
+               ├── Prose lint (`editorial-lint.mjs`) → reviewer `<lint_findings>` leads + internal `editorial-lint.json`
+               │   / `telemetry.editorialLint`; never rendered, never part of health or approval
                ├── Bounded single-pass review: `issues` = material fixes, `advisories` = non-blocking notes;
                │   a revision keeps every heading, item, order, section and link set (`assertBoundedRevision`)
                ├── Canonical section ordering (`Quick Hits / 快讯速览` first when present)

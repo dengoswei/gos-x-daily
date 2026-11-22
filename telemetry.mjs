@@ -412,7 +412,7 @@ function summarizeSourceList(rows, max = 4) {
  * Computes overall health verdict [OK | WARN | ACTION_NEEDED], funnel drop-off numbers,
  * and concrete recommendations for humans or calling agents.
  */
-export function buildTelemetry({ date = shanghaiDate(), sources = [], funnel = {}, stageUsage = null, warnings = [], reclaimedLocks = [] } = {}) {
+export function buildTelemetry({ date = shanghaiDate(), sources = [], funnel = {}, stageUsage = null, editorialLint = null, warnings = [], reclaimedLocks = [] } = {}) {
   const attempted = sources.filter(s => s.status !== 'unattempted');
   const usable = attempted.filter(s => ['ok', 'partial', 'empty'].includes(s.status));
   const failed = sources.filter(s => s.status === 'failed');
@@ -531,6 +531,8 @@ export function buildTelemetry({ date = shanghaiDate(), sources = [], funnel = {
     recommendations,
     warnings,
     ...(stageUsage ? { stageUsage } : {}),
+    // Internal prose lint; not rendered to readers and not part of overall health.
+    ...(editorialLint ? { editorialLint } : {}),
   };
 }
 
