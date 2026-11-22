@@ -40,8 +40,8 @@ The **v2 architecture (`run-daily.mjs`, `content-store.mjs`, `curation.mjs`, `te
             4. Stage 2 Editorial Value Assessment (`prompts/v2-select-topics.md`)
                Evaluates Top ~45 shortlist on:
                (a) Novel Insight  (b) Empirical Engineering Lesson  (c) Consequential Judgment
-               ├── `deep` (5–8 items) -> Full-text fetch (`enrichTopicsWithFullText`) -> Deep Dive
-               ├── `quick` (0–5 items) -> Concise releases / product betas ONLY -> Quick Hits (first)
+               ├── `deep` (5–8 items, typically 6–8) -> Full-text fetch (`enrichTopicsWithFullText`) -> Deep Dive
+               ├── `quick` (0–5 items, never padded) -> Concise releases / product betas ONLY -> Quick Hits (first)
                └── `deferred` -> High-value runners-up saved back into `backlog-pool.json`
                                      │
                                      ▼
@@ -113,6 +113,8 @@ $$S_{\text{prior}} = W_{\text{author}} + W_{\text{source}} + W_{\text{social}} +
 4. **Noise Penalties ($P_{\text{noise}}$)**:
    - Commercial customer case studies (`-8.0`) and hiring/giveaway/webinar promos (`-6.0`).
 
+Known incident patterns for the prose lint (mistranslations, codenames that need a role anchor) live in `config/editorial-lint.json`, not in prompt text; prompts keep only the general rule.
+
 ### Stage 2: LLM Qualitative Editorial Assessment (`prompts/v2-select-topics.md`)
 
 The diversity-guarded shortlist (48 candidates, `buildScreenShortlist`) is evaluated by the LLM (or local Host Agent in `--prepare-only` mode). Each row carries an `excerpt`: the first `screen.excerptChars` (default 1,200) characters of the best available body, preferring a fetched article over the longest observation, plus `excerptSource` and `bodyChars` (`addScreenExcerpts`). Excerpts are read through `loadTopicFullMaterial` over the `modelTopic` projection, so the editor receives exactly the public material the composer would, never mail, Xiaohongshu, out-of-store or unshareable fetched text. The editor judges on three editorial criteria:
@@ -121,9 +123,9 @@ The diversity-guarded shortlist (48 candidates, `buildScreenShortlist`) is evalu
 3. **Consequential Judgment (重要判断)**: High-leverage architectural directions, major open-weight releases, or rigorous evaluation benchmarks.
 
 ### Strict `Deep Dive` vs. `Quick Hits` Boundary
-- **`Deep Dive` (`tier: "deep"`, 5–8 items)**: Items whose value requires unpacking `obstacle -> concrete mechanism -> experimental setup & boundary`. Diversity guard caps any single feed (e.g., Daily Papers) at 2–3 items when other strong sources exist.
+- **`Deep Dive` (`tier: "deep"`, 5–8 items, typically 6–8)**: Items whose value requires unpacking `obstacle -> concrete mechanism -> experimental setup & boundary`. Diversity guard caps any single feed (e.g., Daily Papers) at 2–3 items when other strong sources exist.
 - **Editor-ranked replacement (`replaceAbstractOnlyDeepPapers`)**: `deferred` is the editor's ranked runner-up list (best first, optional `section`). If a selected deep paper is still not full text after enrichment, it is replaced by the editor's highest-ranked eligible runner-up that has, or can be fetched to, full text (at most 2 replacements and 2 on-demand fetches). A candidate the editor did not rank is never substituted, whatever its prior score; with no eligible runner-up the editor's pick stays. The heuristic selector has no editor and falls back to its own prior ranking; an explicit `--selected-topics` plan is never adjusted. Every swap or kept pick is recorded in `prepare-state.json` as `selectionAdjustments`.
-- **`Quick Hits / 快讯速览` (`tier: "quick"`, 0–5 items, rendered first)**: **Strictly** for items whose entire value fits in 1–2 crisp sentences without methodological exposition (routine product betas, UI connectors, minor SDK/framework point releases). **Research papers are never dumped into Quick Hits as overflow.**
+- **`Quick Hits / 快讯速览` (`tier: "quick"`, 0–5 items, never padded, rendered first)**: **Strictly** for items whose entire value fits in 1–2 crisp sentences without methodological exposition (routine product betas, UI connectors, minor SDK/framework point releases). **Research papers are never dumped into Quick Hits as overflow.**
 
 ---
 

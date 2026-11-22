@@ -42,7 +42,7 @@ versioned here**; deployment-specific identity/configuration and history stay lo
 | Small coordinator inputs and complete worker packets | `worker-packets.mjs`, `cli.mjs worker-input` |
 | Compact Feishu post and exact review binding | `lark-post.mjs`, `review.mjs`, `digest.mjs` |
 | Selection, enrichment, composition, backlog and telemetry | `run-daily.mjs` |
-| Mac credentials and review of the pipeline's exact output | `deployment/mac/daily.mjs`, `deployment/mac/openai-final.mjs` |
+| Mac credentials, single-pass review and binding of the pipeline's exact output | `deployment/mac/daily.mjs`, `prompts/v2-review-digest.md` (`openai-final.mjs` is retired from production; legacy records only) |
 | Mac entry/controller/sole sender | `deployment/mac/` |
 | Sync and activate production | `npm run mac:update` |
 

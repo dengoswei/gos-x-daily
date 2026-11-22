@@ -1,18 +1,39 @@
 // Deterministic prose lint for digest bullets. It finds pattern hits (length, negative
 // templates, strawman tails, pipeline phrasing, mistranslation, cold codenames). A hit is a
 // lead for the reviewer, not a semantic finding; a clean result is not approval.
+import fs from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { isRoboticsEmbodiedTopic, isCoreMlSystemsTopic, isIntelligenceTheoryTopic } from './curation.mjs';
 import { QUICK_SECTION } from './digest-layout.mjs';
 import { bulletLine } from './lark-post.mjs';
 
+const defaultLintConfig = fileURLToPath(new URL('./config/editorial-lint.json', import.meta.url));
+
 const NEGATIVE_CONTRAST_RE = /不是[^，。；\n]{1,24}而是|把[^，。；\n]{1,20}变成[^，。；\n]{1,20}，?而不是|不只是[^，。；\n]{1,20}，?还包括|容易混淆的(?:是|地方)/g;
 const STRAWMAN_DISCLAIMER_RE = /不能合并为一个?统一(?:加速)?倍数|不等于整个索引按?同比例缩小|这只是功能开放[，,]?不代表|不能将其扩展为整个[^，。；\n]{1,18}的安全保证|不意味着[^，。；\n]{1,24}已有评测保证/g;
 const PIPELINE_JARGON_RE = /所给摘录|提供的材料|摘录(?:没有|未|中)|候选键/g;
-const MISTRANSLATED_JARGON_RE = /重数量化/g;
-const COLD_JARGON_PATTERNS = [
-  { name: 'bare_verify_without_speculative_anchor', test: text => /\bverify\s*(?:步|耗时|阶段)/i.test(text) && !/投机|草稿|draft|speculative/i.test(text) },
-  { name: 'bare_smithy_without_api_model_anchor', test: text => /\bSmithy\b/.test(text) && !/API\s*模型|接口定义|IDL/i.test(text) },
-];
+// Incident patterns live in config/editorial-lint.json; an invalid row fails at load.
+export function loadLintPatterns(file = defaultLintConfig) {
+  const config = JSON.parse(fs.readFileSync(file, 'utf8'));
+  if (config?.schemaVersion !== 1 || !Array.isArray(config.mistranslations) || !Array.isArray(config.coldTerms)) {
+    throw new Error('editorial-lint config needs schemaVersion 1, mistranslations[] and coldTerms[]');
+  }
+  const escape = text => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  for (const row of config.mistranslations) {
+    if (typeof row?.wrong !== 'string' || !row.wrong.trim() || typeof row.right !== 'string' || !row.right.trim()) throw new Error('Each mistranslation needs wrong and right');
+  }
+  const mistranslated = config.mistranslations.length
+    ? new RegExp(config.mistranslations.map(row => escape(row.wrong)).join('|'), 'g')
+    : null;
+  const cold = config.coldTerms.map(row => {
+    if (typeof row?.name !== 'string' || !/^[a-z0-9_]+$/.test(row.name)) throw new Error('Each cold term needs a snake_case name');
+    const pattern = new RegExp(row.pattern, row.flags ?? '');
+    const anchor = row.anchor ? new RegExp(row.anchor, row.anchorFlags ?? '') : null;
+    return { name: row.name, test: text => pattern.test(text) && !(anchor && anchor.test(text)) };
+  });
+  return { mistranslated, cold };
+}
+const LINT_PATTERNS = loadLintPatterns();
 
 function stripMarkdownLinksAndFormatting(text) {
   return String(text ?? '')
@@ -49,8 +70,8 @@ export function evaluateBulletProse(bulletText, { tier = 'deep' } = {}) {
   const negativeContrastHits = [...raw.matchAll(NEGATIVE_CONTRAST_RE)].map(m => m[0]);
   const strawmanDisclaimerHits = [...raw.matchAll(STRAWMAN_DISCLAIMER_RE)].map(m => m[0]);
   const pipelineJargonHits = [...raw.matchAll(PIPELINE_JARGON_RE)].map(m => m[0]);
-  const mistranslatedJargonHits = [...raw.matchAll(MISTRANSLATED_JARGON_RE)].map(m => m[0]);
-  const coldJargonHits = COLD_JARGON_PATTERNS.filter(p => p.test(raw)).map(p => p.name);
+  const mistranslatedJargonHits = LINT_PATTERNS.mistranslated ? [...raw.matchAll(LINT_PATTERNS.mistranslated)].map(m => m[0]) : [];
+  const coldJargonHits = LINT_PATTERNS.cold.filter(p => p.test(raw)).map(p => p.name);
   const hasInternalBlankLine = /\n\s*\n/.test(raw);
   const hasTrailingLinks = /\[[^\]]+\]\(https?:\/\/[^)]+\)\s*$/.test(raw);
 

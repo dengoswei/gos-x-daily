@@ -164,3 +164,20 @@ test('source category hints are validated fail-closed, including through the pip
   await assert.rejects(runDailyV2({ dataDir, sourcesConfig: { feeds: [{ name: 'F', category: 'case_study_pr' }] }, fetchFullTextOnline: false }),
     /\[init\] Feed F category must be one of/);
 });
+
+test('robotics tagging needs a strong term or a recurring bare "robot" outside essays', async () => {
+  const { isRoboticsEmbodiedTopic } = await import('../curation.mjs');
+  const t = (title, tldr, extra = {}) => ({ title, cards: [{ tldr }], ...extra });
+  // One incidental mention, or a title repeated in its own summary, is not robotics.
+  assert.equal(isRoboticsEmbodiedTopic(t('Agents that write SQL', 'They plan queries unlike a robot following a script.')), false);
+  assert.equal(isRoboticsEmbodiedTopic(t('A robot in the loop', 'A robot in the loop — evaluating SQL agents on schema drift.')), false);
+  assert.equal(isRoboticsEmbodiedTopic(t('Why robots.txt matters for crawlers', 'robots.txt politeness rules')), false);
+  assert.equal(isRoboticsEmbodiedTopic(t('调度系统设计', '像机器人一样执行。')), false);
+  // An essay's repeated analogy is not a robotics paper.
+  assert.equal(isRoboticsEmbodiedTopic(t('Scheduling trades like a robot would', 'A robot analogy for fair admission control.', { category: 'essay' })), false);
+  // Recurring bare mentions outside essays, and any strong term anywhere, are robotics.
+  assert.equal(isRoboticsEmbodiedTopic(t('Generalist Robot Policies from Video', 'Real robot experiments across kitchens.', { category: 'paper' })), true);
+  assert.equal(isRoboticsEmbodiedTopic(t('家用机器人', '机器人在厨房中的评测。')), true);
+  assert.equal(isRoboticsEmbodiedTopic(t('Essay on humanoid futures', 'Why humanoid form factors win.', { category: 'essay' })), true);
+  assert.equal(isRoboticsEmbodiedTopic(t('Sim-to-real transfer for grasping', 'policy study', { category: 'paper' })), true);
+});

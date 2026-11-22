@@ -139,3 +139,22 @@ test('host-composed finalize path also rejects a digest that omits a selected to
     fetchFullTextOnline: false, runtimeHooks: { now: '2026-11-11T01:00:00Z' } });
   assert.equal(done.funnel.publishedTotal, 2);
 });
+
+test('lint incident patterns are data: a new row is enforced and a malformed config fails closed', async t => {
+  const { loadLintPatterns } = await import('../editorial-lint.mjs');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'xdaily-lintcfg-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const write = config => { const file = path.join(dir, `c-${Math.random()}.json`); fs.writeFileSync(file, JSON.stringify(config)); return file; };
+  const custom = loadLintPatterns(write({ schemaVersion: 1, mistranslations: [{ wrong: '内核函数(', right: 'kernel' }],
+    coldTerms: [{ name: 'bare_dflash', pattern: '\\bDFlash\\d*\\b', anchor: '投机解码' }] }));
+  assert.ok(custom.mistranslated.test('调用内核函数(x)'), 'literal text is escaped, not treated as a regex');
+  assert.equal(custom.cold[0].test('DFlash2 加速'), true);
+  assert.equal(custom.cold[0].test('投机解码验证阶段（DFlash2）'), false);
+  for (const bad of [{}, { schemaVersion: 2, mistranslations: [], coldTerms: [] }, { schemaVersion: 1, mistranslations: [{ wrong: '' , right: 'x' }], coldTerms: [] },
+    { schemaVersion: 1, mistranslations: [], coldTerms: [{ name: 'Bad Name', pattern: 'x' }] }, { schemaVersion: 1, mistranslations: [], coldTerms: [{ name: 'ok', pattern: '(' }] }]) {
+    assert.throws(() => loadLintPatterns(write(bad)));
+  }
+  const shipped = JSON.parse(fs.readFileSync(new URL('../config/editorial-lint.json', import.meta.url), 'utf8'));
+  assert.ok(shipped.mistranslations.some(row => row.wrong === '重数量化'));
+  assert.deepEqual(shipped.coldTerms.map(row => row.name), ['bare_verify_without_speculative_anchor', 'bare_smithy_without_api_model_anchor']);
+});

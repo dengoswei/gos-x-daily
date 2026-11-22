@@ -88,7 +88,10 @@ export function aggregateTopicMetrics(cards = [], priorMetrics = null) {
   return merged;
 }
 
-const ROBOTICS_EMBODIED_RE = /\b(robot(?:ic|ics|s(?!\.txt))?|embodied\s+(?:ai|agent|agents|intelligence|reasoning|navigation|manipulation|control|learning)|vision-language-action|\bvla\b|visuomotor|manipulation\s+(?:polic(?:y|ies)|task|tasks|benchmark|learning)|dexterous\s+(?:hand|hands|manipulation|grasping)|humanoid|quadruped|locomotion|teleoperation|sim-to-real|bimanual|end-effector|gripper|robo(?:twin|mme|mimic|casa|suite|script|gen|bench|agent|mind|point|vlm|flamingo)[a-z0-9_-]*)\b|具身智能|具身\s*(?:Agent|大模型|智能|推理|导航|操作)|机械臂|双臂(?:机器人|操作|迁移)?|灵巧手|人形机器人|足式机器人|四足机器人|机器人(?:操作|抓取|控制|运动|导航|记忆|仿真|策略)/i;
+// Strong terms name robotics / embodied work outright. A bare "robot" is weak evidence: it
+// counts only when it recurs, and never inside an essay, where it is usually an analogy.
+const ROBOTICS_EMBODIED_RE = /\b(embodied\s+(?:ai|agent|agents|intelligence|reasoning|navigation|manipulation|control|learning)|vision-language-action|\bvla\b|visuomotor|manipulation\s+(?:polic(?:y|ies)|task|tasks|benchmark|learning)|dexterous\s+(?:hand|hands|manipulation|grasping)|humanoid|quadruped|locomotion|teleoperation|sim-to-real|bimanual|end-effector|gripper|robo(?:twin|mme|mimic|casa|suite|script|gen|bench|agent|mind|point|vlm|flamingo)[a-z0-9_-]*)\b|具身智能|具身\s*(?:Agent|大模型|智能|推理|导航|操作)|机械臂|双臂(?:机器人|操作|迁移)?|灵巧手|人形机器人|足式机器人|四足机器人|机器人(?:操作|抓取|控制|运动|导航|记忆|仿真|策略)/i;
+const WEAK_ROBOT_RE = /\brobot(?:ic|ics|s(?!\.txt))?\b|机器人/gi;
 
 const CORE_ML_SYSTEMS_RE = /\b(distributed\s+training|megatron|deepspeed|fsdp|torchtitan|colossal|rlhf|ppo|grpo|dapo|reinforcement\s+learning|post-training|verifiable\s+reward|rollout|vllm|sglang|tensorrt|trt-llm|kv[\s-]?cache|paged\s*attention|flash\s*attention|speculative\s+decoding|prefill|disaggregated|megakernel|cuda|triton|pallas|cutlass|tilelang|nvfp4|mxfp4|fp8|fp4|int4|quantization|roofline|hbm\d*|all-reduce|all-gather|nccl|rdma|moe\b|mixture-of-experts|agent\s+harness|agent\s+memory|tool[\s-]use|formal\s+verification|lean\s*4)\b|分布式训练|强化学习|后训练|推理(?:优化|引擎|加速|系统)|投机解码|算子|张量并行|专家并行|流水线并行|显存带宽|形式化验证/i;
 
@@ -100,7 +103,17 @@ function topicDomainText(topic) {
 
 /** Identifies robotics / embodied AI / VLA manipulation topics for reader-domain downweighting. */
 export function isRoboticsEmbodiedTopic(topic) {
-  return ROBOTICS_EMBODIED_RE.test(topicDomainText(topic));
+  const text = topicDomainText(topic);
+  if (ROBOTICS_EMBODIED_RE.test(text)) return true;
+  if (topic?.category === 'essay') return false;
+  // Summaries repeat the title; count each phrase once so one title mention is one hit.
+  const title = String(topic?.title ?? '').trim();
+  const summaries = (topic?.cards ?? []).map(c => {
+    const tldr = String(c.tldr ?? '');
+    return title && tldr.startsWith(title) ? tldr.slice(title.length) : tldr;
+  });
+  const distinct = `${title} ${(topic?.entities ?? []).join(' ')} ${summaries.join(' ')}`;
+  return (distinct.match(WEAK_ROBOT_RE) ?? []).length >= 2;
 }
 
 export function isCoreMlSystemsTopic(topic) {

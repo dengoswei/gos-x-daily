@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 1,
+  "description": "Known incident patterns for the deterministic prose lint (editorial-lint.mjs). Add a row when a review finds a recurring mistranslation or an unanchored codename; prompts keep only the general rule.",
+  "mistranslations": [
+    { "wrong": "重数量化", "right": "重量化 / 再量化" }
+  ],
+  "coldTerms": [
+    { "name": "bare_verify_without_speculative_anchor", "pattern": "\\bverify\\s*(?:步|耗时|阶段)", "flags": "i", "anchor": "投机|草稿|draft|speculative", "anchorFlags": "i" },
+    { "name": "bare_smithy_without_api_model_anchor", "pattern": "\\bSmithy\\b", "flags": "", "anchor": "API\\s*模型|接口定义|IDL", "anchorFlags": "i" }
+  ]
+}
