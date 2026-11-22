@@ -146,6 +146,12 @@ across AI research, products, tooling and opinion. Any GitHub project's releases
 can be added the same way with `https://github.com/<owner>/<repo>/releases.atom`
 and `"kind": "atom"`.
 
+A feed or blog may declare `"category"` (`essay`, `paper`, `infra_eng`,
+`open_source`, `product` or `general`) when its items are reliably one kind, such
+as a researcher's essay blog. The hint replaces keyword guessing for that source's
+display section; customer stories are still detected from their own URL or title.
+See [the curation design](docs/DESIGN-FUNNEL-AND-CURATION.md#3-dual-layer-content-archive--cross-source-clustering-content-storemjs).
+
 **`tools/fetch-feeds.mjs` talks to the network; `cli.mjs` does not.** The tool
 downloads the configured feeds into `feed-capture.json` plus hashed documents;
 `cli.mjs import-feed` verifies those bytes offline and adds in-window items to an

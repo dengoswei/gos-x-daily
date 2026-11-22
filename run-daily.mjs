@@ -12,7 +12,7 @@ import { collectionFromBrowserArtifacts, verifyEvidenceFiles } from './browser-a
 import { mergeFeedDocuments, verifyDocumentFiles } from './feed-import.mjs';
 import { fetchFeeds } from './tools/fetch-feeds.mjs';
 import { candidateKeys, candidateEntries, canonicalUrl, citedUrls } from './binding.mjs';
-import { bulletLine, renderLarkPost } from './lark-post.mjs';
+import { renderLarkPost } from './lark-post.mjs';
 import { loadModels, tagged, modelJson, extractBlock, parseJsonBlock, usageLedger, budgetGuard, makeStageRunner, outputStore } from './prototype/run-packets.mjs';
 import {
   ensureWorkspace,
@@ -41,9 +41,10 @@ import {
   saveBacklogPool,
 } from './curation.mjs';
 
-import { DEEP_SECTION_ORDER as CANONICAL_DEEP_ORDER, digestLayoutPrompt, QUICK_SECTION, assertDigestLayout } from './digest-layout.mjs';
+import { DEEP_SECTION_ORDER as CANONICAL_DEEP_ORDER, digestLayoutPrompt, QUICK_SECTION, assertDigestLayout, parseDigestStructure, assertBoundedRevision } from './digest-layout.mjs';
 import { sha256 } from './review.mjs';
 import { modelTopic } from './model-input.mjs';
+import { sourceCategoryHints } from './source-config.mjs';
 
 const repoRoot = path.dirname(fileURLToPath(import.meta.url));
 const readPrompt = name => fs.readFileSync(path.join(repoRoot, 'prompts', name), 'utf8');
@@ -400,29 +401,7 @@ export function validateV2Digest(markdown, { date, observedUrlSet }) {
     throw new Error(`Digest leaked internal pipeline phrasing ("${hit}"); rewrite from public reader perspective`);
   }
 
-  const lines = clean.split(/\r?\n/);
-  let currentSection = null;
-  let currentBullet = null;
-  const bullets = [];
-  const flushBullet = () => {
-    if (currentBullet) bullets.push({ section: currentSection, text: currentBullet.join('\n') });
-    currentBullet = null;
-  };
-
-  for (const raw of lines.slice(1)) {
-    const trimmed = raw.trim();
-    if (!trimmed) { flushBullet(); continue; }
-    const h2 = trimmed.match(/^##\s+(.+)$/);
-    if (h2) { flushBullet(); currentSection = h2[1].trim(); continue; }
-    if (/^#{3,6}\s/.test(trimmed)) { flushBullet(); continue; }
-    if (bulletLine.test(trimmed)) {
-      flushBullet();
-      currentBullet = [trimmed];
-    } else if (currentBullet) {
-      currentBullet.push(trimmed);
-    }
-  }
-  flushBullet();
+  const { bullets } = parseDigestStructure(clean);
 
   if (!bullets.length) throw new Error('Digest contains 0 story bullets');
 
@@ -456,6 +435,33 @@ export function validateV2Digest(markdown, { date, observedUrlSet }) {
     bulletSectionsByUrl,
     extractedTitles,
   };
+}
+
+const nonEmptyStrings = value => Array.isArray(value) && value.every(item => typeof item === 'string' && item.trim());
+
+/**
+ * Parses the single-pass review reply. `issues` lists material fixes applied in
+ * `revisedMarkdown`; `advisories` carries non-blocking notes and never changes text.
+ * A revision may only correct sentences inside existing items (see assertBoundedRevision).
+ */
+export function parseReviewResponse(text, { draftMarkdown, date, observedUrlSet }) {
+  const parsed = parseJsonBlock(text);
+  if (!['pass', 'revise'].includes(parsed?.verdict)) throw new Error('verdict must be pass or revise');
+  if (!nonEmptyStrings(parsed.issues)) throw new Error('issues must be an array of non-empty strings');
+  const advisories = parsed.advisories ?? [];
+  if (!nonEmptyStrings(advisories)) throw new Error('advisories must be an array of non-empty strings when present');
+  if (parsed.verdict === 'pass') {
+    if (parsed.issues.length) throw new Error('A pass verdict lists no issues; put non-blocking notes in advisories, or revise to fix a material problem');
+    return { verdict: 'pass', issues: [], advisories, revisedMarkdown: null };
+  }
+  if (!parsed.issues.length) throw new Error('A revise verdict must list each material fix in issues');
+  if (typeof parsed.revisedMarkdown !== 'string' || !parsed.revisedMarkdown.trim()) {
+    throw new Error('revise verdict requires non-empty revisedMarkdown');
+  }
+  const revisedMarkdown = normalizeDigestSectionOrder(parsed.revisedMarkdown);
+  validateV2Digest(revisedMarkdown, { date, observedUrlSet });
+  assertBoundedRevision(normalizeDigestSectionOrder(draftMarkdown), revisedMarkdown, parsed.issues);
+  return { verdict: 'revise', issues: parsed.issues, advisories, revisedMarkdown };
 }
 
 /**
@@ -508,6 +514,7 @@ export async function runDailyV2({
         ? JSON.parse(fs.readFileSync(sourcesFile, 'utf8'))
         : JSON.parse(fs.readFileSync(path.join(repoRoot, 'config', 'sources.json'), 'utf8')));
     const taste = loadTasteConfig(tasteFile);
+    const categoryHints = sourceCategoryHints(resolvedSources);
 
     const usage = usageLedger();
     let collection = null;
@@ -650,7 +657,7 @@ export async function runDailyV2({
         warnings.push(...softHistory.warnings);
 
         storeDir = path.join(runDir, 'store');
-        const storeResult = buildContentStore(collection, storeDir, { softHistory, supplements, taste });
+        const storeResult = buildContentStore(collection, storeDir, { softHistory, supplements, taste, categoryHints });
         storeCounts = storeResult.counts;
         storeTopics = storeResult.topics;
 
@@ -872,23 +879,10 @@ export async function runDailyV2({
             label: 'v2-review',
             system: readPrompt('v2-review-digest.md'),
             prompt: tagged('draft_markdown', draftMarkdown) + '\n\n' + tagged('selected_topics', modelJson(selectedMaterials)),
-            parse: text => {
-              const parsed = parseJsonBlock(text);
-              if (!Array.isArray(parsed?.issues) || parsed.issues.some(issue => typeof issue !== 'string') ||
-                  (parsed.verdict === 'pass' && parsed.issues.length)) throw new Error('Review requires resolved issues');
-              if (!['pass', 'revise'].includes(parsed?.verdict)) throw new Error('verdict must be pass or revise');
-              if (parsed.verdict === 'revise') {
-                if (typeof parsed.revisedMarkdown !== 'string' || !parsed.revisedMarkdown.trim()) {
-                  throw new Error('revise verdict requires non-empty revisedMarkdown');
-                }
-                parsed.revisedMarkdown = normalizeDigestSectionOrder(parsed.revisedMarkdown);
-                validateV2Digest(parsed.revisedMarkdown, { date: reportDate, observedUrlSet });
-              }
-              return parsed;
-            },
+            parse: text => parseReviewResponse(text, { draftMarkdown, date: reportDate, observedUrlSet }),
           });
           fs.writeFileSync(path.join(runDir, 'editorial-review.json'), JSON.stringify({
-            protocol: 'v2-single-pass', inputMarkdown: draftMarkdown, result: reviewOutcome,
+            protocol: 'v2-single-pass', revisionContract: 'bounded-v1', inputMarkdown: draftMarkdown, result: reviewOutcome,
             materialsSha256: sha256(fs.readFileSync(preparedTopicsPath)),
           }, null, 2) + '\n', { mode: 0o600 });
           if (reviewOutcome.verdict === 'revise' && reviewOutcome.revisedMarkdown) {

@@ -8,6 +8,7 @@ import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { larkPostJson } from './lark-post.mjs';
 import { splitDigest } from './binding.mjs';
+import { assertBoundedRevision } from './digest-layout.mjs';
 
 const KIND = 'x-daily-recovery-review-v1';
 const SELF_KIND = 'x-daily-self-review-v1';
@@ -167,6 +168,13 @@ export function validateReview(review, options) {
     if (editorial.protocol !== 'v2-single-pass' || !['pass', 'revise'].includes(result?.verdict) ||
         !Array.isArray(result.issues) || (result.verdict === 'pass' && result.issues.length)) {
       throw new Error('Editorial review has unresolved or invalid findings');
+    }
+    // Records written since the bounded-revision contract re-prove it at publication;
+    // older records carry no marker and remain readable for reconciliation.
+    if (editorial.revisionContract !== undefined) {
+      if (editorial.revisionContract !== 'bounded-v1') throw new Error('Unsupported editorial revision contract');
+      if (result.advisories !== undefined && !Array.isArray(result.advisories)) throw new Error('Editorial advisories must be a list');
+      if (result.verdict === 'revise') assertBoundedRevision(editorial.inputMarkdown, result.revisedMarkdown, result.issues);
     }
     const text = result.verdict === 'revise' ? result.revisedMarkdown : editorial.inputMarkdown;
     const material = fileUnderRoot(options.rootDir, 'prepared-topics.json').bytes;

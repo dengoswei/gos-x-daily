@@ -47,6 +47,8 @@ The **v2 architecture (`run-daily.mjs`, `content-store.mjs`, `curation.mjs`, `te
                                      ▼
             5. Source-Faithful Composition + Single-Pass Review + Telemetry Self-Check
                ├── Deterministic URL allowlist gate + pipeline-jargon blocker (`validateV2Digest`)
+               ├── Bounded single-pass review: `issues` = material fixes, `advisories` = non-blocking notes;
+               │   a revision keeps every heading, item, order, section and link set (`assertBoundedRevision`)
                ├── Canonical section ordering (`Quick Hits / 快讯速览` first when present)
                └── `telemetry.json` + `### 运行自检` footer + local failure diagnostics
 ```
@@ -70,6 +72,9 @@ To ensure zero data loss at ingestion while keeping screening lightweight and fi
    - `product` / `general` $\rightarrow$ `## Applications / Products` (or `## Quick Hits / 快讯速览`);
    - `essay` $\rightarrow$ `## Long-form / Essays` (`Substack`, `Latent Space`, `Interconnects`, `SemiAnalysis`, `Chips and Cheese`, etc.);
    - `case_study_pr` $\rightarrow$ Commercial customer case studies (penalized and excluded by default).
+   - **What the classifier reads**: category describes what an item *is*, so `classifyHeuristic` reads only the item's own URL, shared links, title and first 500 characters (`CLASSIFY_LEAD_CHARS`). A passing phrase later in an essay ("as a case study", "introducing …") cannot change its section or apply a penalty.
+   - **Customer stories** (`case_study_pr`) are detected only from the item's own URL path (`/customers/`, `/case-studies/`, `/customer-stories/`, `/success-stories/`) or its headline (`Customer story`, a title opening `Case study:`, `客户案例`, `成功案例`). An untitled X/watch post is headlined by its opening and judged by the links it shares; a titled article that merely links to a customers page is not penalized.
+   - **Per-source hints**: a feed or blog in `sources.json` may declare `"category"` (`essay | paper | infra_eng | open_source | product | general`). The hint replaces keyword guessing for that source (e.g. Terence Tao, arg min, Dan Luu → `essay`; Transformer Circuits → `paper`) but cannot launder a customer story, and it cannot itself be `case_study_pr`. Invalid hints stop the run at start.
 
 ---
 
@@ -141,3 +146,14 @@ Daily news volume is bursty: a major conference or release day may produce 15+ g
 3. **Quantified Self-Check Footer (`### 运行自检 [OK | WARN | ACTION_NEEDED]`)**:
    - Reports exact `usable / configured` sources and explicitly names any `unattempted` or `failed` sources (with consecutive failure days tracked in `source-health.json`).
    - Prints full funnel visibility: `原始入库 -> 遗珠池召回/累加 -> 7日去重跳过 -> 话题聚合 -> 初筛入选 -> 全文补齐 -> 成稿（深度 + 快讯，含捞回遗珠） -> 遗珠池留存`.
+
+---
+
+## 7. Single-Pass Review Contract (`prompts/v2-review-digest.md`, `parseReviewResponse`)
+
+The reviewer runs once and returns `{ verdict, issues, advisories, revisedMarkdown }`:
+
+- `pass` carries an empty `issues` list. Readability notes (cold codenames, negative templates, wall-of-text bullets) go in `advisories`, which are recorded in `editorial-review.json` and never change text or block the run.
+- `revise` is only for material problems (fact, number, date, meaning-changing mistranslation, unsupported claim, unobserved URL, leaked pipeline phrasing). The revision must keep the title, every heading, text outside items, the item count, order and sections; it may not add a link to an item (removing one together with its claim is allowed); it must change at least one item; and it lists at least one `issues` entry per changed item. Unchanged items are compared after per-line trimming, as the validator and renderer read them.
+- A violation is a parse error: the stage runner retries once with the error message, then fails the run instead of publishing an unbounded rewrite.
+- `editorial-review.json` records `revisionContract: "bounded-v1"`; the publication gate (`validateReview`) re-proves the bound for such records. Records written before this contract carry no marker and remain readable for reconciliation. Because the review prompt changed, a review checkpoint recorded before this contract no longer matches its prompt hash and is refused on resume (fail-closed); such an in-flight run needs a fresh model-artifacts directory.
