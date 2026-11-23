@@ -12,6 +12,7 @@
     "check": "node tools/check.mjs",
     "inspect": "node cli.mjs inspect-config",
     "eval:editorial": "node editorial-eval.mjs",
+    "stats:editorial": "node editorial-stats.mjs",
     "mac:update": "node tools/update-mac.mjs"
   }
 }

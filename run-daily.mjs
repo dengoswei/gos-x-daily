@@ -11,8 +11,8 @@ import { makeRuntime } from './runtime.mjs';
 import { collectionFromBrowserArtifacts, verifyEvidenceFiles } from './browser-artifacts.mjs';
 import { mergeFeedDocuments, verifyDocumentFiles } from './feed-import.mjs';
 import { fetchFeeds } from './tools/fetch-feeds.mjs';
-import { candidateKeys, candidateEntries, canonicalUrl, citedUrls } from './binding.mjs';
-import { bulletLine, renderLarkPost } from './lark-post.mjs';
+import { candidateKeys, candidateEntries, canonicalUrl, citedUrls, citesTopicSource } from './binding.mjs';
+import { renderLarkPost } from './lark-post.mjs';
 import { loadModels, tagged, modelJson, extractBlock, parseJsonBlock, usageLedger, budgetGuard, makeStageRunner, outputStore } from './prototype/run-packets.mjs';
 import {
   ensureWorkspace,
@@ -41,9 +41,12 @@ import {
   saveBacklogPool,
 } from './curation.mjs';
 
-import { DEEP_SECTION_ORDER as CANONICAL_DEEP_ORDER, digestLayoutPrompt, QUICK_SECTION, assertDigestLayout } from './digest-layout.mjs';
+import { DEEP_SECTION_ORDER as CANONICAL_DEEP_ORDER, digestLayoutPrompt, QUICK_SECTION, assertDigestLayout, parseDigestStructure, assertBoundedRevision } from './digest-layout.mjs';
 import { sha256 } from './review.mjs';
 import { modelTopic } from './model-input.mjs';
+import { sourceCategoryHints } from './source-config.mjs';
+import { evaluateDigestMarkdown } from './editorial-lint.mjs';
+import { PILLARS, buildDailyEditorialStats, appendEditorialStats, rollingEditorialStats } from './editorial-stats.mjs';
 
 const repoRoot = path.dirname(fileURLToPath(import.meta.url));
 const readPrompt = name => fs.readFileSync(path.join(repoRoot, 'prompts', name), 'utf8');
@@ -76,16 +79,21 @@ export function parseSelectedPlanPayload(payload, validTopicIds) {
       section,
       followUp: Boolean(row.followUp),
       reason: String(row.reason ?? '').trim(),
+      ...(PILLARS.includes(row.pillar) ? { pillar: row.pillar } : {}),
     });
   }
   if (!out.length) throw new Error('Topic selector returned 0 selected topics');
+  // `deferred` is the editor's ranked runner-up list (best first); Map order keeps that rank.
   const deferred = new Map();
+  const deferredSections = new Map();
   for (const d of Array.isArray(payload?.deferred) ? payload.deferred : []) {
-    if (d && validTopicIds.has(d.topicId) && !seen.has(d.topicId)) {
+    if (d && validTopicIds.has(d.topicId) && !seen.has(d.topicId) && !deferred.has(d.topicId)) {
       deferred.set(d.topicId, String(d.reason ?? 'High-value runner-up deferred for backlog').trim());
+      if (DEEP_SECTIONS.has(d.section)) deferredSections.set(d.topicId, d.section);
     }
   }
   out.deferredMap = deferred;
+  out.deferredSections = deferredSections;
   return out;
 }
 
@@ -230,11 +238,15 @@ export function selectTopicsHeuristic(topics, { maxDeep = 7, maxQuick = 4, maxPe
 }
 
 /**
- * Replaces abstract-only selected Deep Dive papers when an unselected full-text
- * non-robotics technical source with strong prior score is available.
+ * Replaces a selected Deep Dive paper whose full text could not be retrieved.
+ * When an editor chose (`alternates` given), only the editor's own ranked runner-ups
+ * are eligible, in the editor's order; with no eligible alternate the editor's pick stays.
+ * The heuristic selector has no editor, so it falls back to its own prior ranking.
  */
 export async function replaceAbstractOnlyDeepPapers(selectedPlan, storeTopics, {
   sortedForSelection = storeTopics,
+  alternates = null,
+  alternateSections = new Map(),
   modelsFile = null,
   storeDir,
   fetchImpl = globalThis.fetch,
@@ -255,49 +267,70 @@ export async function replaceAbstractOnlyDeepPapers(selectedPlan, storeTopics, {
       weakDeepIndices.push(i);
     }
   }
-  if (!weakDeepIndices.length) return { replaced: 0 };
+  const adjustments = [];
+  if (!weakDeepIndices.length) return { replaced: 0, adjustments };
 
   const pickedIds = new Set(selectedPlan.map(p => p.topicId));
-  const pool = sortedForSelection.filter(c =>
+  const eligible = c => c &&
     !pickedIds.has(c.topicId) &&
     c.dedupStatus !== 'seen_recently' &&
     c.category !== 'case_study_pr' &&
     !isRoboticsEmbodiedTopic(c) &&
-    !(!c.fromBacklog && (c.curationSignals?.ageDecay ?? 0) >= 6.0) &&
-    (c.priorScore ?? 0) >= minPriorScore,
-  );
+    !(!c.fromBacklog && (c.curationSignals?.ageDecay ?? 0) >= 6.0);
+  const editorRanked = Array.isArray(alternates);
+  const byId = new Map(sortedForSelection.map(c => [c.topicId, c]));
+  const pool = editorRanked
+    ? alternates.map(id => byId.get(id)).filter(eligible)
+    : sortedForSelection.filter(c => eligible(c) && (c.priorScore ?? 0) >= minPriorScore);
 
   let replaced = 0;
   let onDemandEnrichCount = 0;
   for (const idx of weakDeepIndices) {
     if (replaced >= maxReplacements) break;
-    let winner = pool.find(c => !pickedIds.has(c.topicId) && getProjected(c.topicId)?.contentStatus === 'full_text');
-    if (!winner && storeDir) {
+    const isFull = c => getProjected(c.topicId)?.contentStatus === 'full_text';
+    const tryFetch = async c => {
+      if (!storeDir || onDemandEnrichCount >= 2) return false;
+      onDemandEnrichCount += 1;
+      await enrichTopicsWithFullText(storeTopics, storeDir, { topicIds: [c.topicId], maxFetches: 1, fetchImpl });
+      return isFull(c);
+    };
+    let winner = null;
+    if (editorRanked) {
+      // Preserve the editor's rank: fetch a higher-ranked alternate before taking a lower one.
       for (const c of pool) {
+        if (pickedIds.has(c.topicId)) continue;
+        if (isFull(c) || await tryFetch(c)) { winner = c; break; }
+      }
+    } else {
+      winner = pool.find(c => !pickedIds.has(c.topicId) && isFull(c)) ?? null;
+      for (const c of winner ? [] : pool) {
+        if (pickedIds.has(c.topicId) || isFull(c)) continue;
+        if (await tryFetch(c)) { winner = c; break; }
         if (onDemandEnrichCount >= 2) break;
-        if (pickedIds.has(c.topicId) || getProjected(c.topicId)?.contentStatus === 'full_text') continue;
-        onDemandEnrichCount += 1;
-        await enrichTopicsWithFullText(storeTopics, storeDir, { topicIds: [c.topicId], maxFetches: 1, fetchImpl });
-        if (getProjected(c.topicId)?.contentStatus === 'full_text') {
-          winner = c;
-          break;
-        }
       }
     }
-    if (!winner) continue;
+    if (!winner) {
+      adjustments.push({ kept: selectedPlan[idx].topicId, reason: editorRanked ? 'no full-text editor alternate' : 'no full-text candidate' });
+      continue;
+    }
     const replacedPlan = selectedPlan[idx];
-    deferredMap.set(replacedPlan.topicId, 'Deferred abstract-only paper in favor of full-text technical source');
+    deferredMap.set(replacedPlan.topicId, 'Deferred abstract-only paper in favor of a full-text runner-up');
+    const editorReason = deferredMap.get(winner.topicId);
+    deferredMap.delete(winner.topicId);
     selectedPlan[idx] = {
       topicId: winner.topicId,
       tier: 'deep',
-      section: sectionForTopic(winner),
+      section: alternateSections.get(winner.topicId) ?? sectionForTopic(winner),
       followUp: winner.dedupStatus === 'follow_up_candidate',
-      reason: 'Promoted full-text technical source over abstract-only paper',
+      reason: editorRanked
+        ? `Editor runner-up promoted over abstract-only paper${editorReason ? `: ${editorReason}` : ''}`
+        : 'Promoted full-text technical source over abstract-only paper',
     };
+    adjustments.push({ replaced: replacedPlan.topicId, with: winner.topicId, source: editorRanked ? 'editor_alternate' : 'prior_ranking' });
     pickedIds.add(winner.topicId);
     replaced += 1;
   }
-  return { replaced };
+  return { replaced, adjustments };
 }
 
 /**
@@ -337,6 +370,31 @@ export function buildScreenShortlist(compactTopics, { limit = 48 } = {}) {
   takeMatching(() => true, limit);
 
   return chosen.sort((a, b) => (b.priorScore ?? 0) - (a.priorScore ?? 0));
+}
+
+export const SCREEN_EXCERPT_CHARS = 1200;
+
+/**
+ * Adds a bounded body excerpt to each shortlisted screening row so the editor judges
+ * substance, not only a title and one-line summary. The excerpt comes from the same
+ * projected material the composer receives (`loadTopicFullMaterial` over `modelTopic`
+ * in model mode), preferring fetched full text, then the longest observation.
+ */
+export function addScreenExcerpts(shortlist, topicById, storeDir, { excerptChars = SCREEN_EXCERPT_CHARS } = {}) {
+  return shortlist.map(row => {
+    const topic = topicById.get(row.topicId);
+    if (!topic || !storeDir || !(excerptChars > 0)) return row;
+    const material = loadTopicFullMaterial(topic, storeDir);
+    const bodies = [
+      ...(material.fetchedFullText?.text ? [{ source: 'fetched_full_text', text: material.fetchedFullText.text }] : []),
+      ...material.observations.map(obs => ({ source: 'observation', text: obs.text ?? '' }))
+        .sort((a, b) => b.text.length - a.text.length),
+    ].map(body => ({ ...body, text: body.text.replace(/\s+/g, ' ').trim() })).filter(body => body.text);
+    if (!bodies.length) return row;
+    const best = bodies[0];
+    const { tldr, ...rest } = row;
+    return { ...rest, excerpt: best.text.slice(0, excerptChars), excerptSource: best.source, bodyChars: best.text.length };
+  });
 }
 
 /**
@@ -400,29 +458,7 @@ export function validateV2Digest(markdown, { date, observedUrlSet }) {
     throw new Error(`Digest leaked internal pipeline phrasing ("${hit}"); rewrite from public reader perspective`);
   }
 
-  const lines = clean.split(/\r?\n/);
-  let currentSection = null;
-  let currentBullet = null;
-  const bullets = [];
-  const flushBullet = () => {
-    if (currentBullet) bullets.push({ section: currentSection, text: currentBullet.join('\n') });
-    currentBullet = null;
-  };
-
-  for (const raw of lines.slice(1)) {
-    const trimmed = raw.trim();
-    if (!trimmed) { flushBullet(); continue; }
-    const h2 = trimmed.match(/^##\s+(.+)$/);
-    if (h2) { flushBullet(); currentSection = h2[1].trim(); continue; }
-    if (/^#{3,6}\s/.test(trimmed)) { flushBullet(); continue; }
-    if (bulletLine.test(trimmed)) {
-      flushBullet();
-      currentBullet = [trimmed];
-    } else if (currentBullet) {
-      currentBullet.push(trimmed);
-    }
-  }
-  flushBullet();
+  const { bullets } = parseDigestStructure(clean);
 
   if (!bullets.length) throw new Error('Digest contains 0 story bullets');
 
@@ -456,6 +492,56 @@ export function validateV2Digest(markdown, { date, observedUrlSet }) {
     bulletSectionsByUrl,
     extractedTitles,
   };
+}
+
+/**
+ * Every selected topic must reach the reader: at least one item cites one of the topic's
+ * own observed addresses. Merging genuine duplicates into one item that cites both is fine.
+ */
+export function assertSelectedCoverage(markdown, selectedPlan, topicsById) {
+  const cited = new Set(parseDigestStructure(markdown).bullets.flatMap(b => citedUrls(b.text)).map(safeCanonical).filter(Boolean));
+  const missing = [];
+  for (const plan of selectedPlan) {
+    const topic = topicsById.get(plan.topicId);
+    if (!topic || !citesTopicSource(topic, cited)) missing.push(plan.topicId);
+  }
+  if (missing.length) {
+    throw new Error(`Digest omits ${missing.length} selected topic(s): ${missing.join(', ')}. Write one item for each selected topic, citing its own URL`);
+  }
+}
+
+/** Compact lint summary for telemetry and the reviewer; pattern hits, never approval. */
+export function summarizeEditorialLint(markdown, { maxIssues = 20 } = {}) {
+  const lint = evaluateDigestMarkdown(markdown);
+  return { notApproval: true, totalBullets: lint.totalBullets, cleanBullets: lint.cleanBullets,
+    issueCount: lint.digestIssues.length, issues: lint.digestIssues.slice(0, maxIssues) };
+}
+
+const nonEmptyStrings = value => Array.isArray(value) && value.every(item => typeof item === 'string' && item.trim());
+
+/**
+ * Parses the single-pass review reply. `issues` lists material fixes applied in
+ * `revisedMarkdown`; `advisories` carries non-blocking notes and never changes text.
+ * A revision may only correct sentences inside existing items (see assertBoundedRevision).
+ */
+export function parseReviewResponse(text, { draftMarkdown, date, observedUrlSet }) {
+  const parsed = parseJsonBlock(text);
+  if (!['pass', 'revise'].includes(parsed?.verdict)) throw new Error('verdict must be pass or revise');
+  if (!nonEmptyStrings(parsed.issues)) throw new Error('issues must be an array of non-empty strings');
+  const advisories = parsed.advisories ?? [];
+  if (!nonEmptyStrings(advisories)) throw new Error('advisories must be an array of non-empty strings when present');
+  if (parsed.verdict === 'pass') {
+    if (parsed.issues.length) throw new Error('A pass verdict lists no issues; put non-blocking notes in advisories, or revise to fix a material problem');
+    return { verdict: 'pass', issues: [], advisories, revisedMarkdown: null };
+  }
+  if (!parsed.issues.length) throw new Error('A revise verdict must list each material fix in issues');
+  if (typeof parsed.revisedMarkdown !== 'string' || !parsed.revisedMarkdown.trim()) {
+    throw new Error('revise verdict requires non-empty revisedMarkdown');
+  }
+  const revisedMarkdown = normalizeDigestSectionOrder(parsed.revisedMarkdown);
+  validateV2Digest(revisedMarkdown, { date, observedUrlSet });
+  assertBoundedRevision(normalizeDigestSectionOrder(draftMarkdown), revisedMarkdown, parsed.issues);
+  return { verdict: 'revise', issues: parsed.issues, advisories, revisedMarkdown };
 }
 
 /**
@@ -508,6 +594,7 @@ export async function runDailyV2({
         ? JSON.parse(fs.readFileSync(sourcesFile, 'utf8'))
         : JSON.parse(fs.readFileSync(path.join(repoRoot, 'config', 'sources.json'), 'utf8')));
     const taste = loadTasteConfig(tasteFile);
+    const categoryHints = sourceCategoryHints(resolvedSources);
 
     const usage = usageLedger();
     let collection = null;
@@ -521,8 +608,12 @@ export async function runDailyV2({
     let backlogStats = { recalledStandalone: 0, accumulatedWithFresh: 0 };
     let deepFetchStats = null;
     let observedUrlSet = null;
+    let topicById;
     let warnings = [];
     let draftMarkdown = null;
+    let selectionAdjustments = [];
+    let screenedTopicIds = null;
+    let screenShortlistIds = null;
 
     const hasPreparedState = Boolean(existingRunDir && fs.existsSync(path.join(existingRunDir, 'prepare-state.json')));
     const resumingFinalize = Boolean(hasPreparedState && finalizeDigestPath);
@@ -530,17 +621,25 @@ export async function runDailyV2({
       fs.existsSync(path.join(runtimeHooks.modelArtifactsDir ?? path.join(existingRunDir, 'model-artifacts'), 'checkpoints/v2-compose.json')));
     const reselectingPreparedRun = Boolean(hasPreparedState && (selectedTopicsPath || resumingModels) && !finalizeDigestPath);
 
+    const saved = (resumingFinalize || reselectingPreparedRun)
+      ? JSON.parse(fs.readFileSync(path.join(existingRunDir, 'prepare-state.json'), 'utf8')) : null;
+    if (resumingFinalize || resumingModels) {
+      screenShortlistIds = Array.isArray(saved.screenShortlistIds) ? new Set(saved.screenShortlistIds) : null;
+      screenedTopicIds = saved.screenedByEditor ? screenShortlistIds : null;
+      selectionAdjustments = saved.selectionAdjustments ?? [];
+    }
+
     if (resumingFinalize) {
       currentStage = 'load_prepared_run';
       lock.heartbeat(currentStage);
       runDir = path.resolve(existingRunDir);
       storeDir = path.join(runDir, 'store');
       collection = JSON.parse(fs.readFileSync(path.join(runDir, 'sources.merged.json'), 'utf8'));
-      const saved = JSON.parse(fs.readFileSync(path.join(runDir, 'prepare-state.json'), 'utf8'));
       reportDate = saved.reportDate || collection.date || today;
       trackedSources = saved.trackedSources;
       storeCounts = saved.counts;
       storeTopics = saved.topics;
+      topicById = new Map((modelsFile ? storeTopics.map(modelTopic).filter(Boolean) : storeTopics).map(t => [t.topicId, t]));
       selectedPlan = saved.selectedPlan;
       deferredMap = new Map(saved.deferredEntries ?? []);
       backlogStats = saved.backlogStats ?? backlogStats;
@@ -555,7 +654,6 @@ export async function runDailyV2({
         runDir = path.resolve(existingRunDir);
         storeDir = path.join(runDir, 'store');
         collection = JSON.parse(fs.readFileSync(path.join(runDir, 'sources.merged.json'), 'utf8'));
-        const saved = JSON.parse(fs.readFileSync(path.join(runDir, 'prepare-state.json'), 'utf8'));
         reportDate = saved.reportDate || collection.date || today;
         trackedSources = saved.trackedSources;
         storeCounts = saved.counts;
@@ -650,7 +748,7 @@ export async function runDailyV2({
         warnings.push(...softHistory.warnings);
 
         storeDir = path.join(runDir, 'store');
-        const storeResult = buildContentStore(collection, storeDir, { softHistory, supplements, taste });
+        const storeResult = buildContentStore(collection, storeDir, { softHistory, supplements, taste, categoryHints });
         storeCounts = storeResult.counts;
         storeTopics = storeResult.topics;
 
@@ -658,6 +756,7 @@ export async function runDailyV2({
           reportDate,
           softHistory,
           maxAgeDays: taste.backlog?.maxAgeDays,
+          undeferredMaxAgeDays: taste.backlog?.undeferredMaxAgeDays,
         });
         backlogStats = mergeBacklogIntoTopics(storeTopics, loadedBacklog.entries, storeDir, { taste, reportDate });
         storeCounts.topics = storeTopics.length;
@@ -726,24 +825,31 @@ export async function runDailyV2({
       fs.writeFileSync(candidateTopicsPath, JSON.stringify(compactTopics, null, 2) + '\n', { mode: 0o600 });
       // For LLM Stage 2 screening, pass a diversity-guarded top shortlist so AI Infra, Intelligence/Theory,
       // World-Impact Products, and Hamming "Open-Door" essays/cross-domain leads all reach the Chief Editor.
-      const screenShortlist = buildScreenShortlist(compactTopics, { limit: 48 });
+      const screenTopicById = new Map(selectableTopics.map(t => [t.topicId, t]));
+      const shortlisted = buildScreenShortlist(compactTopics, { limit: 48 });
+      const screenShortlist = addScreenExcerpts(shortlisted.length ? shortlisted : compactTopics.slice(0, 48), screenTopicById, storeDir,
+        { excerptChars: taste.screen?.excerptChars ?? SCREEN_EXCERPT_CHARS });
+      if (!resumingModels) screenShortlistIds = new Set(screenShortlist.map(row => row.topicId));
       fs.writeFileSync(selectPromptPath, `${readPrompt('v2-select-topics.md')}\n\n${tagged('topics_json', modelJson(screenShortlist))}\n`, { mode: 0o600 });
 
       const validTopicIds = new Set(selectableTopics.map(t => t.topicId));
+      let selectionSource = 'heuristic';
       if (resumingModels) {
-        const saved = JSON.parse(fs.readFileSync(path.join(runDir, 'prepare-state.json'), 'utf8'));
         selectedPlan = saved.selectedPlan;
         deferredMap = new Map(saved.deferredEntries ?? []);
       } else if (selectedTopicsPath) {
         const customRaw = JSON.parse(fs.readFileSync(selectedTopicsPath, 'utf8'));
         selectedPlan = parseSelectedPlanPayload(customRaw, validTopicIds);
         deferredMap = selectedPlan.deferredMap ?? new Map();
+        selectionSource = 'explicit';
       } else if (runStage && roles?.screen) {
+        selectionSource = 'editor';
+        screenedTopicIds = screenShortlistIds;
         selectedPlan = await runStage({
           stage: 'screen',
           label: 'v2-select-topics',
           system: readPrompt('v2-select-topics.md'),
-          prompt: tagged('topics_json', modelJson(screenShortlist.length ? screenShortlist : compactTopics.slice(0, 48))),
+          prompt: tagged('topics_json', modelJson(screenShortlist)),
           parse: text => parseSelectionResponse(text, validTopicIds),
         });
         deferredMap = selectedPlan.deferredMap ?? new Map();
@@ -770,24 +876,28 @@ export async function runDailyV2({
           };
 
       if (fetchFullTextOnline && !resumingModels && !selectedTopicsPath) {
-        await replaceAbstractOnlyDeepPapers(selectedPlan, storeTopics, {
+        const replacement = await replaceAbstractOnlyDeepPapers(selectedPlan, storeTopics, {
           sortedForSelection,
+          // An editor's choice is only adjusted with that editor's own ranked runner-ups.
+          alternates: selectionSource === 'editor' ? [...deferredMap.keys()] : null,
+          alternateSections: selectedPlan.deferredSections ?? new Map(),
           modelsFile,
           storeDir,
           fetchImpl,
           deferredMap,
         });
+        selectionAdjustments = replacement.adjustments;
       }
 
       // Assemble complete L0 materials & full observed URL allowlist
-      const topicById = new Map((modelsFile ? storeTopics.map(modelTopic).filter(Boolean) : storeTopics).map(t => [t.topicId, t]));
+      topicById = new Map((modelsFile ? storeTopics.map(modelTopic).filter(Boolean) : storeTopics).map(t => [t.topicId, t]));
       const selectedMaterials = selectedPlan.map(plan => ({
         ...plan,
         material: loadTopicFullMaterial(topicById.get(plan.topicId), storeDir),
       }));
 
       observedUrlSet = new Set();
-      for (const t of storeTopics) {
+      for (const t of topicById.values()) {
         for (const u of [t.primaryUrl, ...(t.discussionUrls ?? []), ...(t.allObservedUrls ?? [])]) {
           const c = safeCanonical(u);
           if (c) observedUrlSet.add(c);
@@ -815,6 +925,9 @@ export async function runDailyV2({
         topics: storeTopics,
         selectedPlan,
         deferredEntries: [...deferredMap.entries()],
+        selectionAdjustments,
+        screenShortlistIds: screenShortlistIds ? [...screenShortlistIds] : null,
+        screenedByEditor: screenedTopicIds !== null,
         backlogStats,
         deepFetchStats,
         observedUrls: [...observedUrlSet],
@@ -859,6 +972,7 @@ export async function runDailyV2({
           parse: text => {
             const md = normalizeDigestSectionOrder(extractBlock(text, 'markdown'));
             validateV2Digest(md, { date: reportDate, observedUrlSet });
+            assertSelectedCoverage(md, selectedPlan, topicById);
             return md;
           },
         });
@@ -871,24 +985,12 @@ export async function runDailyV2({
             stage: 'review',
             label: 'v2-review',
             system: readPrompt('v2-review-digest.md'),
-            prompt: tagged('draft_markdown', draftMarkdown) + '\n\n' + tagged('selected_topics', modelJson(selectedMaterials)),
-            parse: text => {
-              const parsed = parseJsonBlock(text);
-              if (!Array.isArray(parsed?.issues) || parsed.issues.some(issue => typeof issue !== 'string') ||
-                  (parsed.verdict === 'pass' && parsed.issues.length)) throw new Error('Review requires resolved issues');
-              if (!['pass', 'revise'].includes(parsed?.verdict)) throw new Error('verdict must be pass or revise');
-              if (parsed.verdict === 'revise') {
-                if (typeof parsed.revisedMarkdown !== 'string' || !parsed.revisedMarkdown.trim()) {
-                  throw new Error('revise verdict requires non-empty revisedMarkdown');
-                }
-                parsed.revisedMarkdown = normalizeDigestSectionOrder(parsed.revisedMarkdown);
-                validateV2Digest(parsed.revisedMarkdown, { date: reportDate, observedUrlSet });
-              }
-              return parsed;
-            },
+            prompt: tagged('draft_markdown', draftMarkdown) + '\n\n' + tagged('selected_topics', modelJson(selectedMaterials)) +
+              '\n\n' + tagged('lint_findings', modelJson(summarizeEditorialLint(draftMarkdown).issues)),
+            parse: text => parseReviewResponse(text, { draftMarkdown, date: reportDate, observedUrlSet }),
           });
           fs.writeFileSync(path.join(runDir, 'editorial-review.json'), JSON.stringify({
-            protocol: 'v2-single-pass', inputMarkdown: draftMarkdown, result: reviewOutcome,
+            protocol: 'v2-single-pass', revisionContract: 'bounded-v1', inputMarkdown: draftMarkdown, result: reviewOutcome,
             materialsSha256: sha256(fs.readFileSync(preparedTopicsPath)),
           }, null, 2) + '\n', { mode: 0o600 });
           if (reviewOutcome.verdict === 'revise' && reviewOutcome.revisedMarkdown) {
@@ -902,6 +1004,9 @@ export async function runDailyV2({
     lock.heartbeat(currentStage);
     draftMarkdown = normalizeDigestSectionOrder(draftMarkdown);
     const digestStats = validateV2Digest(draftMarkdown, { date: reportDate, observedUrlSet });
+    assertSelectedCoverage(draftMarkdown, selectedPlan, topicById);
+    const editorialLint = summarizeEditorialLint(draftMarkdown);
+    fs.writeFileSync(path.join(runDir, 'editorial-lint.json'), JSON.stringify(editorialLint, null, 2) + '\n', { mode: 0o600 });
 
     // Stage 7: Auto-generate dispositions + Update Rolling High-Value Backlog + Self-Check Telemetry Panel
     currentStage = 'finalize_artifacts';
@@ -926,6 +1031,7 @@ export async function runDailyV2({
 
     const persistBacklog = Boolean(runtimeHooks.recordHistoryOnLocalRun || runtimeHooks.persistBacklogOnLocalRun !== false);
     let savedBacklogCount = 0;
+    let backlogEvicted = null;
     if (persistBacklog) {
       for (const tp of storeTopics) tp._storeDir = storeDir;
       const savedPool = saveBacklogPool(workspace.stateDir, {
@@ -933,10 +1039,22 @@ export async function runDailyV2({
         topics: storeTopics,
         citedUrls: runtimeHooks.publicationPending ? [] : digestStats.citedUrls,
         deferredTopicIds: deferredMap,
+        // Only an editor's view of the shortlist counts as a screening; heuristics judge nothing.
+        screenedTopicIds,
+        selectedTopicIds: new Set(selectedPlan.map(row => row.topicId)),
         taste,
       });
       for (const tp of storeTopics) delete tp._storeDir;
       savedBacklogCount = savedPool.savedCount;
+      backlogEvicted = savedPool.evicted;
+    }
+
+    let editorialStats = null;
+    if (persistBacklog) {
+      const statsFile = path.join(workspace.stateDir, 'editorial-stats.jsonl');
+      appendEditorialStats(statsFile, buildDailyEditorialStats({ date: reportDate, topics: storeTopics,
+        shortlistIds: screenShortlistIds, selectedPlan, citedUrls: digestStats.citedUrls }));
+      editorialStats = rollingEditorialStats(statsFile, { asOf: reportDate });
     }
 
     telemetry = buildTelemetry({
@@ -947,6 +1065,7 @@ export async function runDailyV2({
         backlogRecalled: backlogStats.recalledStandalone,
         backlogAccumulated: backlogStats.accumulatedWithFresh,
         backlogSaved: savedBacklogCount,
+        ...(backlogEvicted ? { backlogEvicted } : {}),
         dedupSkipped7d: storeCounts.dedupSkipped7d,
         dedupFollowUps: storeCounts.dedupFollowUps,
         clusteredTopics: storeCounts.topics,
@@ -958,6 +1077,8 @@ export async function runDailyV2({
         publishedTotal: digestStats.bulletsCount,
       },
       stageUsage: usage.report(),
+      editorialLint,
+      editorialStats,
       warnings,
       reclaimedLocks,
     });

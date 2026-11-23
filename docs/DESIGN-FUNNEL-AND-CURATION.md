@@ -40,13 +40,19 @@ The **v2 architecture (`run-daily.mjs`, `content-store.mjs`, `curation.mjs`, `te
             4. Stage 2 Editorial Value Assessment (`prompts/v2-select-topics.md`)
                Evaluates Top ~45 shortlist on:
                (a) Novel Insight  (b) Empirical Engineering Lesson  (c) Consequential Judgment
-               ├── `deep` (5–8 items) -> Full-text fetch (`enrichTopicsWithFullText`) -> Deep Dive
-               ├── `quick` (0–5 items) -> Concise releases / product betas ONLY -> Quick Hits (first)
+               ├── `deep` (5–8 items, typically 6–8) -> Full-text fetch (`enrichTopicsWithFullText`) -> Deep Dive
+               ├── `quick` (0–5 items, never padded) -> Concise releases / product betas ONLY -> Quick Hits (first)
                └── `deferred` -> High-value runners-up saved back into `backlog-pool.json`
                                      │
                                      ▼
             5. Source-Faithful Composition + Single-Pass Review + Telemetry Self-Check
                ├── Deterministic URL allowlist gate + pipeline-jargon blocker (`validateV2Digest`)
+               ├── Selected-topic coverage: every selected topic is cited by one item (`assertSelectedCoverage`,
+               │   at compose with one retry and again before publication on every path)
+               ├── Prose lint (`editorial-lint.mjs`) → reviewer `<lint_findings>` leads + internal `editorial-lint.json`
+               │   / `telemetry.editorialLint`; never rendered, never part of health or approval
+               ├── Bounded single-pass review: `issues` = material fixes, `advisories` = non-blocking notes;
+               │   a revision keeps every heading, item, order, section and link set (`assertBoundedRevision`)
                ├── Canonical section ordering (`Quick Hits / 快讯速览` first when present)
                └── `telemetry.json` + `### 运行自检` footer + local failure diagnostics
 ```
@@ -70,6 +76,9 @@ To ensure zero data loss at ingestion while keeping screening lightweight and fi
    - `product` / `general` $\rightarrow$ `## Applications / Products` (or `## Quick Hits / 快讯速览`);
    - `essay` $\rightarrow$ `## Long-form / Essays` (`Substack`, `Latent Space`, `Interconnects`, `SemiAnalysis`, `Chips and Cheese`, etc.);
    - `case_study_pr` $\rightarrow$ Commercial customer case studies (penalized and excluded by default).
+   - **What the classifier reads**: category describes what an item *is*, so `classifyHeuristic` reads only the item's own URL, shared links, title and first 500 characters (`CLASSIFY_LEAD_CHARS`). A passing phrase later in an essay ("as a case study", "introducing …") cannot change its section or apply a penalty.
+   - **Customer stories** (`case_study_pr`) are detected only from the item's own URL path (`/customers/`, `/case-studies/`, `/customer-stories/`, `/success-stories/`) or its headline (`Customer story`, a title opening `Case study:`, `客户案例`, `成功案例`). An untitled X/watch post is headlined by its opening and judged by the links it shares; a titled article that merely links to a customers page is not penalized.
+   - **Per-source hints**: a feed or blog in `sources.json` may declare `"category"` (`essay | paper | infra_eng | open_source | product | general`). The hint replaces keyword guessing for that source (e.g. Terence Tao, arg min, Dan Luu → `essay`; Transformer Circuits → `paper`) but cannot launder a customer story, and it cannot itself be `case_study_pr`. Invalid hints stop the run at start.
 
 ---
 
@@ -104,16 +113,19 @@ $$S_{\text{prior}} = W_{\text{author}} + W_{\text{source}} + W_{\text{social}} +
 4. **Noise Penalties ($P_{\text{noise}}$)**:
    - Commercial customer case studies (`-8.0`) and hiring/giveaway/webinar promos (`-6.0`).
 
+Known incident patterns for the prose lint (mistranslations, codenames that need a role anchor) live in `config/editorial-lint.json`, not in prompt text; prompts keep only the general rule.
+
 ### Stage 2: LLM Qualitative Editorial Assessment (`prompts/v2-select-topics.md`)
 
-The top ~45 candidates ranked by $S_{\text{prior}}$ are evaluated by the LLM (or local Host Agent in `--prepare-only` mode) on three editorial criteria:
+The diversity-guarded shortlist (48 candidates, `buildScreenShortlist`) is evaluated by the LLM (or local Host Agent in `--prepare-only` mode). Each row carries an `excerpt`: the first `screen.excerptChars` (default 1,200) characters of the best available body, preferring a fetched article over the longest observation, plus `excerptSource` and `bodyChars` (`addScreenExcerpts`). Excerpts are read through `loadTopicFullMaterial` over the `modelTopic` projection, so the editor receives exactly the public material the composer would, never mail, Xiaohongshu, out-of-store or unshareable fetched text. The editor judges on three editorial criteria:
 1. **Novel Insight (重要新见解)**: Counter-intuitive findings, newly explained mechanisms, or resolved paradoxes.
 2. **Empirical & Engineering Lesson (一手经验)**: Firsthand training/serving/production trade-offs, ablations, failure modes, and measured costs (distinguishing primary work from secondhand recaps).
 3. **Consequential Judgment (重要判断)**: High-leverage architectural directions, major open-weight releases, or rigorous evaluation benchmarks.
 
 ### Strict `Deep Dive` vs. `Quick Hits` Boundary
-- **`Deep Dive` (`tier: "deep"`, 5–8 items)**: Items whose value requires unpacking `obstacle -> concrete mechanism -> experimental setup & boundary`. Diversity guard caps any single feed (e.g., Daily Papers) at 2–3 items when other strong sources exist.
-- **`Quick Hits / 快讯速览` (`tier: "quick"`, 0–5 items, rendered first)**: **Strictly** for items whose entire value fits in 1–2 crisp sentences without methodological exposition (routine product betas, UI connectors, minor SDK/framework point releases). **Research papers are never dumped into Quick Hits as overflow.**
+- **`Deep Dive` (`tier: "deep"`, 5–8 items, typically 6–8)**: Items whose value requires unpacking `obstacle -> concrete mechanism -> experimental setup & boundary`. Diversity guard caps any single feed (e.g., Daily Papers) at 2–3 items when other strong sources exist.
+- **Editor-ranked replacement (`replaceAbstractOnlyDeepPapers`)**: `deferred` is the editor's ranked runner-up list (best first, optional `section`). If a selected deep paper is still not full text after enrichment, it is replaced by the editor's highest-ranked eligible runner-up that has, or can be fetched to, full text (at most 2 replacements and 2 on-demand fetches). A candidate the editor did not rank is never substituted, whatever its prior score; with no eligible runner-up the editor's pick stays. The heuristic selector has no editor and falls back to its own prior ranking; an explicit `--selected-topics` plan is never adjusted. Every swap or kept pick is recorded in `prepare-state.json` as `selectionAdjustments`.
+- **`Quick Hits / 快讯速览` (`tier: "quick"`, 0–5 items, never padded, rendered first)**: **Strictly** for items whose entire value fits in 1–2 crisp sentences without methodological exposition (routine product betas, UI connectors, minor SDK/framework point releases). **Research papers are never dumped into Quick Hits as overflow.**
 
 ---
 
@@ -125,7 +137,8 @@ Daily news volume is bursty: a major conference or release day may produce 15+ g
 1. **Selective Admission**: After daily composition, unpicked topics that were either explicitly marked `deferred` by the Stage 2 editor or scored $S_{\text{prior}} \ge 5.5$ (`minPriorScoreToEnter`) are persisted into `state/backlog-pool.json` (capped at `maxPoolSize = 1000`). Low-signal noise is discarded immediately.
 2. **Zero-Refetch Full-Text Caching**: Any full article body already fetched or extracted for a backlog candidate is copied into `state/backlog-articles/<hash>.txt` and reused automatically on subsequent runs.
 3. **Cross-Day Signal Accumulation**: If a slow-burn essay or paper in the backlog receives new X discussions or higher upvotes tomorrow, `mergeBacklogIntoTopics` merges the new observations into the existing topic, increments `fanIn`, updates peak `metrics`, and resets age decay (`refreshedToday = true`) — naturally boosting slow-burn gems to the top.
-4. **Daily Ranking Decay and One-Year Retention**: Unrefreshed backlog items lose `dailyDecay = 0.6` ranking points per day. The admission threshold applies on entry. Admitted items remain eligible for retention up to `maxAgeDays = 365`, subject to the capacity limit and removal when cited or matched in recent publication history. Recalled items older than 48 hours carry the `补读｜` prefix with their original publication date.
+4. **Eviction of undeferred leads**: entries the editor never deferred are prior-admitted leads, not vetted gems. They expire after `backlog.undeferredMaxAgeDays` (30), drop when a carried entry without fresh signal decays below `backlog.undeferredMinPriorScore` (0), and drop after `backlog.maxUndeferredScreenings` (2) editor runs in which they reached the Stage 2 shortlist without being selected or deferred (`screenedWithoutDeferral`; heuristic runs never count, and a deferral resets it). Evictions are recorded in `telemetry.funnel.backlogEvicted` (`age`, `score`, `screened`). Editor-deferred entries keep the long retention below.
+5. **Daily Ranking Decay and One-Year Retention for deferred gems**: Unrefreshed backlog items lose `dailyDecay = 0.6` ranking points per day. The admission threshold applies on entry. Editor-deferred items remain eligible for retention up to `maxAgeDays = 365`, subject to the capacity limit and removal when cited or matched in recent publication history. Recalled items older than 48 hours carry the `补读｜` prefix with their original publication date.
 
 ---
 
@@ -141,3 +154,25 @@ Daily news volume is bursty: a major conference or release day may produce 15+ g
 3. **Quantified Self-Check Footer (`### 运行自检 [OK | WARN | ACTION_NEEDED]`)**:
    - Reports exact `usable / configured` sources and explicitly names any `unattempted` or `failed` sources (with consecutive failure days tracked in `source-health.json`).
    - Prints full funnel visibility: `原始入库 -> 遗珠池召回/累加 -> 7日去重跳过 -> 话题聚合 -> 初筛入选 -> 全文补齐 -> 成稿（深度 + 快讯，含捞回遗珠） -> 遗珠池留存`.
+
+---
+
+## 7. Single-Pass Review Contract (`prompts/v2-review-digest.md`, `parseReviewResponse`)
+
+The reviewer runs once and returns `{ verdict, issues, advisories, revisedMarkdown }`:
+
+- `pass` carries an empty `issues` list. Readability notes (cold codenames, negative templates, wall-of-text bullets) go in `advisories`, which are recorded in `editorial-review.json` and never change text or block the run.
+- `revise` is only for material problems (fact, number, date, meaning-changing mistranslation, unsupported claim, unobserved URL, leaked pipeline phrasing). The revision must keep the title, every heading, text outside items, the item count, order and sections; it may not add a link to an item (removing one together with its claim is allowed); it must change at least one item; and it lists at least one `issues` entry per changed item. Unchanged items are compared after per-line trimming, as the validator and renderer read them.
+- A violation is a parse error: the stage runner retries once with the error message, then fails the run instead of publishing an unbounded rewrite.
+- `editorial-review.json` records `revisionContract: "bounded-v1"`; the publication gate (`validateReview`) re-proves the bound for such records. Records written before this contract carry no marker and remain readable for reconciliation. Because the review prompt changed, a review checkpoint recorded before this contract no longer matches its prompt hash and is refused on resume (fail-closed); such an in-flight run needs a fresh model-artifacts directory.
+
+---
+
+## 8. Measuring the Mix (`editorial-stats.mjs`)
+
+The Stage 2 editor tags each selected item with `pillar` (`infra | intelligence | world_impact | open_door`); an invalid or missing tag falls back to the prior's domain tag, else `unclassified`. Each completed run writes one row per report date to `state/editorial-stats.jsonl` (a rerun replaces its date; rows older than 400 days are pruned):
+
+- **Pillar mix**: composed Deep Dives by pillar, plus composed Quick Hits. Selected items that did not reach the final text do not count.
+- **Per-source yield**: for each source label, topics ingested → shortlisted → selected → composed. A composed topic has a source citation in the final draft. Delivery receipts independently track what reached the reader.
+
+`telemetry.editorialStats` carries the rolling 7-day pillar mix (with shares, `null` when no Deep Dives were composed) and the 30-day source yield. `npm run stats:editorial -- --data-dir DATA [--as-of YYYY-MM-DD]` prints the same report. Use it to check the ~15–25% open-door target and to tune `taste.json` tiers from data. These numbers are internal: never rendered to readers, never part of health or approval.

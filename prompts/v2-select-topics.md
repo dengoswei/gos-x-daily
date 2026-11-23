@@ -30,6 +30,10 @@ Each candidate already carries `priorScore` and `curationSignals` computed from 
 3. **Social & community resonance (`fanIn`, `metrics`)** — in-network sharing count (`fanIn`), X bookmarks/reposts/likes, HF paper upvotes, and GitHub stars;
 4. **Domain alignment (`domainTag`: `core_ml_systems | intelligence_theory | general | robotics_embodied`) & Backlog recall (`fromBacklog: true`)** — gives primary anchor weight to AI Infra (`+1.2`) and Intelligence/Algorithms/Training Theory (`+1.0`), keeps World-Impact Products & Open-Door cross-domain topics neutral (`0.0`), downweights robotics/embodied AI (`-3.5`), and resurfaces unpicked high-value runners-up.
 
+## What each candidate row contains
+
+Besides title, URLs, dates and the priors above, each shortlisted row carries `excerpt`: the first ~1,200 characters of the best available body (the fetched article when present, otherwise the longest observed post or feed text), with `excerptSource` and `bodyChars` (the full body length). Judge substance from the excerpt: what problem it addresses, what mechanism or argument it offers, and what evidence it reports. A title or a famous author alone is not substance. `contentStatus` tells you how much body exists (`full_text`, `abstract_only`, `snippet_only`); a short excerpt from a `full_text` row is only its opening.
+
 ## Your job (Stage 2 Editorial Value Assessment)
 
 Objective priors surface *who* wrote an item and *how much attention* it received, while you evaluate **substance, problem formulation, and portfolio balance** across **four qualitative lenses**:
@@ -39,20 +43,25 @@ Objective priors surface *who* wrote an item and *how much attention* it receive
 3. **World-Scale Impact & Paradigm Shift (真实世界 Impact / 基础范式演进)**: Does this product, open-weight model, scientific AI system, or benchmark genuinely shift what problems humans/agents can solve in the real world?
 4. **Structural Isomorphism ("Open-Door" Clue / 底层相通的跨界启发)**: Even if its surface domain looks distant, does its underlying formulation provide a clean, transferable clue for AI Infra, learning theory, or agent systems?
 
+### Pillar tag
+
+Tag every `selected` item with `pillar`: `infra` (Pillar 1), `intelligence` (Pillar 2), `world_impact` (Pillar 3) or `open_door` (a cross-domain structural-isomorphism pick). The runner tracks the rolling mix of composed Deep Dives against the ~15–25% open-door target; tag what the item is, not what would balance the mix.
+
 ### Tier assignment & capacity rules
 
-- **`tier: "deep"` (target 6 to 8 items; use 7–8 slots on strong days)**:
+- **`tier: "deep"` (5 to 8 items: typically 6–8, using 7–8 slots on strong days; fewer only when strong candidates are lacking)**:
   - Items whose value requires unpacking **problem formulation / bottleneck → fundamental mechanism or theoretical argument → decisive evidence / boundary**.
   - Route each `deep` item to its natural topical section: `Frameworks / Infra`, `Breakthrough Research`, `Applications / Products`, or `Long-form / Essays`.
   - **Portfolio balance & full-text discipline (prevent framework tunnel vision & backlog crowding)**:
     - Balance engineering depth (`AI Infra`) with `Intelligence` (algorithms, training theory, interpretability, philosophy of intelligence), `World-Impact AI Products`, and `1–2` Hamming "Open-Door" essays or cross-domain mechanisms when strong candidates exist — **using up to 7–8 `deep` slots rather than dropping a fresh S-tier distributed-training/infra postmortem when adding a `补读` essay or X thread**.
     - Prefer **fresh** high-signal arrivals over older `fromBacklog: true` items of similar quality, and strongly prefer candidates with full article/blog/postmortem bodies (`full_text`) over `abstract_only` papers lacking concrete empirical benchmarks, baselines, or training budgets in their metadata.
     - Cap any single high-volume aggregator (like `Hugging Face Daily Papers`) at 2–3 slots when strong blogs, essays, products, or X threads exist; cap `robotics_embodied` at **0–1 item max**.
-- **`tier: "quick"` (target 4 to 5 items when available, always section `"Quick Hits / 快讯速览"`)**:
-  - **ONLY** for useful updates whose entire practical point fits in 1–2 crisp sentences without unpacking a complex mechanism (e.g., frontier model/API availability & pricing, major `v1.0.0`/ABI library releases, SDK/framework point releases, compact open-weight or hardware spec announcements). Use all 5 `quick` slots when major open-source library milestones co-occur with flagship model/product launches or technical X discussions.
+- **`tier: "quick"` (0 to 5 items, always section `"Quick Hits / 快讯速览"`; include each update that qualifies and never pad to reach a count)**:
+  - **ONLY** for useful updates whose entire practical point fits in 1–2 crisp sentences without unpacking a complex mechanism (e.g., frontier model/API availability & pricing, major `v1.0.0`/ABI library releases, SDK/framework point releases, compact open-weight or hardware spec announcements). On a busy release day, up to 5 qualifying updates may fill the section.
   - **NEVER** demote a research paper or theoretical essay into `quick` just because `deep` slots are full — put strong runners-up in `deferred`!
-- **`deferred` (0 to 8 items — Rolling High-Value Backlog)**:
+- **`deferred` (0 to 8 items — ranked runner-ups and Rolling High-Value Backlog)**:
   - High-quality Infra, Intelligence/Theory, World-Impact, or Open-Door pieces (including promising "little acorns") that pass your editorial bar **but did not fit into today's `deep` budget**. Never fill `deferred` with routine robotics/VLA papers or minor promos.
+  - **List `deferred` best first** and give each its `section`. If a selected `deep` paper's full text cannot be retrieved, the runner replaces it with your highest-ranked `deferred` item that has full text, in your order; it never substitutes a candidate you did not rank. Unused runner-ups go to the backlog.
 - **Everything else (omitted)**:
   - Commercial customer case studies (`case_study_pr`), shallow wrapper launches, organizational process fluff, routine robotics/embodied VLA benchmarks without generalizable takeaways, speculative hype without an attack vector, or `dedupStatus: "seen_recently"` items lacking a concrete new technical fact (if an item has a verified new fact, set `followUp: true`).
 
@@ -67,6 +76,7 @@ Return exactly one fenced `json` block and nothing else:
       "topicId": "topic-0001",
       "tier": "deep",
       "section": "Frameworks / Infra",
+      "pillar": "infra",
       "followUp": false,
       "reason": "Concrete empirical finding on long-tail reasoning latency eating token/s gains"
     },
@@ -74,6 +84,7 @@ Return exactly one fenced `json` block and nothing else:
       "topicId": "topic-0008",
       "tier": "quick",
       "section": "Quick Hits / 快讯速览",
+      "pillar": "world_impact",
       "followUp": false,
       "reason": "Useful collaborative spreadsheet beta explainable in one sentence"
     }
@@ -81,6 +92,7 @@ Return exactly one fenced `json` block and nothing else:
   "deferred": [
     {
       "topicId": "topic-0012",
+      "section": "Breakthrough Research",
       "reason": "Strong mechanistic interpretability ablation, deferred due to today's 7-item deep budget"
     }
   ]

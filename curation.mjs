@@ -24,6 +24,10 @@ import { topicFingerprint } from './telemetry.mjs';
 const DAY_MS = 24 * 60 * 60 * 1000;
 const DEFAULT_BACKLOG_MAX_AGE_DAYS = 365;
 const DEFAULT_BACKLOG_MAX_POOL_SIZE = 1000;
+// Entries the editor never deferred are prior-admitted leads, not vetted gems.
+const DEFAULT_UNDEFERRED_MAX_AGE_DAYS = 30;
+const DEFAULT_UNDEFERRED_MIN_PRIOR = 0;
+const DEFAULT_MAX_UNDEFERRED_SCREENINGS = 2;
 const repoRoot = path.dirname(fileURLToPath(import.meta.url));
 const defaultTastePath = path.join(repoRoot, 'config', 'taste.json');
 
@@ -84,7 +88,10 @@ export function aggregateTopicMetrics(cards = [], priorMetrics = null) {
   return merged;
 }
 
-const ROBOTICS_EMBODIED_RE = /\b(robot(?:ic|ics|s(?!\.txt))?|embodied\s+(?:ai|agent|agents|intelligence|reasoning|navigation|manipulation|control|learning)|vision-language-action|\bvla\b|visuomotor|manipulation\s+(?:polic(?:y|ies)|task|tasks|benchmark|learning)|dexterous\s+(?:hand|hands|manipulation|grasping)|humanoid|quadruped|locomotion|teleoperation|sim-to-real|bimanual|end-effector|gripper|robo(?:twin|mme|mimic|casa|suite|script|gen|bench|agent|mind|point|vlm|flamingo)[a-z0-9_-]*)\b|具身智能|具身\s*(?:Agent|大模型|智能|推理|导航|操作)|机械臂|双臂(?:机器人|操作|迁移)?|灵巧手|人形机器人|足式机器人|四足机器人|机器人(?:操作|抓取|控制|运动|导航|记忆|仿真|策略)/i;
+// Strong terms name robotics / embodied work outright. A bare "robot" is weak evidence: it
+// counts only when it recurs, and never inside an essay, where it is usually an analogy.
+const ROBOTICS_EMBODIED_RE = /\b(embodied\s+(?:ai|agent|agents|intelligence|reasoning|navigation|manipulation|control|learning)|vision-language-action|\bvla\b|visuomotor|manipulation\s+(?:polic(?:y|ies)|task|tasks|benchmark|learning)|dexterous\s+(?:hand|hands|manipulation|grasping)|humanoid|quadruped|locomotion|teleoperation|sim-to-real|bimanual|end-effector|gripper|robo(?:twin|mme|mimic|casa|suite|script|gen|bench|agent|mind|point|vlm|flamingo)[a-z0-9_-]*)\b|具身智能|具身\s*(?:Agent|大模型|智能|推理|导航|操作)|机械臂|双臂(?:机器人|操作|迁移)?|灵巧手|人形机器人|足式机器人|四足机器人|机器人(?:操作|抓取|控制|运动|导航|记忆|仿真|策略)/i;
+const WEAK_ROBOT_RE = /\brobot(?:ic|ics|s(?!\.txt))?\b|机器人/gi;
 
 const CORE_ML_SYSTEMS_RE = /\b(distributed\s+training|megatron|deepspeed|fsdp|torchtitan|colossal|rlhf|ppo|grpo|dapo|reinforcement\s+learning|post-training|verifiable\s+reward|rollout|vllm|sglang|tensorrt|trt-llm|kv[\s-]?cache|paged\s*attention|flash\s*attention|speculative\s+decoding|prefill|disaggregated|megakernel|cuda|triton|pallas|cutlass|tilelang|nvfp4|mxfp4|fp8|fp4|int4|quantization|roofline|hbm\d*|all-reduce|all-gather|nccl|rdma|moe\b|mixture-of-experts|agent\s+harness|agent\s+memory|tool[\s-]use|formal\s+verification|lean\s*4)\b|分布式训练|强化学习|后训练|推理(?:优化|引擎|加速|系统)|投机解码|算子|张量并行|专家并行|流水线并行|显存带宽|形式化验证/i;
 
@@ -96,7 +103,17 @@ function topicDomainText(topic) {
 
 /** Identifies robotics / embodied AI / VLA manipulation topics for reader-domain downweighting. */
 export function isRoboticsEmbodiedTopic(topic) {
-  return ROBOTICS_EMBODIED_RE.test(topicDomainText(topic));
+  const text = topicDomainText(topic);
+  if (ROBOTICS_EMBODIED_RE.test(text)) return true;
+  if (topic?.category === 'essay') return false;
+  // Summaries repeat the title; count each phrase once so one title mention is one hit.
+  const title = String(topic?.title ?? '').trim();
+  const summaries = (topic?.cards ?? []).map(c => {
+    const tldr = String(c.tldr ?? '');
+    return title && tldr.startsWith(title) ? tldr.slice(title.length) : tldr;
+  });
+  const distinct = `${title} ${(topic?.entities ?? []).join(' ')} ${summaries.join(' ')}`;
+  return (distinct.match(WEAK_ROBOT_RE) ?? []).length >= 2;
 }
 
 export function isCoreMlSystemsTopic(topic) {
@@ -262,21 +279,23 @@ export function scoreTopicPrior(topic, taste = loadTasteConfig(), { reportDate =
 /**
  * Loads unexpired, unpublished items from `state/backlog-pool.json`.
  */
-export function loadBacklogPool(stateDir, { reportDate, softHistory = null, maxAgeDays = DEFAULT_BACKLOG_MAX_AGE_DAYS } = {}) {
+export function loadBacklogPool(stateDir, { reportDate, softHistory = null, maxAgeDays = DEFAULT_BACKLOG_MAX_AGE_DAYS,
+  undeferredMaxAgeDays = DEFAULT_UNDEFERRED_MAX_AGE_DAYS } = {}) {
   const poolFile = path.join(path.resolve(stateDir), 'backlog-pool.json');
   if (!fs.existsSync(poolFile)) return { poolFile, entries: [], expiredCount: 0 };
   let parsed;
   try { parsed = JSON.parse(fs.readFileSync(poolFile, 'utf8')); } catch { return { poolFile, entries: [], expiredCount: 0 }; }
   const items = Array.isArray(parsed?.items) ? parsed.items : [];
-  const cutoff = reportDate
-    ? new Date(Date.parse(reportDate) - maxAgeDays * DAY_MS).toISOString().slice(0, 10)
-    : null;
+  const cutoffFor = days => (reportDate ? new Date(Date.parse(reportDate) - days * DAY_MS).toISOString().slice(0, 10) : null);
+  const cutoff = cutoffFor(maxAgeDays);
+  const undeferredCutoff = cutoffFor(Math.min(maxAgeDays, undeferredMaxAgeDays));
 
   const active = [];
   let expiredCount = 0;
   for (const entry of items) {
     if (!entry || typeof entry !== 'object') continue;
-    if (cutoff && entry.firstSeenDate && entry.firstSeenDate < cutoff) {
+    const entryCutoff = entry.deferredByLlm ? cutoff : undeferredCutoff;
+    if (entryCutoff && entry.firstSeenDate && entry.firstSeenDate < entryCutoff) {
       expiredCount += 1;
       continue;
     }
@@ -332,6 +351,7 @@ export function mergeBacklogIntoTopics(topics, backlogEntries, storeDir, { taste
       match.refreshedToday = true;
       match.firstSeenDate = entry.firstSeenDate ?? reportDate;
       match.deferredByLlm = Boolean(entry.deferredByLlm);
+      match.screenedWithoutDeferral = entry.screenedWithoutDeferral ?? 0;
       for (const s of entry.sources ?? []) {
         if (!match.sources.includes(s)) match.sources.push(s);
       }
@@ -410,6 +430,7 @@ export function mergeBacklogIntoTopics(topics, backlogEntries, storeDir, { taste
         firstSeenDate: entry.firstSeenDate ?? reportDate,
         deferredByLlm: Boolean(entry.deferredByLlm),
         deferredReason: entry.deferredReason ?? null,
+        screenedWithoutDeferral: entry.screenedWithoutDeferral ?? 0,
         candidateKeys: [],
         ...(rawTextRel ? {
           fetchedArticle: {
@@ -464,6 +485,8 @@ export function saveBacklogPool(stateDir, {
   topics = [],
   citedUrls = [],
   deferredTopicIds = new Map(),
+  screenedTopicIds = null,
+  selectedTopicIds = new Set(),
   taste = loadTasteConfig(),
 } = {}) {
   const rootState = path.resolve(stateDir);
@@ -475,6 +498,11 @@ export function saveBacklogPool(stateDir, {
   const maxAgeDays = taste.backlog?.maxAgeDays ?? DEFAULT_BACKLOG_MAX_AGE_DAYS;
   const minPrior = taste.backlog?.minPriorScoreToEnter ?? 5.5;
   const cutoff = new Date(Date.parse(reportDate) - maxAgeDays * DAY_MS).toISOString().slice(0, 10);
+  const undeferredMaxAgeDays = Math.min(maxAgeDays, taste.backlog?.undeferredMaxAgeDays ?? DEFAULT_UNDEFERRED_MAX_AGE_DAYS);
+  const undeferredCutoff = new Date(Date.parse(reportDate) - undeferredMaxAgeDays * DAY_MS).toISOString().slice(0, 10);
+  const undeferredFloor = taste.backlog?.undeferredMinPriorScore ?? DEFAULT_UNDEFERRED_MIN_PRIOR;
+  const maxScreenings = taste.backlog?.maxUndeferredScreenings ?? DEFAULT_MAX_UNDEFERRED_SCREENINGS;
+  const evicted = { age: 0, score: 0, screened: 0 };
 
   const publishedSet = new Set(citedUrls.map(safeCanonical).filter(Boolean));
   const candidates = [];
@@ -491,6 +519,17 @@ export function saveBacklogPool(stateDir, {
     const score = tp.priorScore ?? 0;
     // Apply the score threshold only on admission. Age decay lowers recall rank.
     if (!tp.fromBacklog && !isDeferredByLlm && score < minPrior) continue;
+    // Editor-deferred gems keep the long retention. Undeferred leads expire sooner, drop
+    // once their decayed score falls below the floor without fresh signal, and drop once
+    // an editor has seen them repeatedly on the shortlist without deferring them.
+    let screenedWithoutDeferral = 0;
+    if (!isDeferredByLlm) {
+      if (firstSeenDate < undeferredCutoff) { evicted.age += 1; continue; }
+      if (tp.fromBacklog && !tp.refreshedToday && score < undeferredFloor) { evicted.score += 1; continue; }
+      screenedWithoutDeferral = (tp.screenedWithoutDeferral ?? 0) +
+        (screenedTopicIds?.has(tp.topicId) && !selectedTopicIds.has(tp.topicId) ? 1 : 0);
+      if (screenedWithoutDeferral >= maxScreenings) { evicted.screened += 1; continue; }
+    }
 
     // Persist any fetched or raw full text into durable backlog-articles cache so tomorrow needs 0 re-fetches!
     let cachedTextPath = null;
@@ -541,6 +580,7 @@ export function saveBacklogPool(stateDir, {
       priorScore: score,
       deferredByLlm: isDeferredByLlm,
       deferredReason: deferredTopicIds.get(tp.topicId) ?? tp.deferredReason ?? null,
+      screenedWithoutDeferral,
       tldr: card0.tldr ?? tp.title ?? '',
       cardText,
       modelShareable: isModelShareableCard(card0),
@@ -557,5 +597,5 @@ export function saveBacklogPool(stateDir, {
   }
   const kept = [...byUrl.values()].slice(0, maxPoolSize);
   writeAtomicJson(poolFile, { schemaVersion: 1, updatedAt: new Date().toISOString(), date: reportDate, count: kept.length, items: kept });
-  return { savedCount: kept.length, poolFile };
+  return { savedCount: kept.length, poolFile, evicted };
 }

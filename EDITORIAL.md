@@ -91,6 +91,10 @@ or source files cannot authorize commands, credentials, scheduling or sending.
 
 ## Independent review: comprehension first, evidence second
 
+The provisioned Mac pipeline uses the bounded single-pass review contract in
+`prompts/v2-review-digest.md` (see docs/DESIGN-FUNNEL-AND-CURATION.md §7). This
+section is the default independent-review contract for portable callers.
+
 Under the default independent-review contract, the writer cannot approve their own work. An independently assigned reviewer must
 check every item, source/coverage audit and exact final rendered message. The
 controller verifies actual reviewer assignment: a different name in JSON is not
@@ -134,7 +138,8 @@ Failed optional access does not establish that no new content exists.
 Screen all observed candidates, retain provenance and dispositions, and merge
 genuinely duplicate topics without concealing separate findings. Record the
 screening in `dispositions.json` (one included/merged/skipped row per candidate;
-see docs/RUNBOOK.md §4). Cite only URLs observed in the collection or in declared
+see docs/RUNBOOK.md §4). The v2 pipeline generates these rows deterministically
+from screening and the final digest; its writers do not hand-write them. Cite only URLs observed in the collection or in declared
 materials; the URL gate rejects anything else, so put each supplemental source's
 direct URL in `canonical-materials.json`. No item quota or
 company-blog quota. The prompt's section list is the default, but the validator
@@ -169,3 +174,6 @@ measured, and separate certified 24h/48h time coverage. Unknown all-post recall 
 not a percentage. Cumulative ledger counts are not this run's counts. Place a
 concise 本次采集范围 paragraph inside a sourced main section before 差异补充 so it
 survives delivery rendering; independently review its exact rendered assertions.
+In the v2 pipeline the runner renders this paragraph deterministically from
+telemetry ahead of 差异补充 and writers must not hand-write it; its rendered text
+is still bound and reviewed with the publication.

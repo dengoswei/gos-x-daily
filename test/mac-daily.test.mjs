@@ -4,7 +4,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { effectiveSources } from '../source-config.mjs';
-import { larkMarkdown } from '../digest.mjs';
+import { larkMarkdown, publicationGates } from '../digest.mjs';
+import { buildReviewSnapshot } from '../review.mjs';
 import { runProductionDaily, selectedEvidence } from '../deployment/mac/daily.mjs';
 import { makeApiFinalFixture } from './helpers/api-final-fixture.mjs';
 import { main as cli } from '../cli.mjs';
@@ -94,7 +95,10 @@ test('Mac production uses the repository funnel and reviews its output without a
       if (interruptFirstReview) return new Response('Synthetic permanent interruption', { status: 400 });
       calls.push('review');
       const draft = all.split('<draft_markdown>\n')[1].split('\n</draft_markdown>')[0];
-      content = '```json\n' + JSON.stringify({ verdict: 'revise', issues: ['Clarify synthetic result'],
+      // A bounded revision names each item it changes.
+      const changedItems = draft.split('\n').filter(line => line.startsWith('- ') && line.includes('A simulated two-level'));
+      content = '```json\n' + JSON.stringify({ verdict: 'revise',
+        issues: changedItems.map((_, index) => `Item ${index + 1}: clarify the synthetic result`),
         revisedMarkdown: draft.replaceAll('A simulated two-level', 'A synthetic two-level') }) + '\n```';
     }
     return Response.json({ id: 'synthetic-' + calls.length, model: 'gpt-6.1-sol', choices: [{ finish_reason: 'stop', message: { content } }],
@@ -130,6 +134,39 @@ test('Mac production uses the repository funnel and reviews its output without a
   // Operational review retries reuse only the byte-bound writer transcript.
   // Completed model stages are reused only when their prompt and model bindings match.
   assert.equal(calls.filter(stage => stage === 'compose').length, 1);
+  // Publication gate: a bound editorial record that claims fewer fixes than it made, or an
+  // unknown revision contract, fails even when every hash is rebound to the tampered bytes.
+  const publicationRecord = JSON.parse(fs.readFileSync(result.publication, 'utf8'));
+  const rootDir = path.resolve(path.dirname(result.publication), publicationRecord.rootDir);
+  const editorialFile = path.join(rootDir, 'editorial-review.json');
+  const reviewFile = path.join(rootDir, publicationRecord.reviewPath);
+  const editorialBytes = fs.readFileSync(editorialFile);
+  const reviewBytes = fs.readFileSync(reviewFile);
+  const rebindAndValidate = editorial => {
+    fs.writeFileSync(editorialFile, JSON.stringify(editorial));
+    const inputsBase = publicationRecord.snapshotInputs;
+    const markdown = fs.readFileSync(path.join(rootDir, inputsBase.digestPath), 'utf8');
+    const collection = JSON.parse(fs.readFileSync(path.join(rootDir, inputsBase.sourcesPath), 'utf8'));
+    const { renderedMarkdown } = publicationGates(rootDir, inputsBase, markdown, collection);
+    const snapshot = buildReviewSnapshot({ ...inputsBase, rootDir, renderedMarkdown });
+    fs.writeFileSync(reviewFile, JSON.stringify({ ...JSON.parse(reviewBytes), snapshotSha256: snapshot.snapshotSha256, bindings: snapshot.bindings }));
+    return cli(['validate-publication', '--publication', result.publication]);
+  };
+  const editorial = JSON.parse(editorialBytes);
+  assert.equal(editorial.revisionContract, 'bounded-v1');
+  assert.equal(editorial.result.verdict, 'revise');
+  assert.ok(editorial.result.issues.length >= 2, 'the synthetic review revises several items');
+  assert.deepEqual(editorial.result.advisories, []);
+  assert.equal((await rebindAndValidate(editorial)).status, 'structural_review_binding_passed_not_semantic_proof');
+  await assert.rejects(rebindAndValidate({ ...editorial, result: { ...editorial.result, issues: editorial.result.issues.slice(0, 1) } }),
+    /changed \d+ items .* but listed 1 issues/);
+  await assert.rejects(rebindAndValidate({ ...editorial, revisionContract: 'bounded-v0' }), /Unsupported editorial revision contract/);
+  // Records written before the contract carry no marker and stay readable for reconciliation.
+  const { revisionContract, ...legacy } = editorial;
+  assert.equal((await rebindAndValidate(legacy)).status, 'structural_review_binding_passed_not_semantic_proof');
+  fs.writeFileSync(editorialFile, editorialBytes);
+  fs.writeFileSync(reviewFile, reviewBytes);
+  assert.equal((await cli(['validate-publication', '--publication', result.publication])).status, 'structural_review_binding_passed_not_semantic_proof');
   const changed = JSON.parse(fs.readFileSync(path.join(f.runDir, 'prepared-topics.json')));
   changed[0].material.title = 'Changed after review';
   fs.writeFileSync(path.join(f.runDir, 'prepared-topics.json'), JSON.stringify(changed));

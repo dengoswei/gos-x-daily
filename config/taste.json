@@ -165,6 +165,12 @@
     "maxPoolSize": 1000,
     "maxAgeDays": 365,
     "dailyDecay": 0.6,
-    "minPriorScoreToEnter": 5.5
+    "minPriorScoreToEnter": 5.5,
+    "undeferredMaxAgeDays": 30,
+    "undeferredMinPriorScore": 0.0,
+    "maxUndeferredScreenings": 2
+  },
+  "screen": {
+    "excerptChars": 1200
   }
 }

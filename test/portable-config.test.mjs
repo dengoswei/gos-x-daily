@@ -43,7 +43,7 @@ test('example sources use generic blog indexes and the broad-AI public feed list
     'The Pragmatic Engineer', 'Dwarkesh Podcast', 'Import AI', 'Karpathy blog', 'Sebastian Raschka blog', 'Deep (Learning) Focus', 'arg min',
     'Windows On Theory', 'Google Research blog', 'Transformer Circuits', 'Dan Luu', 'Jane Street Tech Blog', 'Terence Tao',
     'Ai2 Blog', 'Modular Blog', 'FlashInfer releases']);
-  for (const feed of sources.feeds) assert.deepEqual(Object.keys(feed).filter(key => key !== 'staleAfterDays').sort(), ['kind', 'maxItems', 'name', 'url']);
+  for (const feed of sources.feeds) assert.deepEqual(Object.keys(feed).filter(key => !['staleAfterDays', 'category'].includes(key)).sort(), ['kind', 'maxItems', 'name', 'url']);
   assert.equal(validateFeedConfig(sources), sources.feeds);
 });
 

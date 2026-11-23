@@ -412,7 +412,7 @@ function summarizeSourceList(rows, max = 4) {
  * Computes overall health verdict [OK | WARN | ACTION_NEEDED], funnel drop-off numbers,
  * and concrete recommendations for humans or calling agents.
  */
-export function buildTelemetry({ date = shanghaiDate(), sources = [], funnel = {}, stageUsage = null, warnings = [], reclaimedLocks = [] } = {}) {
+export function buildTelemetry({ date = shanghaiDate(), sources = [], funnel = {}, stageUsage = null, editorialLint = null, editorialStats = null, warnings = [], reclaimedLocks = [] } = {}) {
   const attempted = sources.filter(s => s.status !== 'unattempted');
   const usable = attempted.filter(s => ['ok', 'partial', 'empty'].includes(s.status));
   const failed = sources.filter(s => s.status === 'failed');
@@ -518,6 +518,7 @@ export function buildTelemetry({ date = shanghaiDate(), sources = [], funnel = {
       backlogRecalled: funnel.backlogRecalled ?? 0,
       backlogAccumulated: funnel.backlogAccumulated ?? 0,
       backlogSaved: funnel.backlogSaved ?? 0,
+      ...(funnel.backlogEvicted ? { backlogEvicted: funnel.backlogEvicted } : {}),
       dedupSkipped7d: funnel.dedupSkipped7d ?? 0,
       dedupFollowUps: funnel.dedupFollowUps ?? 0,
       clusteredTopics: funnel.clusteredTopics ?? 0,
@@ -531,6 +532,9 @@ export function buildTelemetry({ date = shanghaiDate(), sources = [], funnel = {
     recommendations,
     warnings,
     ...(stageUsage ? { stageUsage } : {}),
+    // Internal prose lint; not rendered to readers and not part of overall health.
+    ...(editorialLint ? { editorialLint } : {}),
+    ...(editorialStats ? { editorialStats } : {}),
   };
 }
 

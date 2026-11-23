@@ -56,7 +56,8 @@ Keep failed reads and unverified 24h/48h intervals explicit.
 
 Assign story workers to read the original article/paper/repository and meaningful
 figures. They return source-backed evidence, candidate leads and unresolved
-questions. Deduplicate across sources and published URLs; a repeat
+questions. Their public originals reach the pipeline only through
+RUN/supplements.public.json; the pipeline itself selects and writes stories. Deduplicate across sources and published URLs; a repeat
 is eligible as 跟进 only with a specific new fact. Keep publication dates of old
 work. Do not import preview history as publication history, discard uncertain
 attempts, invoke a retired workspace workflow or change sending identity.
@@ -90,7 +91,9 @@ without rewriting or selecting stories in the coordinator.
 
 The shared pipeline performs one technical/readability review using
 `prompts/v2-review-digest.md`, accepting its corrected Markdown after deterministic
-validation. The Mac adapter binds that result and publishes it immediately.
+validation. A revision may only correct sentences inside existing items; one
+that exceeds its declared fixes fails the run. `advisories` in
+`editorial-review.json` are informational: do not rewrite the digest for them. The Mac adapter binds that result and publishes it immediately.
 Do not invoke separate reader, author, fidelity or comprehension reviews. Do not
 manually rewrite drafts or delete model checkpoints. Independent source batches
 run concurrently with bounded budgets; model stages with data dependencies run

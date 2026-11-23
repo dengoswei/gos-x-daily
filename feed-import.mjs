@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { itemKey } from './feed.mjs';
+import { assertSourceCategory } from './source-config.mjs';
 
 const kinds = ['atom', 'rss', 'hf-daily-papers'];
 const MAX_TEXT = 4000;
@@ -31,6 +32,7 @@ export function validateFeedConfig(sources) {
     if (!kinds.includes(feed.kind)) throw new Error(`Feed ${feed.name} kind must be one of ${kinds.join('|')}`);
     if (!Number.isInteger(feed.maxItems) || feed.maxItems < 1 || feed.maxItems > 100) throw new Error(`Feed ${feed.name} maxItems must be an integer 1..100`);
     if (feed.staleAfterDays !== undefined && (!Number.isInteger(feed.staleAfterDays) || feed.staleAfterDays < 1)) throw new Error(`Feed ${feed.name} staleAfterDays must be a positive integer`);
+    assertSourceCategory(feed, 'Feed');
   }
   return feeds;
 }

@@ -111,7 +111,8 @@
       "name": "Ahead of AI",
       "url": "https://magazine.sebastianraschka.com/feed",
       "kind": "rss",
-      "maxItems": 10
+      "maxItems": 10,
+      "category": "essay"
     },
     {
       "name": "Lilian Weng",
@@ -178,7 +179,8 @@
       "name": "One Useful Thing",
       "url": "https://www.oneusefulthing.org/feed",
       "kind": "rss",
-      "maxItems": 3
+      "maxItems": 3,
+      "category": "essay"
     },
     {
       "name": "The Pragmatic Engineer",
@@ -190,25 +192,29 @@
       "name": "Dwarkesh Podcast",
       "url": "https://www.dwarkesh.com/feed",
       "kind": "rss",
-      "maxItems": 3
+      "maxItems": 3,
+      "category": "essay"
     },
     {
       "name": "Import AI",
       "url": "https://jack-clark.net/feed/",
       "kind": "rss",
-      "maxItems": 3
+      "maxItems": 3,
+      "category": "essay"
     },
     {
       "name": "Karpathy blog",
       "url": "https://karpathy.bearblog.dev/feed/",
       "kind": "atom",
-      "maxItems": 3
+      "maxItems": 3,
+      "category": "essay"
     },
     {
       "name": "Sebastian Raschka blog",
       "url": "https://sebastianraschka.com/rss_feed.xml",
       "kind": "rss",
-      "maxItems": 3
+      "maxItems": 3,
+      "category": "essay"
     },
     {
       "name": "Deep (Learning) Focus",
@@ -220,13 +226,15 @@
       "name": "arg min",
       "url": "https://www.argmin.net/feed",
       "kind": "rss",
-      "maxItems": 3
+      "maxItems": 3,
+      "category": "essay"
     },
     {
       "name": "Windows On Theory",
       "url": "https://windowsontheory.org/feed/",
       "kind": "rss",
-      "maxItems": 3
+      "maxItems": 3,
+      "category": "essay"
     },
     {
       "name": "Google Research blog",
@@ -239,27 +247,31 @@
       "url": "https://transformer-circuits.pub/feed.xml",
       "kind": "atom",
       "maxItems": 5,
-      "staleAfterDays": 365
+      "staleAfterDays": 365,
+      "category": "paper"
     },
     {
       "name": "Dan Luu",
       "url": "https://danluu.com/atom.xml",
       "kind": "atom",
       "maxItems": 3,
-      "staleAfterDays": 365
+      "staleAfterDays": 365,
+      "category": "essay"
     },
     {
       "name": "Jane Street Tech Blog",
       "url": "https://blog.janestreet.com/feed.xml",
       "kind": "atom",
       "maxItems": 5,
-      "staleAfterDays": 180
+      "staleAfterDays": 180,
+      "category": "essay"
     },
     {
       "name": "Terence Tao",
       "url": "https://terrytao.wordpress.com/feed/",
       "kind": "rss",
-      "maxItems": 5
+      "maxItems": 5,
+      "category": "essay"
     },
     {
       "name": "Ai2 Blog",

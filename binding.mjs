@@ -41,6 +41,17 @@ export function canonicalUrl(href) {
   return `${url.protocol}//${host}${url.pathname.replace(/\/+$/, '')}${url.search}${url.hash}`;
 }
 
+// Outbound references may be shared by unrelated topics. Only a topic's own
+// source addresses establish that the digest cites it.
+export function citesTopicSource(topic, canonicalCitations) {
+  const addresses = [topic.primaryUrl, topic.fetchedArticle?.url,
+    ...(topic.discussionUrls ?? []), ...(topic.cards ?? []).map(card => card.url)];
+  return addresses.some(address => {
+    if (!address) return false;
+    try { return canonicalCitations.has(canonicalUrl(address)); } catch { return false; }
+  });
+}
+
 const auditHeading = /^##\s+差异补充\s*$/;
 const collectionMarker = /<!-- x-daily-collection: [a-zA-Z0-9-]+ -->[ \t]*/g;
 

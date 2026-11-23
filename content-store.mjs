@@ -35,9 +35,26 @@ function writeJson(file, value) {
   fs.writeFileSync(file, JSON.stringify(value, null, 2) + '\n', { mode: 0o600 });
 }
 
-function classifyHeuristic({ url = '', title = '', text = '', sourceLabel = '' }) {
-  const combined = `${title}\n${text}\n${url}\n${sourceLabel}`;
-  if (/customer\s+story|case\s+study|客户案例|成功案例|\/customers?\//i.test(combined)) return 'case_study_pr';
+// Category describes what an item is, so it reads the item's address, title and opening
+// only. A passing phrase deep in an essay ("as a case study", "introducing") must not
+// decide its section or apply a penalty.
+export const CLASSIFY_LEAD_CHARS = 500;
+const HEADLINE_CHARS = 280;
+const CUSTOMER_STORY_TEXT_RE = /^\s*case\s+study\s*[:：|｜]|\bcustomer\s+(?:stor(?:y|ies)|case\s+stud(?:y|ies)|spotlight|success)\b|客户案例|成功案例/i;
+const CUSTOMER_STORY_URL_RE = /\/(?:customers?|customer-stor(?:y|ies)|case-stud(?:y|ies)|success-stor(?:y|ies))(?:\/|$|[?#])/i;
+
+export function classifyHeuristic({ url = '', linkHints = '', title = '', text = '', sourceLabel = '', hint = null }) {
+  const lead = String(text ?? '').slice(0, CLASSIFY_LEAD_CHARS);
+  // An untitled post (X, watch) is headlined by its opening and is about the links it shares.
+  const headline = String(title ?? '').trim() || lead.slice(0, HEADLINE_CHARS);
+  const subjectUrls = String(title ?? '').trim() ? String(url) : `${url} ${linkHints}`;
+  const pathsOf = urls => urls.split(/\s+/).filter(Boolean).map(href => {
+    try { return new URL(href).pathname; } catch { return ''; }
+  }).join(' ');
+  if (CUSTOMER_STORY_TEXT_RE.test(headline) || CUSTOMER_STORY_URL_RE.test(pathsOf(subjectUrls))) return 'case_study_pr';
+  if (hint) return hint;
+  const urls = `${url} ${linkHints}`;
+  const combined = `${title}\n${lead}\n${urls}\n${sourceLabel}`;
   // GitHub releases and version changelogs are software releases first.
   if (/github\.com\/[^/]+\/[^/]+\/releases|\brelease\s+notes\b|\bchangelog\b/i.test(combined)) return 'open_source';
   // Long-form essay / practitioner blog hosts take precedence even when referencing an arXiv paper inside.
@@ -46,8 +63,8 @@ function classifyHeuristic({ url = '', title = '', text = '', sourceLabel = '' }
   }
   // Systems / compiler / inference / PyTorch / quantization kernels route to infra_eng (even if backed by an arXiv paper).
   const isInfra = /\b(CUDA|Triton|vLLM|SGLang|Megatron|TensorRT|PyTorch|torch\w*|kernel|FP8|FP4|MXFP4|INT4|quantization|speculative\s+decoding|KV[\s-]?cache|serving|throughput|latency|compiler|distributed|RDMA|NCCL|ROCm|TPU)\b|算子|量化|推理引擎|投机解码|吞吐|延迟/i.test(combined);
-  const isPaperHost = /arxiv\.org|huggingface\.co\/papers|openreview\.net/i.test(url) || /daily\s*papers/i.test(sourceLabel);
-  if (isInfra && (!isPaperHost || /\b(vLLM|SGLang|CUDA|Triton|PyTorch|torch|MXFP4|FP8|FP4|kernel|serving)\b/i.test(title + ' ' + text.slice(0, 500)))) {
+  const isPaperHost = /arxiv\.org|huggingface\.co\/papers|openreview\.net/i.test(urls) || /daily\s*papers/i.test(sourceLabel);
+  if (isInfra && (!isPaperHost || /\b(vLLM|SGLang|CUDA|Triton|PyTorch|torch|MXFP4|FP8|FP4|kernel|serving)\b/i.test(`${title} ${lead}`))) {
     return 'infra_eng';
   }
   if (isPaperHost || /\b(arXiv:\d{4}\.\d{4,5}|preprint|theorem|ablation)\b|论文/i.test(combined)) return 'paper';
@@ -327,7 +344,7 @@ export async function resolveCollectionShortlinks(collection, {
  * - store/cards/<itemId>.json (lightweight L1 index card for screening & clustering)
  * - store/topics/<topicId>.json (cross-source clustered topics with 7-day soft dedup tags)
  */
-export function buildContentStore(collection, storeDir, { softHistory = null, supplements = [], taste = loadTasteConfig() } = {}) {
+export function buildContentStore(collection, storeDir, { softHistory = null, supplements = [], taste = loadTasteConfig(), categoryHints = new Map() } = {}) {
   const root = path.resolve(storeDir);
   const rawDir = path.join(root, 'raw');
   const cardsDir = path.join(root, 'cards');
@@ -441,7 +458,7 @@ export function buildContentStore(collection, storeDir, { softHistory = null, su
     const author = xHandle(item.url) ?? item.author ?? item.feedName ?? item.blog ?? primary.profileName ?? primary.watchedHandle ?? 'unknown';
     const sourceLabel = item.feedName ?? item.blog ?? (primary.watchedHandle ? `watch:@${primary.watchedHandle}` : primary.kind);
     const linkHints = outboundUrls.join(' ');
-    const category = classifyHeuristic({ url: `${item.url ?? ''} ${linkHints}`, title: item.title, text: fullText, sourceLabel });
+    const category = classifyHeuristic({ url: item.url ?? '', linkHints, title: item.title, text: fullText, sourceLabel, hint: categoryHints.get(sourceLabel) ?? null });
     const contentStatus = attachedDeep ? 'full_text' : contentStatusOf(primary.kind, longestBody, item);
     const obsMetrics = aggregateTopicMetrics(observations.map(o => o.item));
     const card = {
