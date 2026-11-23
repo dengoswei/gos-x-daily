@@ -37,7 +37,7 @@ You are writing for an **engineering-grounded AI builder & thinker** (`以工程
 
 ## 3. Output format
 
-Write one item for every topic in `<selected_topics>`, in its assigned `section`, citing at least one of that topic's own URLs; merge two selected topics into one item only when they are genuinely the same story, citing both. The runner rejects a digest that omits a selected topic.
+Write one item for every topic in `<selected_topics>`, in its assigned `section`, citing its primary URL, a discussion or observation URL, or its fetched full-text URL. Companion links alone cannot establish coverage. Merge two selected topics into one item only when they are genuinely the same story, citing both. The runner rejects a digest that omits a selected topic.
 
 Return a single fenced `markdown` block starting with `# X AI 日报 <date>`. Do **NOT** write a coverage footer or `dispositions.json` — the runner appends the deterministic self-check telemetry panel and candidate dispositions automatically.
 

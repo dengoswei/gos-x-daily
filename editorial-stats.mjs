@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Rolling editorial measurements for tuning curation: the pillar mix of published Deep Dives
+// Rolling editorial measurements for tuning curation: the pillar mix of composed Deep Dives
 // (default 7 days) and per-source yield through the funnel (default 30 days). Stored in the
 // private state directory, one row per report date; a rerun of a date replaces its row.
 // These are internal measurements, never rendered to readers and never an approval signal.
@@ -7,7 +7,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
-import { canonicalUrl } from './binding.mjs';
+import { canonicalUrl, citesTopicSource } from './binding.mjs';
 
 export const PILLARS = Object.freeze(['infra', 'intelligence', 'world_impact', 'open_door']);
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -17,9 +17,6 @@ const DOMAIN_PILLAR = { core_ml_systems: 'infra', intelligence_theory: 'intellig
 const safeCanonical = href => {
   try { return canonicalUrl(href); } catch { return null; }
 };
-const topicUrls = topic => [topic?.primaryUrl, ...(topic?.discussionUrls ?? []), ...(topic?.allObservedUrls ?? []), topic?.fetchedArticle?.url]
-  .filter(Boolean).map(safeCanonical).filter(Boolean);
-
 /** The editor's pillar when valid; otherwise derived from the prior's domain tag, or `unclassified`. */
 export function pillarFor(plan, topic) {
   if (PILLARS.includes(plan?.pillar)) return plan.pillar;
@@ -29,13 +26,13 @@ export function pillarFor(plan, topic) {
 export function buildDailyEditorialStats({ date, topics = [], shortlistIds = null, selectedPlan = [], citedUrls = [] }) {
   const cited = new Set(citedUrls.map(safeCanonical).filter(Boolean));
   const byId = new Map(topics.map(topic => [topic.topicId, topic]));
-  const isPublished = topic => topicUrls(topic).some(url => cited.has(url));
+  const isComposed = topic => citesTopicSource(topic, cited);
   const selected = new Map(selectedPlan.map(plan => [plan.topicId, plan]));
   const deep = Object.fromEntries([...PILLARS, 'unclassified'].map(pillar => [pillar, 0]));
   let quick = 0;
   for (const plan of selectedPlan) {
     const topic = byId.get(plan.topicId);
-    if (!topic || !isPublished(topic)) continue;
+    if (!topic || !isComposed(topic)) continue;
     if (plan.tier === 'quick') quick += 1;
     else deep[pillarFor(plan, topic)] += 1;
   }
@@ -43,14 +40,14 @@ export function buildDailyEditorialStats({ date, topics = [], shortlistIds = nul
   for (const topic of topics) {
     if (topic.dedupStatus === 'seen_recently') continue;
     for (const label of new Set(topic.sources ?? [])) {
-      const row = sources[label] ??= { ingested: 0, shortlisted: 0, selected: 0, published: 0 };
+      const row = sources[label] ??= { ingested: 0, shortlisted: 0, selected: 0, composed: 0 };
       row.ingested += 1;
       if (shortlistIds?.has(topic.topicId)) row.shortlisted += 1;
       if (selected.has(topic.topicId)) row.selected += 1;
-      if (selected.has(topic.topicId) && isPublished(topic)) row.published += 1;
+      if (selected.has(topic.topicId) && isComposed(topic)) row.composed += 1;
     }
   }
-  return { schemaVersion: 1, date, shortlistMeasured: Boolean(shortlistIds), pillars: { deep, quick }, sources };
+  return { schemaVersion: 2, date, shortlistMeasured: Boolean(shortlistIds), pillars: { deep, quick }, sources };
 }
 
 function readRows(file) {
@@ -74,7 +71,7 @@ export function appendEditorialStats(file, row) {
   return rows.length;
 }
 
-/** Sums the window ending on `asOf` (inclusive). Shares are null when nothing was published. */
+/** Sums the window ending on `asOf` (inclusive). Shares are null when nothing was composed. */
 export function rollingEditorialStats(file, { asOf, pillarDays = 7, yieldDays = 30 } = {}) {
   const rows = readRows(file).filter(row => !asOf || row.date <= asOf);
   const end = asOf ?? rows.at(-1)?.date;
@@ -93,15 +90,17 @@ export function rollingEditorialStats(file, { asOf, pillarDays = 7, yieldDays = 
   const totals = new Map();
   for (const row of yieldRows) {
     for (const [label, counts] of Object.entries(row.sources ?? {})) {
-      const total = totals.get(label) ?? { source: label, reports: 0, ingested: 0, shortlisted: 0, selected: 0, published: 0 };
+      const total = totals.get(label) ?? { source: label, reports: 0, ingested: 0, shortlisted: 0, selected: 0, composed: 0 };
       total.reports += 1;
-      for (const key of ['ingested', 'shortlisted', 'selected', 'published']) total[key] += counts?.[key] ?? 0;
+      for (const key of ['ingested', 'shortlisted', 'selected']) total[key] += counts?.[key] ?? 0;
+      // Version 1 also sampled at composition, under the old field name.
+      total.composed += counts?.composed ?? (row.schemaVersion === 1 ? counts?.published : 0) ?? 0;
       totals.set(label, total);
     }
   }
   const sources = [...totals.values()].map(total => ({ ...total,
-    publishedPerIngested: total.ingested ? Number((total.published / total.ingested).toFixed(3)) : null }))
-    .sort((a, b) => b.published - a.published || b.ingested - a.ingested || a.source.localeCompare(b.source));
+    composedPerIngested: total.ingested ? Number((total.composed / total.ingested).toFixed(3)) : null }))
+    .sort((a, b) => b.composed - a.composed || b.ingested - a.ingested || a.source.localeCompare(b.source));
   return {
     asOf: end,
     pillarWindow: { days: pillarDays, reports: pillarRows.length, deep, deepTotal, quick,

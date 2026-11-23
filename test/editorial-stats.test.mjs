@@ -29,10 +29,10 @@ test('pillars come from the editor when valid, else from the prior domain tag', 
   assert.equal('pillar' in plan[1], false, 'an invalid tag is dropped, not guessed');
 });
 
-test('daily row counts only what was actually published, per source and pillar', () => {
+test('daily row counts only what was actually composed, per source and pillar', () => {
   const topics = [
     topic('a', ['Essays', 'x', 'x'], { discussionUrls: ['https://x.com/a/status/1'] }),
-    topic('b', ['Essays']),
+    topic('b', ['Essays'], { allObservedUrls: ['https://c.example/p'] }),
     topic('c', ['HF']),
     topic('d', ['HF'], { dedupStatus: 'seen_recently' }),
   ];
@@ -46,9 +46,9 @@ test('daily row counts only what was actually published, per source and pillar',
     citedUrls: ['https://x.com/a/status/1?utm_source=share', 'https://c.example/p'] });
   assert.deepEqual(row.pillars, { deep: { infra: 0, intelligence: 0, world_impact: 0, open_door: 1, unclassified: 0 }, quick: 1 });
   assert.deepEqual(row.sources, {
-    Essays: { ingested: 2, shortlisted: 2, selected: 2, published: 1 },
-    x: { ingested: 1, shortlisted: 1, selected: 1, published: 1 },
-    HF: { ingested: 1, shortlisted: 1, selected: 1, published: 1 },
+    Essays: { ingested: 2, shortlisted: 2, selected: 2, composed: 1 },
+    x: { ingested: 1, shortlisted: 1, selected: 1, composed: 1 },
+    HF: { ingested: 1, shortlisted: 1, selected: 1, composed: 1 },
   });
   assert.equal(row.shortlistMeasured, true);
   assert.equal(buildDailyEditorialStats({ date: '2026-11-11', topics }).shortlistMeasured, false);
@@ -56,11 +56,13 @@ test('daily row counts only what was actually published, per source and pillar',
 
 test('a rerun replaces its date, malformed lines are ignored, and windows are inclusive and bounded', t => {
   const file = path.join(tmp(t), 'state', 'editorial-stats.jsonl');
-  const day = (date, deep, sources = { Essays: { ingested: 2, shortlisted: 1, selected: 1, published: 1 } }) =>
-    ({ schemaVersion: 1, date, shortlistMeasured: true, pillars: { deep: { infra: 0, intelligence: 0, world_impact: 0, open_door: 0, unclassified: 0, ...deep }, quick: 0 }, sources });
+  const day = (date, deep, sources = { Essays: { ingested: 2, shortlisted: 1, selected: 1, composed: 1 } }) =>
+    ({ schemaVersion: 2, date, shortlistMeasured: true, pillars: { deep: { infra: 0, intelligence: 0, world_impact: 0, open_door: 0, unclassified: 0, ...deep }, quick: 0 }, sources });
   appendEditorialStats(file, day('2025-09-01', { infra: 50 }));
   appendEditorialStats(file, day('2026-11-04', { infra: 9 })); // 7 days before 11-11: outside the 7-day window
-  appendEditorialStats(file, day('2026-11-05', { infra: 2 }));
+  // Version 1 used the name "published" for this same pre-delivery count.
+  appendEditorialStats(file, { ...day('2026-11-05', { infra: 2 }), schemaVersion: 1,
+    sources: { Essays: { ingested: 2, shortlisted: 1, selected: 1, published: 1 } } });
   appendEditorialStats(file, day('2026-11-11', { infra: 99 }));
   appendEditorialStats(file, day('2026-11-11', { infra: 1, open_door: 1 })); // rerun replaces
   appendEditorialStats(file, day('2026-11-20', { infra: 5 })); // future relative to asOf
@@ -72,11 +74,11 @@ test('a rerun replaces its date, malformed lines are ignored, and windows are in
   assert.deepEqual(report.pillarWindow.deep, { infra: 3, intelligence: 0, world_impact: 0, open_door: 1, unclassified: 0 });
   assert.equal(report.pillarWindow.shares.open_door, 0.25);
   assert.equal(report.sourceWindow.reports, 3);
-  assert.deepEqual(report.sources, [{ source: 'Essays', reports: 3, ingested: 6, shortlisted: 3, selected: 3, published: 3, publishedPerIngested: 0.5 }]);
+  assert.deepEqual(report.sources, [{ source: 'Essays', reports: 3, ingested: 6, shortlisted: 3, selected: 3, composed: 3, composedPerIngested: 0.5 }]);
   const empty = rollingEditorialStats(path.join(path.dirname(file), 'missing.jsonl'));
   assert.equal(empty.asOf, null);
   appendEditorialStats(file, day('2026-11-21', {}, {}));
-  assert.equal(rollingEditorialStats(file, { asOf: '2026-11-21', pillarDays: 1 }).pillarWindow.shares.infra, null, 'no published Deep Dives: shares are unknown, not zero');
+  assert.equal(rollingEditorialStats(file, { asOf: '2026-11-21', pillarDays: 1 }).pillarWindow.shares.infra, null, 'no composed Deep Dives: shares are unknown, not zero');
 });
 
 test('end to end: an editor run records its pillar mix and source yield in private state and telemetry only', async t => {
@@ -110,15 +112,17 @@ test('end to end: an editor run records its pillar mix and source yield in priva
     return Response.json({ id: 'synthetic', choices: [{ message: { content }, finish_reason: 'stop' }], usage: { prompt_tokens: 10, completion_tokens: 10 } });
   };
   const run = dataDir => runDailyV2({ dataDir, modelsFile, premergedSourcesPath: premerged, sourcesConfig: { feeds: [], blogs: [], watchProfiles: [] },
-    fetchFullTextOnline: false, runtimeHooks: { fetch: fetchImpl, now: '2026-11-11T01:00:00Z' } });
+    fetchFullTextOnline: false, runtimeHooks: { publicationPending: true, fetch: fetchImpl, now: '2026-11-11T01:00:00Z' } });
   const dataDir = path.join(dir, 'data');
   const result = await run(dataDir);
+  assert.equal(result.delivery.sent, false);
   const telemetry = JSON.parse(fs.readFileSync(result.telemetryPath, 'utf8'));
   assert.deepEqual(telemetry.editorialStats.pillarWindow.deep, { infra: 1, intelligence: 0, world_impact: 0, open_door: 1, unclassified: 0 });
   assert.equal(telemetry.editorialStats.pillarWindow.shares.open_door, 0.5);
-  assert.deepEqual(telemetry.editorialStats.sources.map(row => [row.source, row.ingested, row.shortlisted, row.published]),
+  assert.deepEqual(telemetry.editorialStats.sources.map(row => [row.source, row.ingested, row.shortlisted, row.composed]),
     [['Feed alpha', 1, 1, 1], ['Feed beta', 1, 1, 1]]);
   assert.doesNotMatch(fs.readFileSync(result.digestPath, 'utf8'), /open_door|pillar|editorialStats/);
+  assert.ok(telemetry.editorialStats.sources.every(source => !('published' in source)));
   // A same-day rerun replaces the day's row instead of double counting.
   await run(dataDir);
   const rows = fs.readFileSync(path.join(dataDir, 'state', 'editorial-stats.jsonl'), 'utf8').trim().split('\n');

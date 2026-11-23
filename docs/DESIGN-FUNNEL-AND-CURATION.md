@@ -172,7 +172,7 @@ The reviewer runs once and returns `{ verdict, issues, advisories, revisedMarkdo
 
 The Stage 2 editor tags each selected item with `pillar` (`infra | intelligence | world_impact | open_door`); an invalid or missing tag falls back to the prior's domain tag, else `unclassified`. Each completed run writes one row per report date to `state/editorial-stats.jsonl` (a rerun replaces its date; rows older than 400 days are pruned):
 
-- **Pillar mix**: published Deep Dives by pillar, plus published Quick Hits. Selected items that did not reach the final text do not count.
-- **Per-source yield**: for each source label, topics ingested → shortlisted → selected → published.
+- **Pillar mix**: composed Deep Dives by pillar, plus composed Quick Hits. Selected items that did not reach the final text do not count.
+- **Per-source yield**: for each source label, topics ingested → shortlisted → selected → composed. A composed topic has a source citation in the final draft. Delivery receipts independently track what reached the reader.
 
-`telemetry.editorialStats` carries the rolling 7-day pillar mix (with shares, `null` when nothing was published) and the 30-day source yield. `npm run stats:editorial -- --data-dir DATA [--as-of YYYY-MM-DD]` prints the same report. Use it to check the ~15–25% open-door target and to tune `taste.json` tiers from data. These numbers are internal: never rendered to readers, never part of health or approval.
+`telemetry.editorialStats` carries the rolling 7-day pillar mix (with shares, `null` when no Deep Dives were composed) and the 30-day source yield. `npm run stats:editorial -- --data-dir DATA [--as-of YYYY-MM-DD]` prints the same report. Use it to check the ~15–25% open-door target and to tune `taste.json` tiers from data. These numbers are internal: never rendered to readers, never part of health or approval.

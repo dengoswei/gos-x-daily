@@ -45,7 +45,7 @@ Objective priors surface *who* wrote an item and *how much attention* it receive
 
 ### Pillar tag
 
-Tag every `selected` item with `pillar`: `infra` (Pillar 1), `intelligence` (Pillar 2), `world_impact` (Pillar 3) or `open_door` (a cross-domain structural-isomorphism pick). The runner tracks the rolling mix of published Deep Dives against the ~15–25% open-door target; tag what the item is, not what would balance the mix.
+Tag every `selected` item with `pillar`: `infra` (Pillar 1), `intelligence` (Pillar 2), `world_impact` (Pillar 3) or `open_door` (a cross-domain structural-isomorphism pick). The runner tracks the rolling mix of composed Deep Dives against the ~15–25% open-door target; tag what the item is, not what would balance the mix.
 
 ### Tier assignment & capacity rules
 

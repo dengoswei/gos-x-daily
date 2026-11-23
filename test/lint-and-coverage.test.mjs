@@ -12,7 +12,7 @@ import { evaluateDigestMarkdown } from '../editorial-lint.mjs';
 const topic = (topicId, url, extra = {}) => ({ topicId, title: `Title ${topicId}`, primaryUrl: url, allObservedUrls: [url], cards: [{ url }], ...extra });
 const topics = new Map([
   ['a', topic('a', 'https://a.example/post', { discussionUrls: ['https://x.com/a/status/1'] })],
-  ['b', topic('b', 'https://b.example/post')],
+  ['b', topic('b', 'https://b.example/post', { allObservedUrls: ['https://b.example/post', 'https://a.example/post'] })],
   ['c', topic('c', 'https://c.example/post')],
 ]);
 const plan = ids => ids.map(topicId => ({ topicId, tier: 'deep', section: 'Frameworks / Infra' }));
@@ -24,11 +24,10 @@ test('a digest must cite every selected topic by one of its own addresses', () =
   // A discussion address or an observed card address counts; merging genuine duplicates is allowed.
   assert.doesNotThrow(() => assertSelectedCoverage(digest([item('https://x.com/a/status/1', 'https://b.example/post?utm_source=x')]), plan(['a', 'b']), topics));
   assert.throws(() => assertSelectedCoverage(digest([item('https://a.example/post')]), plan(['a', 'b', 'c']), topics),
-    /omits 2 selected topic\(s\): b \(Title b\); c \(Title c\)\. Write one item for each selected topic/);
+    /omits 2 selected topic\(s\): b, c\. Write one item for each selected topic/);
   // A heading or text outside an item does not cover a topic; neither does a link in the title line.
   assert.throws(() => assertSelectedCoverage(`# X AI 日报 2026-11-11 [x](https://b.example/post)\n\n## Frameworks / Infra\n\n${item('https://a.example/post')}`, plan(['a', 'b']), topics), /omits 1/);
-  // Unknown plan rows are ignored rather than crashing.
-  assert.doesNotThrow(() => assertSelectedCoverage(digest([item('https://a.example/post')]), plan(['a', 'ghost']), topics));
+  assert.throws(() => assertSelectedCoverage(digest([item('https://a.example/post')]), plan(['a', 'ghost']), topics), /ghost/);
 });
 
 test('the prose lint is one module shared by the eval harness and production', () => {
@@ -59,6 +58,17 @@ const bullet = row => `- **[作者 · ${row.material.title}]：这不是吞吐�
 
 test('end to end: a composer that drops a selected topic is retried, and lint reaches the reviewer and telemetry only', async t => {
   const f = fixture(t);
+  // An untitled public post and a titled private note share a subject. The local
+  // cluster inherits the note title, while the writer gets only the public post.
+  const marker = 'SYNTHETIC-PRIVATE-NOTE-TITLE';
+  const collection = JSON.parse(fs.readFileSync(f.premerged, 'utf8'));
+  const subject = { href: 'https://report.example/paper' };
+  collection.sources.feeds.pop();
+  collection.sources.xFollowing.push({ url: 'https://x.com/lab/status/123', text: 'Public research report', links: [subject] });
+  collection.sources.xiaohongshu.push({ profileId: 'fixture', notes: [
+    { url: 'https://www.xiaohongshu.com/explore/demo', title: marker, text: 'Local note', links: [subject] },
+  ] });
+  fs.writeFileSync(f.premerged, JSON.stringify(collection));
   const modelsFile = path.join(f.dir, 'models.json');
   process.env.SYNTHETIC_LINT_KEY = 'synthetic';
   t.after(() => { delete process.env.SYNTHETIC_LINT_KEY; });
@@ -70,6 +80,7 @@ test('end to end: a composer that drops a selected topic is retried, and lint re
     const body = JSON.parse(init.body);
     const sys = body.messages[0].content;
     const user = body.messages.at(-1).content;
+    assert.ok(!user.includes(marker), 'private title must stay out of every provider request, including retries');
     let content;
     if (sys.includes('two-stage curation & editorial selection (v2)')) {
       const rows = between(user, 'topics_json');
@@ -77,8 +88,7 @@ test('end to end: a composer that drops a selected topic is retried, and lint re
     } else if (sys.includes('digest composition (v2)')) {
       composePrompts.push(user);
       const rows = between(user, 'selected_topics');
-      // First attempt silently drops the second selected topic.
-      const kept = composePrompts.length === 1 ? rows.slice(0, 1) : rows;
+      const kept = composePrompts.length === 1 ? rows.filter(row => row.material.primaryUrl.includes('alpha.example')) : rows;
       content = '```markdown\n# X AI 日报 2026-11-11\n\n## Frameworks / Infra\n\n' + kept.map(bullet).join('\n') + '\n```';
     } else {
       reviewPrompt = user;
@@ -88,6 +98,8 @@ test('end to end: a composer that drops a selected topic is retried, and lint re
   };
   const result = await runDailyV2({ dataDir: f.dataDir, modelsFile, premergedSourcesPath: f.premerged, sourcesConfig: f.sourcesConfig,
     fetchFullTextOnline: false, runtimeHooks: { fetch: fetchImpl, now: '2026-11-11T01:00:00Z' } });
+  const prepared = JSON.parse(fs.readFileSync(path.join(result.runDir, 'prepare-state.json'), 'utf8'));
+  assert.ok(prepared.topics.some(topic => topic.title === marker), 'fixture must exercise a private cluster title');
   assert.equal(composePrompts.length, 2);
   assert.match(composePrompts[1], /Digest omits 1 selected topic\(s\)/);
   assert.equal(result.funnel.publishedTotal, 2);

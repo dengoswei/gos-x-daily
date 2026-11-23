@@ -106,6 +106,7 @@ test('end to end: an editor run evicts a twice-screened lead and expires an old 
   fs.writeFileSync(modelsFile, JSON.stringify({ roles: { screen: role('s'), compose: role('c'), review: role('r') } }));
   const between = (text, tag) => JSON.parse(text.split(`<${tag}>\n`)[1].split(`\n</${tag}>`)[0]);
   let screenTitles = [];
+  let interruptReview = true;
   const fetchImpl = async (url, init) => {
     const body = JSON.parse(init.body);
     const sys = body.messages[0].content;
@@ -119,12 +120,16 @@ test('end to end: an editor run evicts a twice-screened lead and expires an old 
       const rows = between(user, 'selected_topics');
       content = '```markdown\n# X AI 日报 2026-11-11\n\n## Frameworks / Infra\n\n' + rows.map(row => `- **[作者 · ${row.material.title}]：调度瓶颈被定位。** 11 月 10 日发布的文章解释了调度。 [原文](${row.material.primaryUrl})`).join('\n') + '\n```';
     } else {
+      if (interruptReview) return new Response('Synthetic review interruption', { status: 400 });
       content = '```json\n{"verdict":"pass","issues":[],"advisories":[]}\n```';
     }
     return Response.json({ id: 'synthetic', choices: [{ message: { content }, finish_reason: 'stop' }], usage: { prompt_tokens: 10, completion_tokens: 10 } });
   };
-  const result = await runDailyV2({ dataDir, modelsFile, premergedSourcesPath: premerged, sourcesConfig: { feeds: [], blogs: [], watchProfiles: [] },
-    fetchFullTextOnline: false, runtimeHooks: { fetch: fetchImpl, now: '2026-11-11T01:00:00Z' } });
+  const run = () => runDailyV2({ dataDir, runDir: path.join(dir, 'run'), modelsFile, premergedSourcesPath: premerged, sourcesConfig: { feeds: [], blogs: [], watchProfiles: [] },
+    fetchFullTextOnline: false, runtimeHooks: { resumeModels: true, fetch: fetchImpl, now: '2026-11-11T01:00:00Z' } });
+  await assert.rejects(run(), /Provider HTTP 400/);
+  interruptReview = false;
+  const result = await run();
   // The model projection titles a recalled backlog card by its public summary.
   assert.ok(screenTitles.includes('Queueing essay'), 'the editor saw the seeded lead');
   assert.ok(!screenTitles.includes('Stale lead'), 'the expired lead never reached the editor');

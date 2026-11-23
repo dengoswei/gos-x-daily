@@ -180,4 +180,3 @@ export function evaluateDigestMarkdown(markdown) {
     bullets: evaluated,
   };
 }
-

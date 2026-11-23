@@ -11,7 +11,7 @@ import { makeRuntime } from './runtime.mjs';
 import { collectionFromBrowserArtifacts, verifyEvidenceFiles } from './browser-artifacts.mjs';
 import { mergeFeedDocuments, verifyDocumentFiles } from './feed-import.mjs';
 import { fetchFeeds } from './tools/fetch-feeds.mjs';
-import { candidateKeys, candidateEntries, canonicalUrl, citedUrls } from './binding.mjs';
+import { candidateKeys, candidateEntries, canonicalUrl, citedUrls, citesTopicSource } from './binding.mjs';
 import { renderLarkPost } from './lark-post.mjs';
 import { loadModels, tagged, modelJson, extractBlock, parseJsonBlock, usageLedger, budgetGuard, makeStageRunner, outputStore } from './prototype/run-packets.mjs';
 import {
@@ -503,13 +503,10 @@ export function assertSelectedCoverage(markdown, selectedPlan, topicsById) {
   const missing = [];
   for (const plan of selectedPlan) {
     const topic = topicsById.get(plan.topicId);
-    if (!topic) continue;
-    const own = [topic.primaryUrl, ...(topic.discussionUrls ?? []), ...(topic.allObservedUrls ?? []), topic.fetchedArticle?.url,
-      ...(topic.cards ?? []).map(card => card.url)].map(u => (u ? safeCanonical(u) : null)).filter(Boolean);
-    if (!own.some(u => cited.has(u))) missing.push(`${plan.topicId} (${String(topic.title ?? '').slice(0, 80)})`);
+    if (!topic || !citesTopicSource(topic, cited)) missing.push(plan.topicId);
   }
   if (missing.length) {
-    throw new Error(`Digest omits ${missing.length} selected topic(s): ${missing.join('; ')}. Write one item for each selected topic, citing its own URL`);
+    throw new Error(`Digest omits ${missing.length} selected topic(s): ${missing.join(', ')}. Write one item for each selected topic, citing its own URL`);
   }
 }
 
@@ -611,6 +608,7 @@ export async function runDailyV2({
     let backlogStats = { recalledStandalone: 0, accumulatedWithFresh: 0 };
     let deepFetchStats = null;
     let observedUrlSet = null;
+    let topicById;
     let warnings = [];
     let draftMarkdown = null;
     let selectionAdjustments = [];
@@ -623,20 +621,27 @@ export async function runDailyV2({
       fs.existsSync(path.join(runtimeHooks.modelArtifactsDir ?? path.join(existingRunDir, 'model-artifacts'), 'checkpoints/v2-compose.json')));
     const reselectingPreparedRun = Boolean(hasPreparedState && (selectedTopicsPath || resumingModels) && !finalizeDigestPath);
 
+    const saved = (resumingFinalize || reselectingPreparedRun)
+      ? JSON.parse(fs.readFileSync(path.join(existingRunDir, 'prepare-state.json'), 'utf8')) : null;
+    if (resumingFinalize || resumingModels) {
+      screenShortlistIds = Array.isArray(saved.screenShortlistIds) ? new Set(saved.screenShortlistIds) : null;
+      screenedTopicIds = saved.screenedByEditor ? screenShortlistIds : null;
+      selectionAdjustments = saved.selectionAdjustments ?? [];
+    }
+
     if (resumingFinalize) {
       currentStage = 'load_prepared_run';
       lock.heartbeat(currentStage);
       runDir = path.resolve(existingRunDir);
       storeDir = path.join(runDir, 'store');
       collection = JSON.parse(fs.readFileSync(path.join(runDir, 'sources.merged.json'), 'utf8'));
-      const saved = JSON.parse(fs.readFileSync(path.join(runDir, 'prepare-state.json'), 'utf8'));
       reportDate = saved.reportDate || collection.date || today;
       trackedSources = saved.trackedSources;
       storeCounts = saved.counts;
       storeTopics = saved.topics;
+      topicById = new Map((modelsFile ? storeTopics.map(modelTopic).filter(Boolean) : storeTopics).map(t => [t.topicId, t]));
       selectedPlan = saved.selectedPlan;
       deferredMap = new Map(saved.deferredEntries ?? []);
-      screenShortlistIds = Array.isArray(saved.screenShortlistIds) ? new Set(saved.screenShortlistIds) : null;
       backlogStats = saved.backlogStats ?? backlogStats;
       deepFetchStats = saved.deepFetchStats;
       observedUrlSet = new Set(saved.observedUrls ?? []);
@@ -649,7 +654,6 @@ export async function runDailyV2({
         runDir = path.resolve(existingRunDir);
         storeDir = path.join(runDir, 'store');
         collection = JSON.parse(fs.readFileSync(path.join(runDir, 'sources.merged.json'), 'utf8'));
-        const saved = JSON.parse(fs.readFileSync(path.join(runDir, 'prepare-state.json'), 'utf8'));
         reportDate = saved.reportDate || collection.date || today;
         trackedSources = saved.trackedSources;
         storeCounts = saved.counts;
@@ -825,13 +829,12 @@ export async function runDailyV2({
       const shortlisted = buildScreenShortlist(compactTopics, { limit: 48 });
       const screenShortlist = addScreenExcerpts(shortlisted.length ? shortlisted : compactTopics.slice(0, 48), screenTopicById, storeDir,
         { excerptChars: taste.screen?.excerptChars ?? SCREEN_EXCERPT_CHARS });
-      screenShortlistIds = new Set(screenShortlist.map(row => row.topicId));
+      if (!resumingModels) screenShortlistIds = new Set(screenShortlist.map(row => row.topicId));
       fs.writeFileSync(selectPromptPath, `${readPrompt('v2-select-topics.md')}\n\n${tagged('topics_json', modelJson(screenShortlist))}\n`, { mode: 0o600 });
 
       const validTopicIds = new Set(selectableTopics.map(t => t.topicId));
       let selectionSource = 'heuristic';
       if (resumingModels) {
-        const saved = JSON.parse(fs.readFileSync(path.join(runDir, 'prepare-state.json'), 'utf8'));
         selectedPlan = saved.selectedPlan;
         deferredMap = new Map(saved.deferredEntries ?? []);
       } else if (selectedTopicsPath) {
@@ -841,7 +844,7 @@ export async function runDailyV2({
         selectionSource = 'explicit';
       } else if (runStage && roles?.screen) {
         selectionSource = 'editor';
-        screenedTopicIds = new Set(screenShortlist.map(row => row.topicId));
+        screenedTopicIds = screenShortlistIds;
         selectedPlan = await runStage({
           stage: 'screen',
           label: 'v2-select-topics',
@@ -887,14 +890,14 @@ export async function runDailyV2({
       }
 
       // Assemble complete L0 materials & full observed URL allowlist
-      const topicById = new Map((modelsFile ? storeTopics.map(modelTopic).filter(Boolean) : storeTopics).map(t => [t.topicId, t]));
+      topicById = new Map((modelsFile ? storeTopics.map(modelTopic).filter(Boolean) : storeTopics).map(t => [t.topicId, t]));
       const selectedMaterials = selectedPlan.map(plan => ({
         ...plan,
         material: loadTopicFullMaterial(topicById.get(plan.topicId), storeDir),
       }));
 
       observedUrlSet = new Set();
-      for (const t of storeTopics) {
+      for (const t of topicById.values()) {
         for (const u of [t.primaryUrl, ...(t.discussionUrls ?? []), ...(t.allObservedUrls ?? [])]) {
           const c = safeCanonical(u);
           if (c) observedUrlSet.add(c);
@@ -923,7 +926,8 @@ export async function runDailyV2({
         selectedPlan,
         deferredEntries: [...deferredMap.entries()],
         selectionAdjustments,
-        screenShortlistIds: [...(screenShortlistIds ?? [])],
+        screenShortlistIds: screenShortlistIds ? [...screenShortlistIds] : null,
+        screenedByEditor: screenedTopicIds !== null,
         backlogStats,
         deepFetchStats,
         observedUrls: [...observedUrlSet],
@@ -960,7 +964,6 @@ export async function runDailyV2({
           throw new Error('Supply --models models.json for API composition, or use --prepare-only then --finalize-digest DRAFT.md');
         }
 
-        const storeTopicById = new Map(storeTopics.map(t => [t.topicId, t]));
         draftMarkdown = await runStage({
           stage: 'compose',
           label: 'v2-compose',
@@ -969,7 +972,7 @@ export async function runDailyV2({
           parse: text => {
             const md = normalizeDigestSectionOrder(extractBlock(text, 'markdown'));
             validateV2Digest(md, { date: reportDate, observedUrlSet });
-            assertSelectedCoverage(md, selectedPlan, storeTopicById);
+            assertSelectedCoverage(md, selectedPlan, topicById);
             return md;
           },
         });
@@ -1001,7 +1004,7 @@ export async function runDailyV2({
     lock.heartbeat(currentStage);
     draftMarkdown = normalizeDigestSectionOrder(draftMarkdown);
     const digestStats = validateV2Digest(draftMarkdown, { date: reportDate, observedUrlSet });
-    assertSelectedCoverage(draftMarkdown, selectedPlan, new Map(storeTopics.map(t => [t.topicId, t])));
+    assertSelectedCoverage(draftMarkdown, selectedPlan, topicById);
     const editorialLint = summarizeEditorialLint(draftMarkdown);
     fs.writeFileSync(path.join(runDir, 'editorial-lint.json'), JSON.stringify(editorialLint, null, 2) + '\n', { mode: 0o600 });
 
