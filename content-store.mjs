@@ -201,6 +201,41 @@ function recoverDisplayLink(link) {
   return results;
 }
 
+const ARTICLE_CARD_KINDS = new Set(['blog', 'feed', 'substack', 'supplement', 'mail']);
+const SPONSOR_SECTION_RE = /(?:^|\n)\s*(?:brought to you by|sponsored by|our sponsors?|in partnership with|本期赞助|赞助商)\s*[:：]/im;
+
+function extractPaperId(href) {
+  if (typeof href !== 'string') return null;
+  const arxivMatch = href.match(/arxiv\.org\/(?:abs|pdf|html)\/(\d{4}\.\d{4,5})/);
+  const hfMatch = href.match(/huggingface\.co\/papers\/(\d{4}\.\d{4,5})/);
+  return arxivMatch?.[1] ?? hfMatch?.[1] ?? null;
+}
+
+function isSponsorLink(link, bodyText) {
+  const match = SPONSOR_SECTION_RE.exec(String(bodyText ?? ''));
+  if (!match) return false;
+  const mainLower = bodyText.slice(0, match.index).toLowerCase();
+  const tailLower = bodyText.slice(match.index).toLowerCase();
+  const needles = [];
+  for (const raw of [link?.href, link?.text]) {
+    const val = String(raw ?? '').trim();
+    if (!val || val.includes('…') || val.endsWith('...')) continue;
+    try {
+      const u = new URL(/^https?:\/\//i.test(val) ? val : `https://${val}`);
+      const host = u.hostname.replace(/^www\./, '').toLowerCase();
+      if (host === 't.co') {
+        if (u.pathname.length > 1) needles.push(`t.co${u.pathname.toLowerCase()}`);
+        continue;
+      }
+      if (NON_ARTICLE_HOSTS.test(host)) continue;
+      const cleanPath = u.pathname === '/' ? '' : u.pathname.replace(/\/$/, '').toLowerCase();
+      if (cleanPath) needles.push(`${host}${cleanPath}`);
+      if (host.length >= 6) needles.push(host);
+    } catch { /* ignore */ }
+  }
+  return needles.some(n => tailLower.includes(n) && !mainLower.includes(n));
+}
+
 function primarySubjectUrls(card) {
   const keys = [];
   const pushKey = k => { if (k && !keys.includes(k)) keys.push(k); };
@@ -219,23 +254,27 @@ function primarySubjectUrls(card) {
     } catch { /* ignore */ }
   };
 
-  const ownStatus = xStatusKey(card.url);
-  if (ownStatus) pushKey(ownStatus);
-  else addUrl(card.url);
+  if (ARTICLE_CARD_KINDS.has(card.kind)) {
+    // Articles, feeds, newsletters, and supplements cluster strictly on their own canonical URL (and own paper ID),
+    // never on inline citations or outbound newsletter/sponsor links.
+    addUrl(card.url);
+  } else {
+    const ownStatus = xStatusKey(card.url);
+    if (ownStatus) pushKey(ownStatus);
+    else addUrl(card.url);
 
-  for (const link of card.outboundUrls ?? []) addUrl(link);
-  for (const raw of card.rawLinks ?? []) {
-    const quotedStatus = xStatusKey(raw.href);
-    if (quotedStatus && quotedStatus !== ownStatus) pushKey(quotedStatus);
-    addUrl(raw.href);
+    for (const link of card.outboundUrls ?? []) addUrl(link);
+    for (const raw of card.rawLinks ?? []) {
+      const quotedStatus = xStatusKey(raw.href);
+      if (quotedStatus && quotedStatus !== ownStatus) pushKey(quotedStatus);
+      addUrl(raw.href);
+    }
   }
 
   // Normalize HF papers <-> arXiv IDs so posts linking arXiv cluster with HF Daily Papers entries.
   const expanded = [...keys];
   for (const u of keys) {
-    const arxivMatch = u.match(/arxiv\.org\/(?:abs|pdf|html)\/(\d{4}\.\d{4,5})/);
-    const hfMatch = u.match(/huggingface\.co\/papers\/(\d{4}\.\d{4,5})/);
-    const paperId = arxivMatch?.[1] ?? hfMatch?.[1];
+    const paperId = extractPaperId(u);
     if (paperId) {
       const canonicalArxiv = `https://arxiv.org/abs/${paperId}`;
       if (!expanded.includes(canonicalArxiv)) expanded.unshift(canonicalArxiv);
@@ -398,6 +437,7 @@ export function buildContentStore(collection, storeDir, { softHistory = null, su
   }
 
   const cards = [];
+  const attachedDeepByCardId = new Map();
   let index = 0;
   for (const [key, observations] of groupedByKey) {
     index += 1;
@@ -416,7 +456,8 @@ export function buildContentStore(collection, storeDir, { softHistory = null, su
 
     const inlineBodyLinks = extractInlineBodyLinks(longestBody);
     const allLinkObjs = [...observations.flatMap(o => list(o.item?.links)), ...threadLinks, ...inlineBodyLinks]
-      .flatMap(recoverDisplayLink);
+      .flatMap(recoverDisplayLink)
+      .filter(link => !isSponsorLink(link, longestBody));
     const outboundUrls = [...new Set(
       auditDeepLinks([{ url: item.url, text: longestBody, links: allLinkObjs }], 0)
         .filter(r => !['invalid_url', 'unsupported_protocol', 'embedded_credentials', 'social_link', 'analytics_link', 'substack_navigation', 'homepage_navigation'].includes(r.reason))
@@ -424,9 +465,9 @@ export function buildContentStore(collection, storeDir, { softHistory = null, su
         .filter(Boolean),
     )];
 
-    // Attach already-captured browser deep article if matching.
+    // Attach already-captured browser deep article if matching (outbound fallback applies only to social/watch cards).
     let attachedDeep = deepByUrl.get(safeCanonical(item.url));
-    if (!attachedDeep) {
+    if (!attachedDeep && !ARTICLE_CARD_KINDS.has(primary.kind)) {
       for (const outUrl of outboundUrls) {
         if (deepByUrl.has(outUrl)) { attachedDeep = deepByUrl.get(outUrl); break; }
       }
@@ -442,6 +483,12 @@ export function buildContentStore(collection, storeDir, { softHistory = null, su
     const fullText = attachedDeep?.text && attachedDeep.text.length > longestBody.length
       ? `${longestBody}\n\n--- [Preserved Deep Article: ${attachedDeep.url}] ---\n${attachedDeep.text}`
       : longestBody;
+    const deepCaptureStatus = attachedDeep?.text
+      ? contentStatusOf(ARTICLE_CARD_KINDS.has(primary.kind) ? primary.kind : 'supplement', attachedDeep.text, item)
+      : null;
+    if (attachedDeep?.url && deepCaptureStatus) {
+      attachedDeepByCardId.set(id, { url: attachedDeep.url, status: deepCaptureStatus });
+    }
 
     const itemRawDir = path.join(rawDir, id);
     fs.mkdirSync(itemRawDir, { recursive: true, mode: 0o700 });
@@ -459,7 +506,11 @@ export function buildContentStore(collection, storeDir, { softHistory = null, su
     const sourceLabel = item.feedName ?? item.blog ?? (primary.watchedHandle ? `watch:@${primary.watchedHandle}` : primary.kind);
     const linkHints = outboundUrls.join(' ');
     const category = classifyHeuristic({ url: item.url ?? '', linkHints, title: item.title, text: fullText, sourceLabel, hint: categoryHints.get(sourceLabel) ?? null });
-    const contentStatus = attachedDeep ? 'full_text' : contentStatusOf(primary.kind, longestBody, item);
+    const contentStatus = deepCaptureStatus === 'full_text'
+      ? 'full_text'
+      : deepCaptureStatus && ARTICLE_CARD_KINDS.has(primary.kind) && deepCaptureStatus !== 'snippet_only'
+        ? deepCaptureStatus
+        : contentStatusOf(primary.kind, longestBody, item);
     const obsMetrics = aggregateTopicMetrics(observations.map(o => o.item));
     const card = {
       id,
@@ -555,9 +606,35 @@ export function buildContentStore(collection, storeDir, { softHistory = null, su
     if (dedupStatus === 'seen_recently') dedupSkipped7d += 1;
     if (dedupStatus === 'follow_up_candidate') dedupFollowUps += 1;
 
-    const bestStatus = sorted.some(c => c.contentStatus === 'full_text') ? 'full_text'
-      : sorted.some(c => c.contentStatus === 'abstract_only') ? 'abstract_only'
+    const primaryCan = safeCanonical(primaryArticleUrl);
+    const primaryPaper = extractPaperId(primaryArticleUrl);
+    let hasExternalPrimary = false;
+    if (primaryCan) {
+      try {
+        hasExternalPrimary = !NON_ARTICLE_HOSTS.test(new URL(primaryCan).hostname);
+      } catch { /* ignore */ }
+    }
+    const matchesPrimarySubject = c => {
+      const cardCan = safeCanonical(c.url);
+      const cardPaper = extractPaperId(c.url);
+      if ((primaryCan && cardCan === primaryCan) || (primaryPaper && cardPaper === primaryPaper)) return true;
+      const deep = attachedDeepByCardId.get(c.id);
+      const deepCan = safeCanonical(deep?.url);
+      const deepPaper = extractPaperId(deep?.url);
+      return Boolean((primaryCan && deepCan === primaryCan) || (primaryPaper && deepPaper === primaryPaper));
+    };
+    const articleCards = sorted.filter(c => ARTICLE_CARD_KINDS.has(c.kind) && matchesPrimarySubject(c));
+    const deepCarrierCards = sorted.filter(c => {
+      if (ARTICLE_CARD_KINDS.has(c.kind) || !matchesPrimarySubject(c)) return false;
+      return attachedDeepByCardId.get(c.id)?.status === 'full_text';
+    });
+    const statusScope = articleCards.length ? articleCards : deepCarrierCards.length ? deepCarrierCards : sorted;
+    const rawBestStatus = statusScope.some(c => c.contentStatus === 'full_text') ? 'full_text'
+      : statusScope.some(c => c.contentStatus === 'abstract_only') ? 'abstract_only'
       : 'snippet_only';
+    const bestStatus = rawBestStatus === 'full_text' && hasExternalPrimary && !articleCards.length && !deepCarrierCards.length
+      ? 'abstract_only'
+      : rawBestStatus;
 
     const mergedMetrics = aggregateTopicMetrics(sorted);
     const topic = {

@@ -51,7 +51,9 @@ export async function main(argv = process.argv.slice(2), pointer) {
       runtime: { config: path.join(base, 'runtime.local.json'), lookbackHours: runtime.lookbackHours, sourcesFile: runtime.sourcesFile, dataDir: runtime.dataDir, collectionEnabled: runtime.collectionEnabled, larkEnabled: runtime.lark.enabled },
       controller: deployment.controller, model: deployment.model, delivery: deployment.delivery,
       dailyPipeline: { entry: 'run-daily.mjs', command: 'local daily --run RUN',
-        enabled: Boolean(deployment.model?.apiDraft?.keyFile), model: 'gpt-6.1-sol', reasoningEffort: 'high',
+        enabled: Boolean(deployment.model?.apiDraft?.keyFile),
+        models: deployment.model?.apiDraft?.models ?? { screen: 'gpt-6.1-sol', compose: 'gpt-6.1-sol', review: 'gpt-6.1-sol' },
+        reasoningEffort: deployment.model?.apiDraft?.reasoningEffort ?? 'high',
         stages: ['screen', 'compose', 'review'], sends: false },
       schedule: 'Codex X Daily Digest 9AM, Asia/Shanghai; retired Dot remote schedule', localController: read(path.join(base, 'mac-authority.json')) };
   }

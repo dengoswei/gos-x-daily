@@ -108,10 +108,24 @@ function sectionForTopic(topic) {
   return 'Applications / Products';
 }
 
-function isQuickHitEligible(topic, { reportDate = null } = {}) {
+const PR_URL_RE = /github\.com\/[^/]+\/[^/]+\/pull\/\d+/i;
+const MINOR_OR_PRERELEASE_RE = /(?:\/releases\/tag\/|\b)v?(?:\d+\.\d+\.\d+|\d+\.\d+\.0)(?:[-.]?(?:rc|alpha|beta)\d*)?(?:\b|$)/i;
+const MAJOR_ZERO_RELEASE_RE = /(?:\/releases\/tag\/|\b)v?[1-9]\d*\.0\.0(?:\b|$)/i;
+const FLAGSHIP_QUICK_SIGNAL_RE = /\b(launch(?:ed|ing)?|introduc(?:e|ing)|releas(?:ed|ing)|open[- ]?weights?|rolling\s+out|api|pricing|available\s+(?:in|on|to|for)|beta)\b|正式推出|上线|发布|开放权重|定价/i;
+
+export function isQuickHitEligible(topic, { reportDate = null } = {}) {
   if (topic.category === 'paper') return false;
   if ((topic.sources ?? []).some(s => /daily\s*papers/i.test(s))) return false;
-  if (/arxiv\.org|huggingface\.co\/papers|openreview\.net/i.test(topic.primaryUrl ?? '')) return false;
+  const primaryUrl = String(topic.primaryUrl ?? '');
+  if (/arxiv\.org|huggingface\.co\/papers|openreview\.net/i.test(primaryUrl)) return false;
+  if (PR_URL_RE.test(primaryUrl)) return false;
+  const titleAndUrl = `${topic.title ?? ''} ${primaryUrl}`;
+  if (/\b(?:rc|alpha|beta)\d+\b|[-.]rc\d+/i.test(titleAndUrl)) return false;
+  if (MINOR_OR_PRERELEASE_RE.test(titleAndUrl) && !MAJOR_ZERO_RELEASE_RE.test(titleAndUrl)) return false;
+  if (/^https?:\/\/(?:www\.)?x\.com\//i.test(primaryUrl)) {
+    const signalText = `${topic.title ?? ''} ${(topic.cards ?? []).map(c => c.tldr ?? '').join(' ')}`;
+    if (!FLAGSHIP_QUICK_SIGNAL_RE.test(signalText)) return false;
+  }
   // Quick Hits are strictly for timely updates; never surface >7-day-old stale posts as Quick Hits.
   if (reportDate && topic.publishedAt) {
     const ageDays = (Date.parse(reportDate) - Date.parse(topic.publishedAt)) / (24 * 60 * 60 * 1000);
@@ -128,10 +142,10 @@ function isQuickHitEligible(topic, { reportDate = null } = {}) {
  *    a high-volume paper feed never crowds out Infra, Product launches, or Long-form essays.
  * 2. Caps any single feed/source (e.g., HF Daily Papers) at `maxPerSource` (default 2) in Deep Dive.
  * 3. Rewards cross-source/community resonance (`fanIn >= 2` or watch-account signals).
- * 4. Restricts `Quick Hits / 快讯速览` strictly to concise product updates, version releases,
- *    and brief ecosystem notes — research papers NEVER spill over into Quick Hits.
+ * 4. Restricts `Quick Hits / 快讯速览` strictly to high-bar flagship releases (`0–2`),
+ *    excluding minor rc/patch releases, PRs, and research papers.
  */
-export function selectTopicsHeuristic(topics, { maxDeep = 7, maxQuick = 4, maxPerSource = 2, maxRoboticsDeep = 1, taste = null } = {}) {
+export function selectTopicsHeuristic(topics, { maxDeep = 7, maxQuick = 2, maxPerSource = 2, maxRoboticsDeep = 1, taste = null } = {}) {
   const activeTaste = taste ?? loadTasteConfig();
   const eligible = topics.filter(t => t.dedupStatus !== 'seen_recently' && t.category !== 'case_study_pr');
   const scoreTopic = t => {

@@ -22,12 +22,13 @@ export const digestLayoutPrompt = `## Digest sections
 Use these headings in order, omitting sections without a qualifying item:
 ${[QUICK_SECTION, ...DEEP_SECTION_ORDER].map((name, index) => (index + 1) + '. \`## ' + name + '\`').join('\n')}
 
-Use Quick Hits for standalone releases, version updates or ecosystem news whose
-practical change fits in one or two sentences. State what changed, who can use it
-when known, and cite the primary source. Give research and items that require
-explaining a mechanism or comparison a deep section of their own. Include
-substantive essays, engineering retrospectives and first-person analyses in
-Long-form / Essays. Give each item one place in the report.
+Use Quick Hits (0–2 items max; omit the section completely when nothing qualifies)
+ONLY for flagship frontier model/API launches, major open-weight releases, or major
+hardware announcements whose practical update fits in one or two sentences. Exclude
+minor framework patch/rc releases, single-repo PRs, and bare social teasers. Give
+research and items that require explaining a mechanism or comparison a deep section
+of their own. Include substantive essays, engineering retrospectives and first-person
+analyses in Long-form / Essays. Give each item one place in the report.
 `;
 
 /**

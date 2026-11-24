@@ -7,13 +7,15 @@ import { loadModels } from '../../prototype/run-packets.mjs';
 import { assertCollection, coverageStatusLine } from '../../digest.mjs';
 import { canonicalUrl, citedUrls, candidateKeys } from '../../binding.mjs';
 import { renderCompactTelemetryLine, renderTelemetryMarkdown, acquireLeaseLock } from '../../telemetry.mjs';
-import { frozenApiRun, readApiKey } from './openai-draft.mjs';
+import { frozenApiRun, readNamedApiKey } from './openai-draft.mjs';
 import { buildReviewSnapshot, validateReview } from '../../review.mjs';
 import { publicationGates } from '../../digest.mjs';
 import { recentPublishedUrls } from '../../delivery-ledger.mjs';
 
 const model = 'gpt-6.1-sol';
 const endpoint = 'https://api.openai.com/v1/chat/completions';
+const geminiEndpoint = 'https://generativelanguage.googleapis.com/v1/interactions';
+const isGeminiModel = name => /^gemini-/i.test(String(name ?? ''));
 const read = file => JSON.parse(fs.readFileSync(file, 'utf8'));
 const save = (file, value) => fs.writeFileSync(file, JSON.stringify(value, null, 2) + '\n', { mode: 0o600 });
 
@@ -142,12 +144,24 @@ export async function runProductionDaily({ runDir, runsDir, dataDir, ledgerDir, 
   const lock = acquireLeaseLock(path.join(runDir, 'daily.lock'));
   const heartbeat = setInterval(() => lock.heartbeat('daily'), 60000);
   heartbeat.unref();
-  const previousKey = process.env.CODEX_API_KEY;
+  const previousCodexKey = process.env.CODEX_API_KEY;
+  const previousGeminiKey = process.env.GEMINI_API_KEY;
   try {
-    if (!configuredModelsFile) process.env.CODEX_API_KEY = readApiKey(keyFile);
-    const role = name => ({ kind: 'openai', baseUrl: 'https://api.openai.com/v1', model: name,
-      apiKeyEnv: 'CODEX_API_KEY', maxTokens: 20000, maxTokensRetry: 28000,
-      maxTokensParam: 'max_completion_tokens', reasoningEffort: 'high' });
+    const selectedModels = [screenModel, composeModel, reviewModel];
+    if (!configuredModelsFile) {
+      if (selectedModels.some(name => !isGeminiModel(name))) {
+        process.env.CODEX_API_KEY = readNamedApiKey(keyFile, 'CODEX_API_KEY');
+      }
+      if (selectedModels.some(name => isGeminiModel(name))) {
+        process.env.GEMINI_API_KEY = readNamedApiKey(keyFile, 'GEMINI_API_KEY');
+      }
+    }
+    const role = name => isGeminiModel(name)
+      ? { kind: 'gemini', baseUrl: 'https://generativelanguage.googleapis.com/v1', model: name,
+          apiKeyEnv: 'GEMINI_API_KEY', maxTokens: 65536, thinkingLevel: 'high', store: false }
+      : { kind: 'openai', baseUrl: 'https://api.openai.com/v1', model: name,
+          apiKeyEnv: 'CODEX_API_KEY', maxTokens: 20000, maxTokensRetry: 28000,
+          maxTokensParam: 'max_completion_tokens', reasoningEffort: 'high' };
     const modelsFile = configuredModelsFile ?? path.join(runDir, 'daily-models.json');
     if (!configuredModelsFile) save(modelsFile, { roles: { screen: role(screenModel), compose: role(composeModel), review: role(reviewModel) } });
     loadModels(modelsFile, ['screen', 'compose', 'review'], [], { fetch: fetchImpl });
@@ -160,10 +174,15 @@ export async function runProductionDaily({ runDir, runsDir, dataDir, ledgerDir, 
       runtimeHooks: { modelArtifactsDir: path.join(runDir, 'daily-model-artifacts'),
         resumeModels: true, publicationPending: true,
         fetch: async (url, init) => {
-          if (url !== endpoint) return fetchImpl(url, init);
-          const body = JSON.parse(init.body);
-          return fetchImpl(endpoint, { ...init, redirect: 'error',
-            body: JSON.stringify({ ...body, store: false }) });
+          if (url === endpoint) {
+            const body = JSON.parse(init.body);
+            return fetchImpl(endpoint, { ...init, redirect: 'error',
+              body: JSON.stringify({ ...body, store: false }) });
+          }
+          if (url === geminiEndpoint) {
+            return fetchImpl(geminiEndpoint, { ...init, redirect: 'error' });
+          }
+          return fetchImpl(url, init);
         } },
     });
     // The shared v2 reviewer already returned the corrected final prose.
@@ -194,8 +213,10 @@ export async function runProductionDaily({ runDir, runsDir, dataDir, ledgerDir, 
     return completed;
   } finally {
     clearInterval(heartbeat);
-    if (previousKey === undefined) delete process.env.CODEX_API_KEY;
-    else process.env.CODEX_API_KEY = previousKey;
+    if (previousCodexKey === undefined) delete process.env.CODEX_API_KEY;
+    else process.env.CODEX_API_KEY = previousCodexKey;
+    if (previousGeminiKey === undefined) delete process.env.GEMINI_API_KEY;
+    else process.env.GEMINI_API_KEY = previousGeminiKey;
     lock.release();
   }
 }

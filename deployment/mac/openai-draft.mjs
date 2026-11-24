@@ -10,13 +10,19 @@ const effort = 'high';
 const endpoint = 'https://api.openai.com/v1/chat/completions';
 const keyName = 'CODEX_API_KEY';
 
-export function readApiKey(file) {
-  if (typeof file !== 'string' || !path.isAbsolute(file)) throw new Error('Configure an absolute OpenAI draft key file');
+export function readNamedApiKey(file, varName = keyName) {
+  if (typeof file !== 'string' || !path.isAbsolute(file)) throw new Error('Configure an absolute API key file');
+  const pattern = new RegExp(`^\\s*${varName}\\s*[:=]`);
+  const valuePattern = new RegExp(`^\\s*${varName}\\s*[:=]\\s*(?:"([^"]+)"|'([^']+)'|([^\\s#]+))(?:\\s+#.*)?\\s*$`);
   const lines = fs.readFileSync(file, 'utf8').split(/\r?\n/);
-  const entries = lines.filter(line => /^\s*CODEX_API_KEY\s*[:=]/.test(line));
-  const match = entries[0]?.match(/^\s*CODEX_API_KEY\s*[:=]\s*(?:"([^"]+)"|'([^']+)'|([^\s#]+))(?:\s+#.*)?\s*$/);
-  if (entries.length !== 1 || !match) throw new Error('Expected one CODEX_API_KEY value in the configured key file');
+  const entries = lines.filter(line => pattern.test(line));
+  const match = entries[0]?.match(valuePattern);
+  if (entries.length !== 1 || !match) throw new Error(`Expected one ${varName} value in the configured key file`);
   return match[1] ?? match[2] ?? match[3];
+}
+
+export function readApiKey(file) {
+  return readNamedApiKey(file, keyName);
 }
 
 export function frozenApiRun(runsDir, runDir) {
