@@ -1,5 +1,5 @@
-// Deterministic prose lint for digest bullets. It finds pattern hits (length, negative
-// templates, strawman tails, pipeline phrasing, mistranslation, cold codenames). A hit is a
+// Deterministic prose lint for digest bullets. It finds pattern hits (length,
+// strawman tails, pipeline phrasing, mistranslation, cold codenames). A hit is a
 // lead for the reviewer, not a semantic finding; a clean result is not approval.
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -9,7 +9,6 @@ import { bulletLine } from './lark-post.mjs';
 
 const defaultLintConfig = fileURLToPath(new URL('./config/editorial-lint.json', import.meta.url));
 
-const NEGATIVE_CONTRAST_RE = /不是[^，。；\n]{1,24}而是|把[^，。；\n]{1,20}变成[^，。；\n]{1,20}，?而不是|不只是[^，。；\n]{1,20}，?还包括|容易混淆的(?:是|地方)/g;
 const STRAWMAN_DISCLAIMER_RE = /不能合并为一个?统一(?:加速)?倍数|不等于整个索引按?同比例缩小|这只是功能开放[，,]?不代表|不能将其扩展为整个[^，。；\n]{1,18}的安全保证|不意味着[^，。；\n]{1,24}已有评测保证/g;
 const PIPELINE_JARGON_RE = /所给摘录|提供的材料|摘录(?:没有|未|中)|候选键/g;
 // Incident patterns live in config/editorial-lint.json; an invalid row fails at load.
@@ -67,7 +66,6 @@ export function evaluateBulletProse(bulletText, { tier = 'deep' } = {}) {
   const boldLead = boldMatch ? boldMatch[1].trim() : '';
   const hasEntityBracketLead = /^\[[^\]]+·[^\]]+\][：:]/.test(boldLead) || /^(?:补读|跟进)｜\[[^\]]+·[^\]]+\][：:]/.test(boldLead);
 
-  const negativeContrastHits = [...raw.matchAll(NEGATIVE_CONTRAST_RE)].map(m => m[0]);
   const strawmanDisclaimerHits = [...raw.matchAll(STRAWMAN_DISCLAIMER_RE)].map(m => m[0]);
   const pipelineJargonHits = [...raw.matchAll(PIPELINE_JARGON_RE)].map(m => m[0]);
   const mistranslatedJargonHits = LINT_PATTERNS.mistranslated ? [...raw.matchAll(LINT_PATTERNS.mistranslated)].map(m => m[0]) : [];
@@ -75,14 +73,13 @@ export function evaluateBulletProse(bulletText, { tier = 'deep' } = {}) {
   const hasInternalBlankLine = /\n\s*\n/.test(raw);
   const hasTrailingLinks = /\[[^\]]+\]\(https?:\/\/[^)]+\)\s*$/.test(raw);
 
-  const maxCjk = tier === 'quick' ? 145 : 340;
+  const maxCjk = tier === 'quick' ? 145 : 560;
   const minCjk = tier === 'quick' ? 18 : 100;
   const issues = [];
 
   if (tier === 'deep' && !hasEntityBracketLead) issues.push('missing_entity_bracket_bold_lead');
   if (cjkCount > maxCjk) issues.push(`bloated_length(${cjkCount}_cjk>${maxCjk})`);
   if (cjkCount < minCjk) issues.push(`under_explained_length(${cjkCount}_cjk<${minCjk})`);
-  if (negativeContrastHits.length) issues.push(`jarring_negative_contrast(${negativeContrastHits.join('|')})`);
   if (strawmanDisclaimerHits.length) issues.push(`strawman_disclaimer_tail(${strawmanDisclaimerHits.join('|')})`);
   if (pipelineJargonHits.length) issues.push(`pipeline_jargon(${pipelineJargonHits.join('|')})`);
   if (mistranslatedJargonHits.length) issues.push(`mistranslated_jargon(${mistranslatedJargonHits.join('|')})`);

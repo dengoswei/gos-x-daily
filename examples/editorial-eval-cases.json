@@ -219,7 +219,7 @@
     },
     {
       "id": "prose-bad-01-bloated-cold-jargon-and-strawman-tail",
-      "label": "BAD (from 11-12 baseline): >450 chars wall of text + cold unanchored 'verify耗时' + strawman negative disclaimer tail",
+      "label": "BAD (from 11-12 baseline): >560 chars wall of text + cold unanchored 'verify耗时' + strawman negative disclaimer tail",
       "tier": "deep",
       "expectPass": false,
       "expectIssues": [
@@ -227,18 +227,18 @@
         "strawman_disclaimer_tail",
         "cold_unanchored_jargon"
       ],
-      "bullet": "- **[SGLang-TorchTPU · Muse Spark Open 推理优化]：用覆盖 62 层的整步 megakernel 重叠权重读取、KV 访问与跨设备通信，显著缩短低并发解码时间。** PyTorch 11 月 10 日的工程文章展示了如何在单台四芯片 TPU v7 主机上部署 816B 参数、每 token 约激活 42B 参数的 MoE：四颗芯片暴露为八个设备，采用八路张量并行、NVFP4 专家权重与 FP8 计算。小 batch 下的主要瓶颈是权重流被逐层 kernel 和通信边界打断；原生路径虽已有算子融合，verify 耗时仍达权重读取理论下限的 2.9 倍。新实现让每个设备用一个 Pallas 程序执行全部 62 层，通过多路 DMA 预取权重、直接向远端设备写入部分结果，并把后续投影计算与 all-gather 的分片到达过程交叠。注意力还有一项模型专属优化：利用 QK 归一化给出的分数绝对值上界 43.8，移除用于防溢出的 running max，使不同 KV 块可以独立流水执行。在较早 Muse Spark checkpoint 的 GSM8K 测试中，两条路径均使用 DFlash2，单请求每输出 token 耗时从 3.78ms 降至 1.95ms，约快 1.94 倍；双请求为 1.85 倍，并发升高后收益收窄。容量侧，sequence-on-lane 布局让 FP8 KV 真正减半，主机内存 L2 HiCache 在 agent 流量上最高提升吞吐 77%。这些结果分别对应低并发解码和多轮缓存负载，不能合并为一个统一加速倍数；无 running max 的实现也依赖该模型可证明的分数上界。 [原文](https://pytorch.org/blog/optimizing-muse-spark-open-on-tpu-v7-with-sglang-torchtpu/)"
+      "bullet": "- **[SGLang-TorchTPU · Muse Spark Open 推理优化]：用覆盖 62 层的整步 megakernel 重叠权重读取、KV 访问与跨设备通信，显著缩短低并发解码时间。** PyTorch 11 月 10 日的工程文章展示了如何在单台四芯片 TPU v7 主机上部署 816B 参数、每 token 约激活 42B 参数的 MoE：四颗芯片暴露为八个设备，采用八路张量并行、NVFP4 专家权重与 FP8 计算。小 batch 下的主要瓶颈是权重流被逐层 kernel 和通信边界打断；原生路径虽已有算子融合，verify 耗时仍达权重读取理论下限的 2.9 倍。新实现让每个设备用一个 Pallas 程序执行全部 62 层，通过多路 DMA 预取权重、直接向远端设备写入部分结果，并把后续投影计算与 all-gather 的分片到达过程交叠。注意力还有一项模型专属优化：利用 QK 归一化给出的分数绝对值上界 43.8，移除用于防溢出的 running max，使不同 KV 块可以独立流水执行。在较早 Muse Spark checkpoint 的 GSM8K 测试中，两条路径均使用 DFlash2，单请求每输出 token 耗时从 3.78ms 降至 1.95ms，约快 1.94 倍；双请求为 1.85 倍，并发升高后收益收窄。此外文章还逐层罗列了所有张量排布、集群机架布线方式、不同实验分支的命名沿革、各阶段编译器调优日志、手工分配的寄存器分片映射、硬件固件版本差异以及后续工程规划与周边脚本细节，同时将多套彼此独立的微基准测试表格、环境配置说明、历史回归对比图表、存储节点拓扑截图、团队致谢清单、内部发布检查清单与辅助脚本流水账全部堆叠在同一段落中，不仅反复复述同一份硬件规格与编译器参数背景，也完全没有优先点出真正制约吞吐的主因，使单条正文过度膨胀、主线结论被外围细枝末节淹没。容量侧，sequence-on-lane 布局让 FP8 KV 真正减半，主机内存 L2 HiCache 在 agent 流量上最高提升吞吐 77%。这些结果分别对应低并发解码和多轮缓存负载，不能合并为一个统一加速倍数；无 running max 的实现也依赖该模型可证明的分数上界。 [原文](https://pytorch.org/blog/optimizing-muse-spark-open-on-tpu-v7-with-sglang-torchtpu/)"
     },
     {
-      "id": "prose-bad-02-jarring-negative-contrast-and-pipeline-jargon",
-      "label": "BAD: Jarring negative framing ('不是 X 而是 Y' / '容易混淆的是') + leaked pipeline phrasing ('所给摘录')",
+      "id": "prose-bad-02-mistranslation-and-pipeline-jargon",
+      "label": "BAD: Mistranslated terminology ('重数量化') + leaked pipeline phrasing ('所给摘录')",
       "tier": "deep",
       "expectPass": false,
       "expectIssues": [
-        "jarring_negative_contrast",
+        "mistranslated_jargon",
         "pipeline_jargon"
       ],
-      "bullet": "- **[Lab · AgentMem]：不是简单做向量检索，而是把经验变成图结构。** 11 月 11 日发布的研究针对长程任务退化，容易混淆的是它并不修改模型权重，而是通过三层索引回查历史记录，平均得分从 79.5 升至 90.2；但所给摘录没有说明在线写入延迟。 [论文](https://arxiv.org/abs/2611.14320)"
+      "bullet": "- **[Lab · AgentMem]：通过重数量化与三层索引回查历史执行证据，避免模型被错误规则误导。** 11 月 11 日发布的研究针对长程任务退化，通过三层索引回查历史记录并采用重数量化压缩状态，平均得分从 79.5 升至 90.2；但所给摘录没有说明在线写入延迟。 [论文](https://arxiv.org/abs/2611.14320)"
     },
     {
       "id": "prose-bad-03-product-strawman-disclaimer-and-missing-bracket-lead",

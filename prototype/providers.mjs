@@ -5,8 +5,9 @@ import { spawn } from 'node:child_process';
 
 const MAX_OUTPUT_BYTES = 8 * 1024 * 1024;
 const CALL_TIMEOUT_MS = 600000;
-const KINDS = ['exec', 'openai', 'anthropic'];
+const KINDS = ['exec', 'openai', 'anthropic', 'gemini'];
 const TOKEN_PARAMS = ['max_tokens', 'max_completion_tokens'];
+const THINKING_LEVELS = ['low', 'medium', 'high', 'xhigh'];
 const RETRY_DEFAULTS = { maxAttempts: 3, baseDelayMs: 1000, maxDelayMs: 30000, maxRetryAfterMs: 120000 };
 const number = value => (Number.isFinite(value) ? value : undefined);
 const trimSlash = value => String(value).replace(/\/+$/, '');
@@ -155,6 +156,71 @@ function anthropicProvider(spec, fetchImpl) {
   };
 }
 
+function geminiThinkingLevel(spec) {
+  const level = spec.thinkingLevel ?? spec.reasoningEffort;
+  if (level === undefined) return undefined;
+  if (!THINKING_LEVELS.includes(level)) throw new Error(`thinkingLevel must be one of: ${THINKING_LEVELS.join(', ')}`);
+  return level;
+}
+
+function extractGeminiOutputText(payload) {
+  const steps = Array.isArray(payload?.steps) ? payload.steps : [];
+  const trailing = [];
+  for (let i = steps.length - 1; i >= 0; i--) {
+    if (steps[i]?.type === 'model_output') trailing.unshift(steps[i]);
+    else if (trailing.length > 0) break;
+  }
+  const parts = [];
+  for (const step of trailing) {
+    for (const part of step?.content ?? []) {
+      if (part?.type === 'text' && typeof part.text === 'string') parts.push(part.text);
+    }
+  }
+  return parts.join('');
+}
+
+function geminiProvider(spec, fetchImpl) {
+  if (typeof spec.model !== 'string') throw new Error('gemini provider needs model');
+  const thinkingLevel = geminiThinkingLevel(spec);
+  const baseUrl = trimSlash(spec.baseUrl ?? 'https://generativelanguage.googleapis.com/v1');
+  return async ({ system, prompt, maxTokens }) => {
+    const key = apiKey(spec);
+    const started = Date.now();
+    const limit = maxTokens ?? spec.maxTokens;
+    const generationConfig = {
+      ...(limit ? { max_output_tokens: limit } : {}),
+      ...(thinkingLevel ? { thinking_level: thinkingLevel } : {}),
+    };
+    const payload = await postJson(fetchImpl, `${baseUrl}/interactions`, { 'x-goog-api-key': key }, {
+      model: spec.model,
+      input: prompt,
+      ...(system ? { system_instruction: system } : {}),
+      store: spec.store ?? false,
+      ...(Object.keys(generationConfig).length ? { generation_config: generationConfig } : {}),
+    });
+    if (['failed', 'cancelled'].includes(payload?.status)) {
+      throw new Error(`Gemini interaction ${payload.status}: ${JSON.stringify(payload.errors ?? null)}`);
+    }
+    const truncated = payload?.status === 'incomplete';
+    const text = extractGeminiOutputText(payload);
+    if (!truncated && !text.trim()) throw new Error(`Model returned no text (status=${payload?.status ?? 'none'})`);
+    const usage = payload?.usage ?? {};
+    const out = number(usage.total_output_tokens);
+    const thought = number(usage.total_thought_tokens);
+    const outputTokens = (out !== undefined || thought !== undefined) ? (out ?? 0) + (thought ?? 0) : undefined;
+    return {
+      text,
+      truncated,
+      durationMs: Date.now() - started,
+      usage: {
+        inputTokens: number(usage.total_input_tokens),
+        outputTokens,
+        cachedInputTokens: number(usage.total_cached_tokens),
+      },
+    };
+  };
+}
+
 function retryConfig(spec) {
   const config = { ...RETRY_DEFAULTS, ...(spec.retry ?? {}) };
   positiveInteger(config.maxAttempts, 'retry.maxAttempts');
@@ -174,16 +240,24 @@ export function createProvider(spec, runtime = {}) {
   const fetchImpl = runtime.fetch ?? ((...args) => globalThis.fetch(...args));
   const sleep = runtime.sleep ?? (ms => new Promise(resolve => setTimeout(resolve, ms)));
   const random = runtime.random ?? Math.random;
-  const call = spec.kind === 'exec' ? execProvider(spec) : spec.kind === 'openai' ? openaiProvider(spec, fetchImpl) : anthropicProvider(spec, fetchImpl);
+  const call = spec.kind === 'exec'
+    ? execProvider(spec)
+    : spec.kind === 'openai'
+      ? openaiProvider(spec, fetchImpl)
+      : spec.kind === 'anthropic'
+        ? anthropicProvider(spec, fetchImpl)
+        : geminiProvider(spec, fetchImpl);
   const retry = retryConfig(spec);
   const concurrency = spec.concurrency === undefined ? (spec.kind === 'exec' ? 1 : 4) : positiveInteger(spec.concurrency, 'concurrency');
   if (concurrency > 64) throw new Error('concurrency must be at most 64');
   if (spec.maxTokensRetry !== undefined) {
     positiveInteger(spec.maxTokensRetry, 'maxTokensRetry');
-    if (spec.kind === 'exec') throw new Error('maxTokensRetry needs an openai or anthropic provider; an exec command sets its own limit');
+    if (spec.kind === 'exec') throw new Error('maxTokensRetry needs an openai, anthropic, or gemini provider; an exec command sets its own limit');
     if (Number.isInteger(spec.maxTokens) && spec.maxTokensRetry <= spec.maxTokens) throw new Error('maxTokensRetry must be larger than maxTokens');
   }
-  const describe = () => ({ kind: spec.kind, ...(spec.model ? { model: spec.model } : {}), ...(spec.reasoningEffort ? { reasoningEffort: spec.reasoningEffort } : {}), ...(spec.kind === 'exec' ? { command: spec.command[0], parse: spec.parse ?? 'text' } : { baseUrl: trimSlash(spec.baseUrl ?? 'https://api.anthropic.com') }) });
+  const thinkingLevel = spec.kind === 'gemini' ? geminiThinkingLevel(spec) : undefined;
+  const defaultBaseUrl = spec.kind === 'gemini' ? 'https://generativelanguage.googleapis.com/v1' : 'https://api.anthropic.com';
+  const describe = () => ({ kind: spec.kind, ...(spec.model ? { model: spec.model } : {}), ...(spec.kind !== 'gemini' && spec.reasoningEffort ? { reasoningEffort: spec.reasoningEffort } : {}), ...(thinkingLevel ? { thinkingLevel } : {}), ...(spec.kind === 'exec' ? { command: spec.command[0], parse: spec.parse ?? 'text' } : { baseUrl: trimSlash(spec.baseUrl ?? defaultBaseUrl) }) });
   return {
     kind: spec.kind, concurrency,
     maxTokens: Number.isInteger(spec.maxTokens) ? spec.maxTokens : null,

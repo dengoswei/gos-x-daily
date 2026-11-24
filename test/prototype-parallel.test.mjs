@@ -371,3 +371,52 @@ test('mapPool keeps input order and names failed and unstarted items', async () 
   }, { what: 'things', label: item => item }), /1 of 5 things failed: \[a\] boom; not started: c, d, e\./);
   assert.deepEqual(finished, ['b'], 'the in-flight sibling finishes; nothing new starts');
 });
+
+test('gemini Interactions provider formats requests, sums thought tokens, and distinguishes incomplete/failed states', async () => {
+  const seen = [];
+  const replies = [
+    {
+      status: 'completed',
+      steps: [
+        { type: 'thought', content: [{ type: 'text', text: 'internal reasoning' }] },
+        { type: 'model_output', content: [{ type: 'text', text: 'final gemini output' }] },
+      ],
+      usage: { total_input_tokens: 120, total_output_tokens: 30, total_thought_tokens: 45, total_cached_tokens: 80 },
+    },
+    {
+      status: 'incomplete',
+      steps: [{ type: 'model_output', content: [{ type: 'text', text: 'cut off output' }] }],
+      usage: { total_input_tokens: 10, total_output_tokens: 5, total_thought_tokens: 10 },
+    },
+    { status: 'failed', errors: [{ message: 'safety block' }] },
+  ];
+  const provider = createProvider(
+    { kind: 'gemini', baseUrl: 'https://gemini.invalid/v1', model: 'gemini-4-neon', apiKeyEnv: KEY_ENV, maxTokens: 65536, thinkingLevel: 'high' },
+    { fetch: async (url, init) => {
+      seen.push({ url, headers: init.headers, body: JSON.parse(init.body) });
+      return Response.json(replies.shift());
+    } },
+  );
+  assert.deepEqual(provider.describe(), {
+    kind: 'gemini', model: 'gemini-4-neon', thinkingLevel: 'high', baseUrl: 'https://gemini.invalid/v1',
+  });
+
+  const ok = await provider.call({ stage: 'compose', system: 'sys contract', prompt: 'user prompt' });
+  assert.equal(ok.text, 'final gemini output');
+  assert.equal(ok.truncated, false);
+  assert.deepEqual(ok.usage, { inputTokens: 120, outputTokens: 75, cachedInputTokens: 80 });
+  assert.equal(seen[0].url, 'https://gemini.invalid/v1/interactions');
+  assert.equal(seen[0].headers['x-goog-api-key'], process.env[KEY_ENV]);
+  assert.deepEqual(seen[0].body, {
+    model: 'gemini-4-neon', input: 'user prompt', system_instruction: 'sys contract',
+    generation_config: { max_output_tokens: 65536, thinking_level: 'high' }, store: false,
+  });
+
+  const inc = await provider.call({ stage: 'review', prompt: 'p2' });
+  assert.equal(inc.text, 'cut off output');
+  assert.equal(inc.truncated, true);
+  assert.equal(inc.usage.outputTokens, 15);
+  assert.equal(seen[1].body.system_instruction, undefined);
+
+  await assert.rejects(provider.call({ stage: 'screen', prompt: 'p3' }), /Gemini interaction failed.*safety block/);
+});

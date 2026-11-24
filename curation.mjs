@@ -423,7 +423,11 @@ export function mergeBacklogIntoTopics(topics, backlogEntries, storeDir, { taste
         fanIn: entry.fanIn ?? 1,
         sources: entry.sources ?? ['backlog'],
         metrics: entry.metrics ?? {},
-        contentStatus: rawTextRel && cachedLen >= 800 ? 'full_text' : (entry.contentStatus ?? 'abstract_only'),
+        contentStatus: rawTextRel && cachedLen >= 800
+          ? 'full_text'
+          : entry.contentStatus === 'full_text'
+            ? ((entry.cardText ?? '').trim().length >= 800 ? 'full_text' : (entry.cardText ?? '').trim().length >= 300 ? 'abstract_only' : 'snippet_only')
+            : (entry.contentStatus ?? 'abstract_only'),
         dedupStatus: 'fresh',
         fromBacklog: true,
         refreshedToday: false,

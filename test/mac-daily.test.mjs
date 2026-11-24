@@ -172,3 +172,62 @@ test('Mac production uses the repository funnel and reviews its output without a
   fs.writeFileSync(path.join(f.runDir, 'prepared-topics.json'), JSON.stringify(changed));
   await assert.rejects(cli(['validate-publication', '--publication', result.publication]), /stale or tampered/);
 });
+
+test('runProductionDaily routes Gemini 4 models through Interactions API and restores caller environment', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'xdaily-mac-gemini-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const f = await makeApiFinalFixture(root);
+  fs.writeFileSync(path.join(f.runDir, 'sources.frozen.json'), JSON.stringify({ watchProfiles: [], blogs: [], feeds: [] }));
+  const keyFile = path.join(root, 'synthetic-gemini-key');
+  fs.writeFileSync(keyFile, 'GEMINI_API_KEY=synthetic-gemini-placeholder\n');
+  const seen = [];
+  const fetchImpl = async (url, init) => {
+    if (url !== 'https://generativelanguage.googleapis.com/v1/interactions') {
+      return new Response('<article>' + f.evidenceText.repeat(8) + '</article>');
+    }
+    const headers = init.headers;
+    assert.equal(headers['x-goog-api-key'], 'synthetic-gemini-placeholder');
+    const body = JSON.parse(init.body);
+    assert.equal(body.generation_config.max_output_tokens, 65536);
+    assert.equal(body.generation_config.thinking_level, 'high');
+    assert.equal(body.store, false);
+    const all = `${body.system_instruction ?? ''}\n${body.input}`;
+    let text;
+    if (all.includes('two-stage curation')) {
+      seen.push({ stage: 'screen', model: body.model });
+      const topics = tagged(all, 'topics_json').slice(0, 2);
+      text = '```json\n' + JSON.stringify({ selected: topics.map(topic => ({ topicId: topic.topicId,
+        tier: 'deep', section: 'Frameworks / Infra', reason: 'Synthetic Gemini selection' })) }) + '\n```';
+    } else if (all.includes('digest composition (v2)')) {
+      seen.push({ stage: 'compose', model: body.model });
+      const topics = tagged(all, 'selected_topics');
+      text = '```markdown\n# X AI 日报 2026-11-08\n\n## Frameworks / Infra\n\n' + topics.map(topic =>
+        `- **[Synthetic · Gemini]：核心结论先行。** 详细展开。[Original](${topic.material.primaryUrl})`).join('\n\n') + '\n```';
+    } else {
+      seen.push({ stage: 'review', model: body.model });
+      const draft = all.split('<draft_markdown>\n')[1].split('\n</draft_markdown>')[0];
+      text = '```json\n' + JSON.stringify({ verdict: 'pass', issues: [], revisedMarkdown: draft }) + '\n```';
+    }
+    return Response.json({
+      status: 'completed',
+      steps: [
+        { type: 'thought', content: [{ type: 'text', text: 'hidden' }] },
+        { type: 'model_output', content: [{ type: 'text', text }] },
+      ],
+      usage: { total_input_tokens: 100, total_output_tokens: 40, total_thought_tokens: 20, total_cached_tokens: 10 },
+    });
+  };
+  const beforeGemini = process.env.GEMINI_API_KEY;
+  const result = await runProductionDaily({
+    ...f, dataDir: path.join(root, 'state-data'), keyFile,
+    screenModel: 'gemini-4-hydrogen', composeModel: 'gemini-4-neon', reviewModel: 'gemini-4-neon', fetchImpl,
+  });
+  assert.equal(process.env.GEMINI_API_KEY, beforeGemini);
+  assert.deepEqual(seen, [
+    { stage: 'screen', model: 'gemini-4-hydrogen' },
+    { stage: 'compose', model: 'gemini-4-neon' },
+    { stage: 'review', model: 'gemini-4-neon' },
+  ]);
+  const validation = await cli(['validate-publication', '--publication', result.publication]);
+  assert.equal(validation.status, 'structural_review_binding_passed_not_semantic_proof');
+});

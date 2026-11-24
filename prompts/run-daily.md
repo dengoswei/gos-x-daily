@@ -71,7 +71,7 @@ local discovery evidence. Use their public originals as supplements. The model
 projection (`model-input.mjs`) excludes Xiaohongshu and mail cards
 unless explicitly marked model-shareable. Keep these private cards unmarked.
 Authorized public feeds, blogs, verified public
-supplements and user-authorized X/watch timeline and Substack subscription text (`https://api.openai.com/v1`,
+supplements and user-authorized X/watch timeline and Substack subscription text (`https://generativelanguage.googleapis.com/v1/interactions` or `https://api.openai.com/v1`,
 `store: false`) enter model prompts; screenshots stay local. Do not run ad-hoc
 anonymous X scraping/embed checks that fail with HTTP 403, and do not place private
 snippets in the public-supplement file. Legacy backlog bodies without recorded
@@ -82,7 +82,7 @@ command (never chained in the same shell invocation with staging or mail-audit
 file copies). When sandbox restrictions prevent the authorized operation, use the available
 host-context permission mechanism with a concise justification citing
 the user's standing authorization for `model-input.mjs`-filtered payloads to
-`https://api.openai.com/v1` (`store: false`). It directly calls `runDailyV2` in
+`https://generativelanguage.googleapis.com/v1/interactions` (or `https://api.openai.com/v1`, `store: false`). It directly calls `runDailyV2` in
 `run-daily.mjs` with the frozen sources and authoritative published-URL history.
 That one pipeline owns raw/card/topic storage, prior scores, backlog recall,
 topic selection, original-text enrichment, composition, automatic dispositions

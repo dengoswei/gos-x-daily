@@ -32,12 +32,12 @@ test('a digest must cite every selected topic by one of its own addresses', () =
 
 test('the prose lint is one module shared by the eval harness and production', () => {
   assert.equal(viaEval, evaluateDigestMarkdown);
-  const md = digest(['- **[Lab · X]：瓶颈被打破。** 这不是缓存问题而是调度问题，所给摘录没有更多细节。 [原文](https://a.example/post)']);
+  const md = digest(['- **[Lab · X]：瓶颈被打破。** 这只是功能开放，不代表效果已验证，所给摘录没有更多细节。 [原文](https://a.example/post)']);
   const summary = summarizeEditorialLint(md);
   assert.equal(summary.notApproval, true);
   assert.equal(summary.totalBullets, 1);
   assert.equal(summary.cleanBullets, 0);
-  assert.ok(summary.issues.some(issue => /jarring_negative_contrast/.test(issue)));
+  assert.ok(summary.issues.some(issue => /strawman_disclaimer_tail/.test(issue)));
   assert.ok(summary.issues.some(issue => /pipeline_jargon/.test(issue)));
   assert.equal(summarizeEditorialLint(md, { maxIssues: 1 }).issues.length, 1);
   assert.equal(summarizeEditorialLint(md, { maxIssues: 1 }).issueCount, summary.issueCount);
@@ -54,7 +54,7 @@ function fixture(t) {
   return { dir, premerged, dataDir: path.join(dir, 'data'), sourcesConfig: { feeds: [], blogs: [], watchProfiles: [] } };
 }
 const between = (text, tag) => JSON.parse(text.split(`<${tag}>\n`)[1].split(`\n</${tag}>`)[0]);
-const bullet = row => `- **[作者 · ${row.material.title}]：这不是吞吐问题而是调度问题。** 11 月 10 日发布的文章解释了调度瓶颈。 [原文](${row.material.primaryUrl})`;
+const bullet = row => `- **[作者 · ${row.material.title}]：调度瓶颈已被定位。** 11 月 10 日发布的文章解释了调度瓶颈，这只是功能开放，不代表效果已验证。 [原文](${row.material.primaryUrl})`;
 
 test('end to end: a composer that drops a selected topic is retried, and lint reaches the reviewer and telemetry only', async t => {
   const f = fixture(t);
@@ -105,7 +105,7 @@ test('end to end: a composer that drops a selected topic is retried, and lint re
   assert.equal(result.funnel.publishedTotal, 2);
 
   const lintFindings = between(reviewPrompt, 'lint_findings');
-  assert.ok(lintFindings.length >= 2 && lintFindings.every(hit => /jarring_negative_contrast/.test(hit) || /bullet_\d/.test(hit)));
+  assert.ok(lintFindings.length >= 2 && lintFindings.every(hit => /strawman_disclaimer_tail/.test(hit) || /bullet_\d/.test(hit)));
   const telemetry = JSON.parse(fs.readFileSync(result.telemetryPath, 'utf8'));
   assert.equal(telemetry.editorialLint.notApproval, true);
   assert.equal(telemetry.editorialLint.totalBullets, 2);
