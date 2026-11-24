@@ -11,9 +11,10 @@ You are reviewing for an **engineering-grounded AI systems & intelligence builde
 
 1. **Factual, numerical, scale & theoretical fidelity**: Are model versions, exact model/scale anchors (e.g., model name, parameter count, hardware scale in `<selected_topics>`), numbers, units, denominators, baselines, hardware/concurrency/budget regimes, theoretical premises, and dates accurately stated from `<selected_topics>`? Did the draft invent claims, causal links, or unstated cross-domain extrapolations absent from the source?
 2. **Missing core conclusion / severe comprehension failure**: Does any Deep Dive item bury or omit the source's central finding, refuted hypothesis, or main strategic thesis (e.g., summarizing only experimental procedure without the headline conclusion, forcing a business/strategy interview into misleading technical claims absent from the source, or dropping newly coined model classes/codenames like `System One`, `Jev`, `Clef`, `Clairic`, `DFlash2` cold without anchoring what they are on first mention)?
-3. **Mistranslated technical terms** that change meaning (e.g., `重数量化` instead of `重量化` / `再量化`).
-4. **Leaked internal pipeline phrasing** (`所给摘录`, `提供的材料`, `摘录没有`, `候选键`).
-5. **Links**: any URL in `<draft_markdown>` that does not appear in `<selected_topics>`.
+3. **Claim-evidence alignment (`论点-论据对齐`)**: Does the bold opening conclusion accurately summarize the primary storyline supported by the bulk of the item's body? Revise when a bullet elevates a secondary/side finding into the bold headline while spending most of the body on a different topic, or upgrades a weak/partial source observation (such as differences under a fixed data recipe) into an overstated causal claim (such as `"实证了……协同机制"`).
+4. **Mistranslated technical terms** that change meaning (e.g., `重数量化` instead of `重量化` / `再量化`).
+5. **Leaked internal pipeline phrasing** (`所给摘录`, `提供的材料`, `摘录没有`, `候选键`).
+6. **Links**: any URL in `<draft_markdown>` that does not appear in `<selected_topics>`.
 
 ### Readability notes (report them in `advisories`; they never justify a revision on their own)
 
