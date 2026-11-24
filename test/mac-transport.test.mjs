@@ -12,6 +12,21 @@ test('readback accepts same-domain autolinking but rejects changed destinations 
   assert.notEqual(normalizedReadback('[label](label)'), normalizedReadback('label'));
 });
 
+test('readback accepts identical IPv4 and port decoration while retaining actual link destinations', () => {
+  const address = '192.0.2.44:443';
+  const endpoint = value => `Reached ${value}. [Source](https://example.invalid/p) follows.`;
+  const expected = normalizedReadback(endpoint(address));
+  const decorated = endpoint(`[${address}](${address})`);
+  assert.equal(normalizedReadback(decorated), expected);
+  assert.notEqual(normalizedReadback(decorated.replace('/p)', '/other)')), expected);
+  for (const href of ['192.0.2.45:443', '192.0.2.44:444', `https://${address}`]) {
+    assert.notEqual(normalizedReadback(endpoint(`[${address}](${href})`)), expected);
+  }
+  for (const invalid of ['192.0.2.256:443', '192.0.2.44:0', '192.0.2.44:65536', 'custom:443']) {
+    assert.notEqual(normalizedReadback(endpoint(`[${invalid}](${invalid})`)), normalizedReadback(endpoint(invalid)));
+  }
+});
+
 const markdown = '# Test digest\n## Section\n- **Finding.** Explanation. [Original](https://example.invalid/a) · [Code](https://example.invalid/b)\n';
 function plan() {
   const content = larkPostJson(markdown);
